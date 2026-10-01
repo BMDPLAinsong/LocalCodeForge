@@ -385,6 +385,33 @@ Console.WriteLine("== 工程感知 P3 补足：任务归档记忆（§14-3w P3�
     Check("task 记忆可检索", taskHits.Any(h => h.Kind == "task" && h.Topic.Contains("AgentOptions")));
 }
 
+Console.WriteLine("== 工程感知 P3 补足：失败教训注入（少走弯路） ==");
+{
+    var mem3 = new Agent.Infrastructure.Memory.AgentMemoryStore(
+        Path.Combine(TestTmp, "agent_memory3_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db"));
+
+    // 空 → null
+    Check("无命中 → null", Agent.Infrastructure.Memory.MemoryPromptBuilder.Build(new List<Agent.Infrastructure.Memory.AgentMemoryStore.MemoryHit>()) is null);
+
+    // 失败记忆 → 警示组单列
+    var failHit = new Agent.Infrastructure.Memory.AgentMemoryStore.MemoryHit(1, "task", "创建 hello.txt", "任务失败（agent）：达到最大步数 20，任务终止。", 2);
+    var okHit = new Agent.Infrastructure.Memory.AgentMemoryStore.MemoryHit(2, "model", "ProjectRoot 属性", "ProjectRoot 为 null 时沙箱模式。", 1);
+    var built = Agent.Infrastructure.Memory.MemoryPromptBuilder.Build(new List<Agent.Infrastructure.Memory.AgentMemoryStore.MemoryHit> { failHit, okHit });
+    Check("失败教训独立警示组", built is not null && built.Contains("历史失败教训") && built.Contains("避免重蹈覆辙"));
+    Check("失败内容含教训原文", built is not null && built.Contains("达到最大步数 20"));
+    Check("参考组含 model 记忆", built is not null && built.Contains("历史参考") && built.Contains("ProjectRoot 为 null 时沙箱模式"));
+    Check("失败与参考分节", built is not null && built.IndexOf("历史失败教训") < built.IndexOf("历史参考"));
+
+    // 两条失败 → 失败计数强化
+    var failHit2 = new Agent.Infrastructure.Memory.AgentMemoryStore.MemoryHit(3, "task", "创建 hello2.txt", "任务失败（agent）：模型连续返回空答案，任务终止。", 1);
+    var built2 = Agent.Infrastructure.Memory.MemoryPromptBuilder.Build(new List<Agent.Infrastructure.Memory.AgentMemoryStore.MemoryHit> { failHit, failHit2 });
+    Check("多条失败 → 计数强化", built2 is not null && built2.Contains("同类失败已记录 2 次"));
+
+    // 只有参考 → 无警示组
+    var built3 = Agent.Infrastructure.Memory.MemoryPromptBuilder.Build(new List<Agent.Infrastructure.Memory.AgentMemoryStore.MemoryHit> { okHit });
+    Check("仅参考无警示组", built3 is not null && !built3.Contains("历史失败教训") && built3.Contains("历史参考"));
+}
+
 Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==");
 {
     var baseTmp = Path.Combine(TestTmp, "tests_p1rc");

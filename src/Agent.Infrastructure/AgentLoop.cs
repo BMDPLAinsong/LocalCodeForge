@@ -100,11 +100,7 @@ public sealed class AgentLoop : IAgentLoop
                 return null;
 
             _logger.LogInformation("[记忆] 历史记忆命中 {Count} 条，已注入上下文。", hits.Count);
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine("## 历史记忆（跨任务，来自此前任务）");
-            foreach (var h in hits)
-                sb.AppendLine($"- [{h.Kind}/{h.Topic}] {h.Content}");
-            return sb.ToString();
+            return Agent.Infrastructure.Memory.MemoryPromptBuilder.Build(hits);
         }
         catch (Exception ex)
         {
