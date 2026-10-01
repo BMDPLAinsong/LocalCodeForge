@@ -41,7 +41,7 @@
 
 ## 0. 一句话摘要
 
-本地优先（Local-first）的 AI 编码 Agent 工作台：.NET 10 控制台应用，用户在 CLI 输入自然语言需求，系统在**本地 Ollama 小模型 + 云端 DashScope 大模型**之间做智能路由，自动完成「规划 → 生成代码 → 写文件 → 运行验证 → 出错自动修复」的闭环，并用 SQLite 记录会话与任务指标。
+本地优先（Local-first）的 AI 编码 Agent 工作台：.NET 10 控制台应用，用户在 CLI 输入自然语言需求，系统在**本地 Ollama 四模型（classifier/small/agent_pro/large，全部本地推理）**之间做智能路由，自动完成「规划 → 生成代码 → 写文件 → 运行验证 → 出错自动修复」的闭环，并用 SQLite 记录会话、任务指标与跨任务记忆。
 
 
 
@@ -49,9 +49,9 @@
 | ---- | ---------------------------------------------------------------------------------------------------------------------- |
 | 解决方案 | `LocalAiWorkbench.slnx`（新版 XML solution 格式）                                                                            |
 | 目标框架 | net10.0（**已在产物中强制 net10.0，勿降级**）                                                                                       |
-| 核心依赖 | Microsoft.SemanticKernel 1.80.1、SK OpenAI Connector（走 Ollama `/v1` 与 DashScope 兼容端点）、Microsoft.Data.Sqlite 11.0.0-rc.1 |
-| 版本控制 | **未纳入 git**（无 .git 目录），无测试工程                                                                                           |
-| 入口   | `dotnet run --project src/Agent.Cli`，需先 `ollama serve`                                                                 |
+| 核心依赖 | Microsoft.SemanticKernel 1.80.1、SK OpenAI Connector（走 Ollama `/v1`，兼容端点；当前全部本地）、Microsoft.Data.Sqlite 11.0.0-rc.1 |
+| 版本控制 | **本机 git 仓库**（main，40+ commits，无远端）；测试工程 `tests/Agent.Infrastructure.Tests`（136 项断言，入 slnx）                          |
+| 入口   | `dotnet run --project src/Agent.Cli`（Ollama 未启动时 CLI 自动拉起，见 §14-3f）；工程模式 `use <路径>` / `--project` / `--write` / `rollback` |
 
 
 
@@ -167,10 +167,10 @@ flowchart TD
 | ------------ | -------------------- | ----------------------------------------------- | --------------------------------- | ---------------- |
 | `classifier` | Ollama :11434        | qwen2.5:1.5b                                    | 意图分类（温度 0，极短 prompt）              | HttpClient 10 分钟 |
 | `small`      | Ollama :11434        | qwen3-coder-flash-custom（注释备选 qwen2.5-coder:7b） | Executor 代码生成 / 简单任务              | 10 分钟            |
-| `large`      | DashScope（openai 兼容） | qwen3.8-27b                                     | Search / Unknown 兜底               | 5 分钟             |
+| `large`      | Ollama :11434        | qwen3.8-27b                                     | 写任务直连 / Search / Unknown 兜底     | 10 分钟            |
 | `agent_pro`  | Ollama :11434        | qwen3.5:4b                                      | Planner 规划 / ComplexReason / 失败升级 | 10 分钟            |
 
-行为参数：`MaxSteps=20`、`MaxHistoryTurns=10`、`Temperature=0.2`、`ExecutorMaxRetries=3`、`ComplexToPro=true`（ComplexReason 走本地 4B 而非云端，省钱）。大模型 Key 读环境变量 `DASHSCOPE_API_KEY`（缺失时启动黄色提示，路由到 large 会失败）。
+行为参数：`MaxSteps=20`、`MaxHistoryTurns=10`、`Temperature=0.2`、`ExecutorMaxRetries=3`、`ComplexToPro=true`（ComplexReason 走本地 4B）。**当前全本地部署，无云端依赖**（DASHSCOPE_API_KEY 已不参与默认链路；代码保留 openai 兼容端点以支持未来切换）。
 
 > **模型库位置（接手必知）**：Ollama 模型库根在 **`X:\ollama\models`**（实测 10 个模型：qwen3-coder-flash-custom/opt/agent、anarko/qwen3-coder-flash:30b、qwen2.5:1.5b、qwen3.5:4b、qwen2.5-coder:7b、nomic-embed-text 等），**用户环境未设 `OLLAMA_MODELS` 变量**——手动 `ollama serve` 会读默认空目录（`%USERPROFILE%\.ollama\models`，blobs 为 0）导致健康检查模型全 FAIL。CLI 自动启动（§14-3f）已做探测注入：进程环境有变量则继承，否则默认库有模型则不注入，否则回退 `X:\ollama\models`。
 
