@@ -118,6 +118,7 @@ public sealed class AgentLoop : IAgentLoop
         RoutingDecision? lastYieldedDecision = null;
         int forceContinueCount = 0;
         int emptyAnswerCount = 0;
+        string? _lastFailureSummary = null; // 上下文治理：最近一次失败的工具输出摘要（注入用截断版）
 
         var historyStartIndex = chatHistory.Count;
 
@@ -144,6 +145,23 @@ public sealed class AgentLoop : IAgentLoop
                 }
                 else if (_lastStepFailed)
                 {
+                    // 【上下文治理 10-01】recovery 重路由前重建精简上下文：
+                    // 删除中间工具往返历史（上下文膨胀源——大段 stdout/stderr 进历史），
+                    // 保留需求+环境约束（historyStartIndex 之前），追加失败摘要。
+                    // 目的：让 agent_pro 在干净上下文里推理——4B 上下文饱和是空响应根因
+                    // （agent_pro 14 条失败中 11 条空响应，全在 recovery 承接后）。
+                    // 模型如需当前文件内容会自行 read_file（ReAct 循环内可自取）。
+                    if (chatHistory.Count > historyStartIndex)
+                    {
+                        chatHistory.RemoveRange(historyStartIndex, chatHistory.Count - historyStartIndex);
+                    }
+
+                    if (!string.IsNullOrEmpty(_lastFailureSummary))
+                    {
+                        chatHistory.AddUserMessage(
+                            $"上一步失败（工具 {_lastToolName}）：\n{_lastFailureSummary}\n\n请根据失败原因继续完成任务。");
+                    }
+
                     decision = await _router.RouteAsync(routingContext, ct);
                     firstDecision = decision;
                 }
@@ -237,12 +255,16 @@ public sealed class AgentLoop : IAgentLoop
 
                     _lastToolName = cleanName;
                     _lastStepFailed = !ok && !output.StartsWith("错误：工具");
+                    // 上下文治理：仅 run_command 截断（大段 stdout/stderr 膨胀源）；
+                    // read_file 保留完整——edit_file 精确匹配依赖完整文件内容，截断会破坏修复
+                    var condensed = cleanName == "run_command" ? SummarizeOutput(output) : output;
+                    _lastFailureSummary = condensed;
 
                     var frc = new FunctionResultContent(
                         functionName: cleanName,
                         pluginName: "_",
                         callId: call.Id,
-                        result: output);
+                        result: condensed);
                     chatHistory.Add(frc.ToChatMessage());
                 }
                 continue;
@@ -308,12 +330,14 @@ public sealed class AgentLoop : IAgentLoop
 
                     _lastToolName = pc.Name;
                     _lastStepFailed = !ok && !output.StartsWith("错误：工具");
+                    var condensed = pc.Name == "run_command" ? SummarizeOutput(output) : output;
+                    _lastFailureSummary = condensed;
 
                     var frc = new FunctionResultContent(
                         functionName: pc.Name,
                         pluginName: "_",
                         callId: fcc.Id,
-                        result: output);
+                        result: condensed);
                     chatHistory.Add(frc.ToChatMessage());
                 }
 
@@ -916,6 +940,18 @@ public sealed class AgentLoop : IAgentLoop
             return true;
 
         return false;
+    }
+
+    /// <summary>
+    /// 工具输出注入 chatHistory 前的截断（上下文治理）：
+    /// 保留头部关键信息 + 尾部错误行（Traceback/退出码通常在尾部），
+    /// 防大段 stdout/stderr 撑爆上下文导致 4B 模型空响应。
+    /// 仅影响注入，运行输出判定（OutputVerifier）仍用完整输出。
+    /// </summary>
+    private static string SummarizeOutput(string output, int head = 400, int tail = 300)
+    {
+        if (output.Length <= head + tail) return output;
+        return output[..head] + "\n...(中间省略，共 " + output.Length + " 字符)...\n" + output[^tail..];
     }
 
     /// <summary>空响应升级链：small → agent_pro → large；已在最高层返回 null。</summary>

@@ -11,6 +11,7 @@
 > **10-01 P2 内核强化（§14-3k）：IsPlaceholderOutput 校准（标题行 :/= 结尾不计占位，fib 形态不再误判，纯标题壳仍判）；AgentLoop 空响应升级链（small→agent_pro→large 强制升级，最高层才终止）；metrics 归因面板（%TEMP%\lawcheck\qmetrics2.py，失败按 空响应/凭据/超时/结构/网络/工具/其他 归因）——发现：19 失败中空响应 10 条（升级链覆盖）、新类型"修复输出与原文相同"×2 与"规划失败"×2 待决策**
 > **10-01 A+B 升级链收官（§14-3l）：ExecutorService.FixFileAsync 检测"输出与原文相同"→升级 small→agent_pro→large 重试（每层至多一次）；PlannerService 第 2 次解析失败升级 Large 重试——冒烟实证：学生管理系统任务 Planner 输出截断→AgentPro 重试仍截断→升级 Large 一次成功（4 文件，dotnet run 退出码 0）**
 > **10-01 P1-4 Prompt 矛盾清理（§14-3m）：ExecutorService SystemPrompt 删除 requests 硬禁令（改为外部任务按[环境约束]可用 requests+timeout）；PlannerService requests→urllib 替换条件化（外部任务保留）——禁令与约束块/参考实现（本身用 requests）矛盾消除；汇率任务复测成功（1 USD=7.2 CNY）**
+> **10-01 agent_pro 上下文治理（§14-3o）：agent_pro 定位确认保留（未来工程感知的中介大脑，不做一刀切）。根治空响应根因=上下文膨胀（recovery 承接时历史含大段 stdout/stderr → 4B 上下文饱和 → 空输出；agent_pro 14 条失败 11 条空响应全在 recovery 承接后）。改动 1：recovery 重路由前重建精简上下文（删中间工具往返，保留需求+环境约束+失败摘要，模型自行 read_file 取文件）；改动 2：工具输出注入截断——仅 run_command（头 400+尾 300，判定仍用完整输出），read_file 保留完整（edit_file 精确匹配依赖完整文件内容；首版全截断实测破坏修复循环，已修正）。实证：同一天气任务修复前 recovery→agent_pro 连续空答案终止；修复后 agent_pro 主动 list_dir/read_file/运行诊断持续试错至 20 步上限——空响应形态消除。任务最终失败归因 wttr.in 键名领域知识（方案 2 已定不注入，接受模型能力边界）。新观察（未改）：agent_pro 不空响应后「反复失败不升级 large」（升级链只认空响应/输出相同）→ recovery 计数升级候选。**
 > **10-01 升级链缺陷修复（§14-3n）：空响应升级时重置 _lastStepFailed——升级是主动决策，不被 recovery 规则（只该响应工具失败）重路由回原层（16:56 天气任务实证升级白升）；17:13 天气复测一次成功（北京 22°C/晴）**
 >
 > **18:23 完成 3 案例多文件回归（订单 / 待办 / 学生全部一次编译通过）**
