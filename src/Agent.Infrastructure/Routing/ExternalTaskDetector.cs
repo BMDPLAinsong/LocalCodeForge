@@ -37,8 +37,8 @@ public static class ExternalTaskDetector
     /// </summary>
     public const string ConstraintBlock =
         "[环境约束] 本环境无外部 API Key；ip-api.com / openweathermap.org 等海外服务可能不可达或需注册。\n" +
-        "本任务若需外部数据：① 优先免 Key 服务（IP 定位用 http://ip-api.com/json/，天气用 https://wttr.in/）；\n" +
-        "② 所有 HTTP 请求必须带 timeout=8 并处理超时异常；③ 失败时快速明确报错（如\"无法获取天气信息\"），禁止无限等待。";
+        "本任务若需外部数据：① 优先免 Key 且国内可达的服务（如：IP 定位用 http://ip-api.com/json/，天气用 https://wttr.in/）；\n" +
+        "② 所有 HTTP 请求必须带 timeout=8 并处理超时异常；③ 失败时快速明确报错（如\"无法获取数据\"），禁止无限等待。";
 
     /// <summary>
     /// 检测任务文本是否属于外部数据任务。

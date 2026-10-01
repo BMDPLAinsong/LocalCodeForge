@@ -131,5 +131,44 @@ Console.WriteLine("== WriteFileTool 写入时 timeout 静态检查（§14-3h） 
         !WriteAndRead("note.txt", "r = requests.get(\"http://x\")").Contains("timeout"));
 }
 
+Console.WriteLine("== PyCodeGuard 交互拒绝 + edit_file 后处理（§14-3j） ==");
+{
+    var ws = Path.Combine(Path.GetTempPath(), "lawcheck", "tests_guard");
+    if (Directory.Exists(ws)) Directory.Delete(ws, true);
+    Directory.CreateDirectory(ws);
+    var wTool = new Agent.Infrastructure.Tools.WriteFileTool(ws);
+    var eTool = new Agent.Infrastructure.Tools.EditFileTool(ws);
+
+    string W(string path, string content)
+    {
+        var json = $"{{\"path\":\"{path}\",\"content\":{JsonSerializer.Serialize(content)}}}";
+        var args = JsonSerializer.Deserialize<JsonElement>(json);
+        return wTool.InvokeAsync(args, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    string R(string path) =>
+        File.ReadAllText(Path.Combine(ws, path.Replace('/', Path.DirectorySeparatorChar)));
+
+    Check("write .py 含 input( → 拒绝",
+        W("i.py", "x = input(\"请输入: \")").Contains("交互输入"));
+    Check("write .cs 含 Console.ReadLine( → 拒绝",
+        W("i.cs", "var x = Console.ReadLine();").Contains("交互输入"));
+    Check("正常 .py 不被拒",
+        !W("ok.py", "print(\"hello\")").Contains("错误"));
+
+    // edit_file：.py 新内容补 timeout + 交互拒绝
+    File.WriteAllText(Path.Combine(ws, "e.py"), "r = requests.get(\"http://ip-api.com/json/\")");
+    var eJson = $"{{\"path\":\"e.py\",\"old_string\":{JsonSerializer.Serialize("r = requests.get(\"http://ip-api.com/json/\")")},\"new_string\":{JsonSerializer.Serialize("r = requests.get(\"http://ip-api.com/json/\")\nx = input()")}}}";
+    var eArgs = JsonSerializer.Deserialize<JsonElement>(eJson);
+    var eRet = eTool.InvokeAsync(eArgs, CancellationToken.None).GetAwaiter().GetResult();
+    Check("edit .py 新内容含 input( → 拒绝", eRet.Contains("交互输入"));
+
+    var eJson2 = $"{{\"path\":\"e.py\",\"old_string\":{JsonSerializer.Serialize("r = requests.get(\"http://ip-api.com/json/\")")},\"new_string\":{JsonSerializer.Serialize("r = requests.get(\"http://ip-api.com/json/\")")}}}";
+    var eArgs2 = JsonSerializer.Deserialize<JsonElement>(eJson2);
+    eTool.InvokeAsync(eArgs2, CancellationToken.None).GetAwaiter().GetResult();
+    Check("edit .py 无 timeout → 补 timeout=8",
+        R("e.py").Contains(", timeout=8"));
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

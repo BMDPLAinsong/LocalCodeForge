@@ -70,6 +70,13 @@ public sealed class WriteFileTool : AgentToolBase
         // 【后处理 1】根据文件类型做强制修正
         content = PostProcess(content, relative);
 
+        // 【后处理 1.5】交互输入拒绝（验证环境无终端输入，含 input/Console.ReadLine 会挂起）
+        var interactiveError = PyCodeGuard.DetectInteractive(content, relative);
+        if (interactiveError is not null)
+        {
+            return interactiveError;
+        }
+
         // 【后处理 2】csproj 文件名检查：如果是 ".csproj" 或异常名，自动改名
         if (relative.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
         {
@@ -141,7 +148,7 @@ public sealed class WriteFileTool : AgentToolBase
         if (ext == ".py")
         {
             content = EnsureArgparseDefaults(content);
-            content = EnsureHttpTimeout(content);
+            content = PyCodeGuard.EnsureHttpTimeout(content);
         }
 
         return content;
@@ -207,51 +214,6 @@ public sealed class WriteFileTool : AgentToolBase
 
             return $"add_argument(\"{argName}\", default=\"\", {restArgs})";
         });
-    }
-
-    /// <summary>
-    /// Python 外部 HTTP 调用强制补 timeout（默认 8 秒）。
-    /// 确定性行级改写：无 timeout 的 requests / urllib / http.client 调用补 ", timeout=8"；
-    /// 已带 timeout、跨行调用（行内无闭合括号）、非 Python 文件一律不动（保守防破坏）。
-    /// 目的：外部服务（ip-api.com / wttr.in 等）在用户网络可能瞬时抖动，
-    /// 无 timeout 的请求会无限挂起（10/01 14:22 实证 30s kill）——
-    /// 补 timeout 后挂起形态变成秒级快速失败，被运行输出检查链接住（§14-3h）。
-    /// </summary>
-    private static string EnsureHttpTimeout(string code)
-    {
-        var callPatterns = new[]
-        {
-            "requests.get(", "requests.post(", "requests.put(", "requests.delete(",
-            "requests.patch(", "requests.head(", "requests.options(", "requests.request(",
-            "urlopen(", "HTTPConnection(", "HTTPSConnection("
-        };
-
-        var lines = code.Split('\n');
-        for (var i = 0; i < lines.Length; i++)
-        {
-            var line = lines[i];
-
-            // 已带 timeout 的行一律不动
-            if (line.Contains("timeout", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            foreach (var pattern in callPatterns)
-            {
-                var idx = line.IndexOf(pattern, StringComparison.Ordinal);
-                if (idx < 0)
-                    continue;
-
-                // 调用括号必须在本行闭合，否则是跨行调用，保守跳过
-                var closeIdx = line.IndexOf(')', idx);
-                if (closeIdx < 0)
-                    continue;
-
-                lines[i] = line.Insert(closeIdx, ", timeout=8");
-                break;
-            }
-        }
-
-        return string.Join("\n", lines);
     }
 
     // ─────────── 自动补 csproj ───────────

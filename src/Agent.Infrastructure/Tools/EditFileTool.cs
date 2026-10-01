@@ -92,6 +92,19 @@ public sealed class EditFileTool : AgentToolBase
         // 执行替换
         var updated = content[..index] + newStr + content[(index + oldStr.Length)..];
 
+        // 单一来源后处理（与 write_file 一致，§14-3j）：交互输入拒绝 + .py 外部 HTTP 补 timeout
+        var ext = Path.GetExtension(relative).ToLowerInvariant();
+        var interactiveError = PyCodeGuard.DetectInteractive(updated, relative);
+        if (interactiveError is not null)
+        {
+            return interactiveError;
+        }
+
+        if (ext == ".py")
+        {
+            updated = PyCodeGuard.EnsureHttpTimeout(updated);
+        }
+
         // 写回
         await File.WriteAllTextAsync(fullPath, updated, ct);
 
