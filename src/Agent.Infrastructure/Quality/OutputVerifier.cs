@@ -274,9 +274,10 @@ public static class OutputVerifier
     }
 
     /// <summary>
-    /// 模板检测降级（方案 1）：stdout 单行内容被任务输入/预期输出明确包含时，
-    /// 视为任务要求的合法输出（如任务要求"内容为 hello"，type 输出 hello 是正确结果），
+    /// 模板检测降级（方案 1+修正 C）：stdout 单行内容被任务输入/预期输出明确包含时，
+    /// 视为任务要求的合法输出（如任务要求"打印 hello world"，type 输出 Hello, World! 是正确结果），
     /// 豁免 IsTemplateOutput 判定——避免"创建 hello 文件"被误判模板而死循环。
+    /// 比较前归一化（小写 + 非字母数字折叠为空白）——"Hello, World!" ↔ "hello world" 匹配。
     /// 任务无关的 Hello World 糊弄（如任务要算加法、输出 hello）仍会被模板检测拦截。
     /// </summary>
     public static bool IsTaskExpectedOutput(string expectedText, IReadOnlyList<string> stdoutLines)
@@ -284,13 +285,37 @@ public static class OutputVerifier
         if (string.IsNullOrWhiteSpace(expectedText))
             return false;
 
-        var expectedNorm = expectedText.ToLowerInvariant();
+        var expectedNorm = NormalizeForMatch(expectedText);
         foreach (var line in stdoutLines)
         {
-            var trimmed = line.Trim().ToLowerInvariant();
+            var trimmed = NormalizeForMatch(line);
             if (trimmed.Length > 0 && expectedNorm.Contains(trimmed))
                 return true;
         }
         return false;
+    }
+
+    /// <summary>归一化：小写 + 非字母数字折叠为空白 + 折叠连续空白。中文保留。</summary>
+    private static string NormalizeForMatch(string s)
+    {
+        if (string.IsNullOrEmpty(s))
+            return string.Empty;
+
+        var sb = new System.Text.StringBuilder(s.Length);
+        var prevSpace = true;
+        foreach (var ch in s.ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                sb.Append(ch);
+                prevSpace = false;
+            }
+            else if (!prevSpace)
+            {
+                sb.Append(' ');
+                prevSpace = true;
+            }
+        }
+        return sb.ToString().Trim();
     }
 }

@@ -357,20 +357,20 @@ internal class Program
             }
 
             // ═══════════ 【自动分发】 ═══════════
-            // 【关键】为每个任务创建独立子目录
+            // 【方案 A·run 级工作目录】一次 CLI 运行 = 一个工作空间：
+            // 工具根直接用 run 根（workspace），任务间共享产物——
+            // "接着更改上一个脚本"可 read_file 到前一任务写入的文件。
+            // 任务目录 task_<id> 不再创建（避免空壳目录误导 list_dir），
+            // taskId 仅作为记忆归档溯源（source=task_<id>）。
             var taskId = Guid.NewGuid().ToString("N")[..8];
-            var taskWorkspace = Path.Combine(workspace, $"task_{taskId}");
-            Directory.CreateDirectory(taskWorkspace);
 
             Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine($"[任务目录] {Path.GetFileName(taskWorkspace)}");
+            Console.WriteLine($"[工作目录] {Path.GetFileName(workspace)}（任务归属 task_{taskId}）");
             Console.ResetColor();
 
-            // 【关键修复】为每个任务创建独立 DI 容器
-            // 因为工具（WriteFileTool 等）构造时绑定 workspaceRoot
-            // 必须让每个任务的工具指向自己的 taskWorkspace
+            // 【关键修复】为每个任务创建独立 DI 容器（工具绑定 run 根）
             var taskServices = new ServiceCollection();
-            taskServices.AddAgent(options, taskWorkspace, dbPath, options.ProjectRoot, options.ProjectWriteEnabled);
+            taskServices.AddAgent(options, workspace, dbPath, options.ProjectRoot, options.ProjectWriteEnabled);
             var taskProvider = taskServices.BuildServiceProvider();
 
             if (TaskClassifier.ShouldOrchestrate(input))
@@ -383,7 +383,7 @@ internal class Program
                 var orchestrator = taskProvider.GetRequiredService<IOrchestrator>();
                 var orchErrors = new List<string>();
                 string? orchAnswer = null;
-                await foreach (var evt in orchestrator.RunAsync(input, taskWorkspace, CancellationToken.None))
+                await foreach (var evt in orchestrator.RunAsync(input, workspace, CancellationToken.None))
                 {
                     if (evt is AgentEvent.Error e) orchErrors.Add(e.Message);
                     if (evt is AgentEvent.FinalAnswer fa) orchAnswer = fa.Text;
@@ -395,7 +395,7 @@ internal class Program
             {
                 // 走原有 AgentLoop
                 var taskLoop = taskProvider.GetRequiredService<IAgentLoop>();
-                var request = new AgentRequest(sessionId, input, taskWorkspace);
+                var request = new AgentRequest(sessionId, input, workspace);
 
                 var loopErrors = new List<string>();
                 string? loopAnswer = null;

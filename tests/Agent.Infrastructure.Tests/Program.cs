@@ -448,6 +448,15 @@ Console.WriteLine("== 模板检测降级：任务要求输出豁免（方案 1�
     Check("大小写不敏感 → 豁免",
         Agent.Infrastructure.Quality.OutputVerifier.IsTaskExpectedOutput(
             "Hello World 示例", new List<string> { "hello world" }));
+
+    // ── 方案 C：大小写/标点归一（Hello, World! ↔ hello world）──
+    Check("Hello, World! 大小写标点归一 → 豁免",
+        Agent.Infrastructure.Quality.OutputVerifier.IsTaskExpectedOutput(
+            "写一个名为pyst.py的脚本，脚本任务是打印 hello world",
+            new List<string> { "Hello, World!" }));
+    Check("输入无关输出不豁免（加法任务输出 hello 仍拦截）",
+        !Agent.Infrastructure.Quality.OutputVerifier.IsTaskExpectedOutput(
+            "用 C# 写一个加法计算器", new List<string> { "hello" }));
     // 方案 2：循环熔断签名——同工具+首参+输出指纹
     {
         var argsHello = System.Text.Json.JsonDocument.Parse("{\"path\":\"hello.txt\",\"content\":\"hello\"}").RootElement;
@@ -559,6 +568,18 @@ Console.WriteLine("== IntentOverride 写任务判定（§14-3w 直连 large） =
         !Wr("列出 src/Agent.Core/Models 目录"));
     Check("操作词但无文件语境 → 非写任务",
         !Wr("帮我添加一些建议"));
+
+    // ── 方案 B：写动词词表补全（写/更改/改/生成…）──
+    Check("写一个…脚本 → 写任务",
+        Wr("写一个名为pyst.py的脚本，脚本任务是打印 hello world"));
+    Check("更改这个脚本 → 写任务",
+        Wr("更改这个脚本，将里面内容改成判断整数偶数的方法"));
+    Check("生成一个Python脚本 → 写任务",
+        Wr("生成一个Python脚本"));
+    Check("改为…方法 → 写任务",
+        Wr("将脚本内容改为判断整数偶数的方法"));
+    Check("纯打印无语境 → 非写任务",
+        !Wr("打印 hello"));
 }
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;
