@@ -12,6 +12,7 @@ using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Microsoft.Extensions.Logging;
 using Agent.Core.Abstractions;
 using Agent.Core.Models;
+using Agent.Infrastructure.Project;
 using Agent.Infrastructure.Routing;
 using Agent.Infrastructure.Quality;
 
@@ -27,6 +28,7 @@ public sealed class AgentLoop : IAgentLoop
     private readonly ISessionStore _store;
     private readonly AgentOptions _options;
     private readonly IModelRouter _router;
+    private readonly ProjectContextStore _projectContextStore;   // ← P2：工程上下文缓存
     private readonly ILogger<AgentLoop> _logger;
 
     private string? _lastToolName;
@@ -38,6 +40,7 @@ public sealed class AgentLoop : IAgentLoop
         ISessionStore store,
         AgentOptions options,
         IModelRouter router,
+        ProjectContextStore projectContextStore,   // ← P2：工程上下文缓存
         ILogger<AgentLoop> logger)
     {
         _kernel = kernel;
@@ -45,7 +48,39 @@ public sealed class AgentLoop : IAgentLoop
         _store = store;
         _options = options;
         _router = router;
+        _projectContextStore = projectContextStore;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// 工程模式加载注入块（工程感知 P2 跨任务记忆）：
+    /// 轻量签名校验缓存——工程未变化时复用 ProjectContextStore 的 CompactBlock，
+    /// 避免每任务重建上下文块；文件被修改（签名变化）自动重新扫描并更新缓存。
+    /// 注入的是瘦身版（概要+目录聚合），模型需要文件详情时 list_dir/read_file 自取。
+    /// </summary>
+    private string? LoadProjectCompactBlock(string root)
+    {
+        try
+        {
+            var (fileCount, dirCount, totalBytes, maxMtimeTicks) =
+                Agent.Infrastructure.Project.ProjectScanner.ComputeSignature(root);
+            var cached = _projectContextStore.TryGet(root, fileCount, dirCount, totalBytes, maxMtimeTicks);
+            if (cached is not null)
+            {
+                _logger.LogInformation("[工程上下文] 缓存命中（签名一致），复用 CompactBlock。");
+                return cached.CompactBlock;
+            }
+
+            var scan = Agent.Infrastructure.Project.ProjectScanner.Scan(root);
+            _projectContextStore.Put(root, scan);
+            _logger.LogInformation("[工程上下文] 缓存未命中，重新扫描并写入缓存。");
+            return scan.CompactBlock;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "工程上下文加载失败，降级为无工程块。");
+            return null;
+        }
     }
 
     /// <summary>执行一次任务，返回事件流。</summary>
@@ -104,10 +139,10 @@ public sealed class AgentLoop : IAgentLoop
         // 注入外部数据任务的环境约束（若命中）：让模型在生成阶段就知道环境事实
         var envConstraint = ExternalTaskDetector.Detect(request.Input);
 
-        // 工程感知 P0：工程模式下注入工程上下文数据块（确定性扫描，无模型调用）
-        var projectBlock = _options.ProjectRoot is null
-            ? null
-            : Agent.Infrastructure.Project.ProjectScanner.Scan(_options.ProjectRoot).ContextBlock;
+        // 工程感知 P2：跨任务记忆——扫描（取文件系统签名）→ 缓存命中复用 CompactBlock
+        // （注入瘦身版：概要+目录聚合；模型需要文件详情时 list_dir/read_file 自取。
+        //   文件被修改（签名变化）自动重新扫描，保证正确性。）
+        var projectBlock = _options.ProjectRoot is null ? null : LoadProjectCompactBlock(_options.ProjectRoot);
 
         var userMsg = request.Input;
         if (envConstraint is not null) userMsg += "\n\n" + envConstraint;

@@ -272,6 +272,39 @@ Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
 }
 
 
+Console.WriteLine("== 工程感知 P2：跨任务记忆（§14-3w P2） ==");
+{
+    var ctxDb = Path.Combine(TestTmp, "project_context_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db");
+    var store = new Agent.Infrastructure.Project.ProjectContextStore(ctxDb);
+    var projP2 = Path.Combine(TestTmp, "p2proj_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(Path.Combine(projP2, "src"));
+    File.WriteAllText(Path.Combine(projP2, "Program.cs"), "// v1");
+    File.WriteAllText(Path.Combine(projP2, "src", "A.cs"), "// a1");
+    var sig = Agent.Infrastructure.Project.ProjectScanner.ComputeSignature(projP2);
+    Check("签名含文件数 2", sig.FileCount == 2);
+    Check("签名含目录数 1", sig.DirCount == 1);
+    Check("首次查询 → 未命中",
+        store.TryGet(projP2, sig.FileCount, sig.DirCount, sig.TotalBytes, sig.MaxMtimeTicks) is null);
+    var scanP2 = Agent.Infrastructure.Project.ProjectScanner.Scan(projP2);
+    Check("Scan 产出 CompactBlock（目录聚合）", scanP2.CompactBlock.Contains("目录文件数"));
+    Check("CompactBlock 瘦身（不含具体文件名）", !scanP2.CompactBlock.Contains("A.cs"));
+    Check("全量 ContextBlock 含具体文件名", scanP2.ContextBlock.Contains("A.cs"));
+    store.Put(projP2, scanP2);
+    var hitP2 = store.TryGet(projP2, sig.FileCount, sig.DirCount, sig.TotalBytes, sig.MaxMtimeTicks);
+    Check("签名一致 → 缓存命中", hitP2 is not null && hitP2.CompactBlock.Contains("目录文件数"));
+    Check("缓存命中返回 Overview", hitP2 is not null && hitP2.Overview.Contains("文件"));
+    File.WriteAllText(Path.Combine(projP2, "src", "A.cs"), "// a2 changed");
+    var sig2 = Agent.Infrastructure.Project.ProjectScanner.ComputeSignature(projP2);
+    Check("文件修改 → 签名变化", sig2 != sig);
+    Check("新签名 → 缓存未命中（自动重扫）",
+        store.TryGet(projP2, sig2.FileCount, sig2.DirCount, sig2.TotalBytes, sig2.MaxMtimeTicks) is null);
+    // 新签名下 Scan+Put → 再命中
+    var scanP2b = Agent.Infrastructure.Project.ProjectScanner.Scan(projP2);
+    store.Put(projP2, scanP2b);
+    Check("重扫后 → 新签名命中",
+        store.TryGet(projP2, sig2.FileCount, sig2.DirCount, sig2.TotalBytes, sig2.MaxMtimeTicks) is not null);
+}
+
 Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==");
 {
     var baseTmp = Path.Combine(TestTmp, "tests_p1rc");

@@ -9,6 +9,7 @@ using Agent.Core.Abstractions;
 using Agent.Core.Models;
 using Agent.Infrastructure.Metrics;
 using Agent.Infrastructure.Orchestration;
+using Agent.Infrastructure.Project;
 using Agent.Infrastructure.Quality;
 // 引入 Infrastructure
 using Agent.Infrastructure.Routing;
@@ -110,6 +111,16 @@ public static class DependencyInjection
                 Path.GetDirectoryName(dbPath) ?? ".",
                 "metrics.db");
             return new SqliteMetricsCollector(metricsDbPath);
+        });
+
+        // ─────────── 工程上下文缓存（工程感知 P2） ───────────
+        services.AddSingleton<ProjectContextStore>(_ =>
+        {
+            // project_context.db 放在和 sessions.db 同目录
+            var ctxDbPath = Path.Combine(
+                Path.GetDirectoryName(dbPath) ?? ".",
+                "project_context.db");
+            return new ProjectContextStore(ctxDbPath);
         });
 
         // ─────────── 会话存储 ───────────

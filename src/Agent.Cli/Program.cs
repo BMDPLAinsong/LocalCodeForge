@@ -310,7 +310,19 @@ internal class Program
                 options.ProjectRoot = proj;
                 options.ProjectWriteEnabled = writeFlag;
                 var scan = ProjectScanner.Scan(proj);
-                Console.WriteLine(scan.Overview);
+                // 工程感知 P2：工程上下文缓存——工程未变化时命中缓存（跨 CLI 重启持久化）
+                var cached = provider.GetRequiredService<ProjectContextStore>()
+                    .TryGet(proj, scan.FileCount, scan.DirCount, scan.TotalBytes, scan.MaxMtimeTicks);
+                if (cached is not null)
+                {
+                    Console.WriteLine(cached.Overview);
+                    Console.WriteLine("（工程上下文命中缓存，未重新扫描）");
+                }
+                else
+                {
+                    provider.GetRequiredService<ProjectContextStore>().Put(proj, scan);
+                    Console.WriteLine(scan.Overview);
+                }
                 if (writeFlag)
                     Console.WriteLine("工程可写模式已开启（改动前自动备份，可用 rollback 恢复）。");
                 continue;
