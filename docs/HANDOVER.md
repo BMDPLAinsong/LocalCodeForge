@@ -84,13 +84,13 @@
 
 | 目录 / 文件                            | 职责                                                                          | 行数    |
 | ---------------------------------- | --------------------------------------------------------------------------- | ----- |
-| `AgentLoop.cs`                     | ReAct 主循环（§11 编译修复；§11.5.4/11.5.6/11.5.7 凭据+空答案+stderr 白名单+通用失败词+免 Key 注入；§14-3e 检查链改调 OutputVerifier；§14-3g 用户消息附加环境约束）        | 896   |
-| `Orchestration/Orchestrator.cs`    | 三阶段编排 Planner→Executor→Validator（§11.5.3/11.5.7 凭据+通用失败词+JSON 双路径统一；§14-3e 检查链改调 OutputVerifier；§14-3g 环境约束注入 Planner+Plan）         | 812   |
-| `Quality/OutputVerifier.cs`        | **run_command 输出判定公共验证器**（凭据/stderr 剥离/结构/通用失败+双容错/占位；agent+orchestrator 双路径共用**单一来源**，根治双路径不一致，§14-3e） | 271   |
-| `Orchestration/PlannerService.cs`  | 生成结构化 Plan + `SimplifyRunCommand` 后处理硬化（§12-1 多文件规则；§11.5.2 截断防护）           | 790   |
-| `Orchestration/ExecutorService.cs` | 逐文件生成 / 修复代码（§14-3g 生成/修复消息附加 plan.EnvironmentConstraint）                                | 661   |
+| `AgentLoop.cs`                     | ReAct 主循环（§11 编译修复；§11.5.4/11.5.6/11.5.7 凭据+空答案+stderr 白名单+通用失败词+免 Key 注入；§14-3e 检查链改调 OutputVerifier；§14-3g 用户消息附加环境约束；§14-3n 空响应升级重置 _lastStepFailed；§14-3o 上下文治理：recovery 重建精简上下文 + run_command 输出注入截断、read_file 保留完整） | 827   |
+| `Orchestration/Orchestrator.cs`    | 三阶段编排 Planner→Executor→Validator（§11.5.3/11.5.7 凭据+通用失败词+JSON 双路径统一；§14-3e 检查链改调 OutputVerifier；§14-3g 环境约束注入 Planner+Plan）         | 689   |
+| `Quality/OutputVerifier.cs`        | **run_command 输出判定公共验证器**（凭据/stderr 剥离/结构/通用失败+双容错/占位；agent+orchestrator 双路径共用**单一来源**，根治双路径不一致，§14-3e） | 236   |
+| `Orchestration/PlannerService.cs`  | 生成结构化 Plan + `SimplifyRunCommand` 后处理硬化（§12-1 多文件规则；§11.5.2 截断防护；§14-3l 解析失败升级 Large）           | 678   |
+| `Orchestration/ExecutorService.cs` | 逐文件生成 / 修复代码（§14-3g 生成/修复消息附加 plan.EnvironmentConstraint；§14-3l 修复输出相同升级链）                                | 571   |
 | `Orchestration/TaskClassifier.cs`  | 纯规则判断走编排还是 ReAct                                                            | 103   |
-| `Routing/ExternalTaskDetector.cs`  | **外部数据任务识别**（确定性词表：天气/IP 定位/汇率等 → 环境约束数据块，§14-3g）                    | 66    |
+| `Routing/ExternalTaskDetector.cs`  | **外部数据任务识别**（确定性词表：天气/IP 定位/汇率等 → 环境约束数据块，§14-3g）                    | 46    |
 | `Routing/`                         | 三层漏斗路由（ModelRouter / RuleEngine / IntentClassifier / RoutingRules.json）     | \~480 |
 | `Tools/`                           | 6 个工具（list\_dir/read\_file/write\_file/edit\_file/create\_dir/run\_command） | \~630 |
 | `Quality/PythonLintService.cs`     | ruff 优先，py\_compile 降级；F821/F811 阻断                                         | 189   |
@@ -104,7 +104,7 @@
 
 
 
-* `Program.cs`（849 行）：配置区 → 健康检查（§14-3f Ollama 连接失败自动启动+轮询+OLLAMA_MODELS 注入）→ 交互循环 → 自动分发；含 `plan` / `orch` / `stats` 调试命令（带「临时测试」注释，未清理）。
+* `Program.cs`（735 行）：配置区 → 健康检查（§14-3f Ollama 连接失败自动启动+轮询+OLLAMA_MODELS 注入）→ 交互循环 → 自动分发；含 `plan` / `orch` / `stats` 调试命令（带「临时测试」注释，未清理）。
 
 
 
