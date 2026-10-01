@@ -99,6 +99,11 @@ Check("expected 含未找到 → 放行", !Generic("未找到ID为1的产品", "
 Console.WriteLine("== 占位 Key / 占位符 / 模板（检查 4） ==");
 Check("占位 Key 命中", PhKey("请在代码中替换YOUR_OPENWEATHERMAP_API_KEY为您的实际API密钥"));
 Check("占位符过半命中", (bool)Invoke(mPhOut, new object?[] { (IReadOnlyList<string>)new List<string> { "?", "N/A", "OK" }, null, null })!);
+bool PhOut(params string[] lines) => (bool)Invoke(mPhOut, new object?[] { (IReadOnlyList<string>)lines.ToList(), null, null })!;
+Check("标题+数据行不判占位（fib 形态，P2-1）", !PhOut("Fibonacci 序列:", "0 1 1 2 3 5 8"));
+Check("单行纯标题壳判占位（P2-1）", PhOut("结果:"));
+Check("全空标题壳判占位（P2-1）", PhOut("订单:", "客户:"));
+Check("键值输出不判占位（P2-1）", !PhOut("IP: 8.8.8.8", "Temperature: 21°C"));
 Check("模板单行 hello 命中", (bool)Invoke(mTmpl, new object?[] { (IReadOnlyList<string>)new List<string> { "hello" } })!);
 Check("模板 success 命中", (bool)Invoke(mTmpl, new object?[] { (IReadOnlyList<string>)new List<string> { "success" } })!);
 Check("多行正常输出不判模板", !(bool)Invoke(mTmpl, new object?[] { (IReadOnlyList<string>)new List<string> { "IP: 8.8.8.8", "Temperature: 21°C" } })!);

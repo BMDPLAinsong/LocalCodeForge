@@ -237,6 +237,9 @@ internal static class OutputVerifier
     {
         total = stdoutLines.Count;
 
+        // 数据特征计数（P2-1 校准：冒号/等号结尾的行不计入——
+        // "标题: + 数据行"（如 fib "Fibonacci 序列:\n0 1 1 2 3"）是合法输出结构，
+        // 原实现把标题行计入导致恰好 50% 阈值误判为占位）。
         count = stdoutLines.Count(l =>
             l.Contains('?') ||
             l.Contains("N/A") ||
@@ -244,11 +247,13 @@ internal static class OutputVerifier
             l.Contains("Unknown") ||
             l.Contains("未知") ||
             l.Contains("null") ||
-            l.Contains("undefined") ||
-            l.EndsWith(':') ||
-            l.EndsWith('='));
+            l.Contains("undefined"));
 
-        return count >= total / 2.0;
+        if (count >= total / 2.0)
+            return true;
+
+        // 纯标题壳：所有行都以 : 或 = 结尾（"结果:" 单行 / "订单:\n客户:" 全空标题）
+        return total > 0 && stdoutLines.All(l => l.EndsWith(':') || l.EndsWith('='));
     }
 
     public static bool IsTemplateOutput(IReadOnlyList<string> stdoutLines)

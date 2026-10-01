@@ -334,7 +334,27 @@ public sealed class AgentLoop : IAgentLoop
                     yield break;
                 }
 
-                _logger.LogWarning("模型返回空内容，强制重试。");
+                // 【B2】空响应升级链（P2-3）：同模型已空一次，再同模型重试收益有限——
+                // 强制升级服务（small → agent_pro → large），每层至多尝试一次；
+                // 已到最高层（large）则原层强制重试（此前实测 10-01 多个任务在
+                // small/agent_pro 连续空响应后直接终止，升级给了大模型一次机会）。
+                var promoted = PromoteService(decision.ServiceId);
+                if (promoted is not null)
+                {
+                    _logger.LogWarning(
+                        "模型返回空内容，升级服务 {From} → {To} 重试。",
+                        decision.ServiceId, promoted);
+                    decision = new RoutingDecision(
+                        promoted,
+                        RoutingTier.LargeModel,
+                        $"空响应升级（{decision.ServiceId} → {promoted}）");
+                    firstDecision = decision; // 下一轮循环复用升级后的决策
+                }
+                else
+                {
+                    _logger.LogWarning("模型返回空内容（已在最高层），原服务强制重试。");
+                }
+
                 chatHistory.AddUserMessage(
                     "你刚才没有输出任何内容。请继续：要么调用工具完成用户需求，要么给出明确的最终回答。不要返回空内容。");
                 continue;
@@ -893,4 +913,13 @@ public sealed class AgentLoop : IAgentLoop
 
         return false;
     }
+
+    /// <summary>空响应升级链：small → agent_pro → large；已在最高层返回 null。</summary>
+    private static string? PromoteService(string serviceId) =>
+        serviceId switch
+        {
+            RoutingDecision.Small => RoutingDecision.AgentPro,
+            RoutingDecision.AgentPro => RoutingDecision.Large,
+            _ => null
+        };
 }
