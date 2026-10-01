@@ -348,6 +348,43 @@ Console.WriteLine("== 工程感知 P3：模型级记忆（§14-3w P3） ==");
     Check("RememberTool 写入可检索", mem.Search("记忆工具验证").Any(h => h.Topic.Contains("记忆工具验证")));
 }
 
+Console.WriteLine("== 工程感知 P3 补足：任务归档记忆（§14-3w P3） ==");
+{
+    // 成功归档
+    var (t1, c1) = Agent.Infrastructure.Memory.TaskMemoryExtractor.Extract(
+        "帮我做一个 C# 订单系统项目，多文件组织\n第二行", true, new List<string>(), "orchestrator",
+        "已创建 4 个文件，验证通过。");
+    Check("成功 topic 去换行截断", t1.Contains("帮我做一个") && !t1.Contains("\n"));
+    Check("成功 content 含完成标记", c1.Contains("任务完成（orchestrator）") && c1.Contains("已创建 4 个文件"));
+    Check("成功 content 不含失败标记", !c1.Contains("任务失败"));
+
+    // 失败归档：错误提炼
+    var (t2, c2) = Agent.Infrastructure.Memory.TaskMemoryExtractor.Extract(
+        "用 C# 写一个天气 API 调用", false, new List<string> { "模型连续返回空答案，任务终止。", "升级失败" }, "agent");
+    Check("失败 topic 含输入", t2.Contains("天气 API"));
+    Check("失败 content 含失败标记", c2.Contains("任务失败（agent）"));
+    Check("失败 content 提炼错误教训", c2.Contains("模型连续返回空答案"));
+
+    // 无错误信息的失败归档
+    var (t3, c3) = Agent.Infrastructure.Memory.TaskMemoryExtractor.Extract(
+        "读取某文件", false, new List<string>(), "agent");
+    Check("无错误 → 未知错误", c3.Contains("未知错误"));
+
+    // 长输入 topic 截断 + content 截断
+    var longInput = new string('长', 100);
+    var (t4, c4) = Agent.Infrastructure.Memory.TaskMemoryExtractor.Extract(
+        longInput, false, new List<string> { new string('错', 500) }, "agent");
+    Check("topic 截断到 40", t4.Length == 40);
+    Check("content 截断到 200", c4.Length == 200);
+
+    // 归档写入 store（kind=task）可检索
+    var memDb2 = Path.Combine(TestTmp, "agent_memory2_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db");
+    var mem2 = new Agent.Infrastructure.Memory.AgentMemoryStore(memDb2);
+    mem2.Add("task", "读取 AgentOptions 配置", "任务完成（agent）：已读取并总结。", "task_abc");
+    var taskHits = mem2.Search("读取 AgentOptions 配置", limit: 3);
+    Check("task 记忆可检索", taskHits.Any(h => h.Kind == "task" && h.Topic.Contains("AgentOptions")));
+}
+
 Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==");
 {
     var baseTmp = Path.Combine(TestTmp, "tests_p1rc");

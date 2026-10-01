@@ -381,10 +381,15 @@ internal class Program
                 Console.ResetColor();
 
                 var orchestrator = taskProvider.GetRequiredService<IOrchestrator>();
+                var orchErrors = new List<string>();
+                string? orchAnswer = null;
                 await foreach (var evt in orchestrator.RunAsync(input, taskWorkspace, CancellationToken.None))
                 {
+                    if (evt is AgentEvent.Error e) orchErrors.Add(e.Message);
+                    if (evt is AgentEvent.FinalAnswer fa) orchAnswer = fa.Text;
                     RenderEvent(evt);
                 }
+                ArchiveTask(taskProvider, input, taskId, "orchestrator", orchErrors, orchAnswer);
             }
             else
             {
@@ -392,11 +397,38 @@ internal class Program
                 var taskLoop = taskProvider.GetRequiredService<IAgentLoop>();
                 var request = new AgentRequest(sessionId, input, taskWorkspace);
 
+                var loopErrors = new List<string>();
+                string? loopAnswer = null;
                 await foreach (var evt in taskLoop.RunAsync(request, CancellationToken.None))
                 {
+                    if (evt is AgentEvent.Error e) loopErrors.Add(e.Message);
+                    if (evt is AgentEvent.FinalAnswer fa) loopAnswer = fa.Text;
                     RenderEvent(evt);
                 }
+                ArchiveTask(taskProvider, input, taskId, "agent", loopErrors, loopAnswer);
             }
+        }
+    }
+
+    /// <summary>
+    /// 任务归档记忆（工程感知 P3 补足）：
+    /// 任务完成/失败后确定性提炼写入 AgentMemoryStore（kind=task），
+    /// 供后续任务检索——补足模型不自发 remember 时的记忆积累。
+    /// </summary>
+    static void ArchiveTask(ServiceProvider taskProvider, string input, string taskId,
+        string mode, List<string> errors, string? finalAnswer)
+    {
+        try
+        {
+            var success = finalAnswer is not null;
+            var (topic, content) = Agent.Infrastructure.Memory.TaskMemoryExtractor.Extract(
+                input, success, errors, mode, finalAnswer);
+            var store = taskProvider.GetRequiredService<Agent.Infrastructure.Memory.AgentMemoryStore>();
+            store.Add("task", topic, content, $"task_{taskId}");
+        }
+        catch
+        {
+            // 归档失败不阻塞任务
         }
     }
 
