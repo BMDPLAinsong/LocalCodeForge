@@ -12,6 +12,7 @@ namespace Agent.Cli;
 
 using Agent.Infrastructure.Metrics;
 using Agent.Infrastructure.Orchestration;
+using Agent.Infrastructure.Project;
 
 /// <summary>
 /// Local AI Workbench 的控制台入口。
@@ -94,9 +95,29 @@ internal class Program
         var dbPath = Path.Combine(baseDir, "workspace", "sessions.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
 
+        // ─────────── 工程感知 P0：--project 启动参数 ───────────
+        // 设置工程根 → 只读工具可感知工程文件 + 任务上下文注入工程数据块
+        for (var i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i].Equals("--project", StringComparison.OrdinalIgnoreCase))
+            {
+                var proj = Path.GetFullPath(args[i + 1]);
+                if (Directory.Exists(proj))
+                {
+                    options.ProjectRoot = proj;
+                    Console.WriteLine($"工程根: {proj}");
+                }
+                else
+                {
+                    Console.WriteLine($"错误：工程目录不存在：{proj}");
+                }
+                break;
+            }
+        }
+
         // ─────────── 构建 DI 容器 ───────────
         var services = new ServiceCollection();
-        services.AddAgent(options, workspace, dbPath);
+        services.AddAgent(options, workspace, dbPath, options.ProjectRoot);
         var provider = services.BuildServiceProvider();
         // 【关键】启动时显式解析 IMetricsCollector，触发 SQLite 建表
         // 否则 Singleton 工厂不会被调用，metrics.db 不会创建
@@ -269,6 +290,21 @@ internal class Program
                 continue;
             }
 
+            // ═══════════ use 命令（工程感知 P0） ═══════════
+            if (input.StartsWith("use ", StringComparison.OrdinalIgnoreCase))
+            {
+                var proj = Path.GetFullPath(input.Substring(4).Trim());
+                if (!Directory.Exists(proj))
+                {
+                    Console.WriteLine($"错误：目录不存在：{proj}");
+                    continue;
+                }
+                options.ProjectRoot = proj;
+                var scan = ProjectScanner.Scan(proj);
+                Console.WriteLine(scan.Overview);
+                continue;
+            }
+
             // ═══════════ 【自动分发】 ═══════════
             // 【关键】为每个任务创建独立子目录
             var taskId = Guid.NewGuid().ToString("N")[..8];
@@ -283,7 +319,7 @@ internal class Program
             // 因为工具（WriteFileTool 等）构造时绑定 workspaceRoot
             // 必须让每个任务的工具指向自己的 taskWorkspace
             var taskServices = new ServiceCollection();
-            taskServices.AddAgent(options, taskWorkspace, dbPath);
+            taskServices.AddAgent(options, taskWorkspace, dbPath, options.ProjectRoot);
             var taskProvider = taskServices.BuildServiceProvider();
 
             if (TaskClassifier.ShouldOrchestrate(input))

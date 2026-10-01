@@ -103,10 +103,16 @@ public sealed class AgentLoop : IAgentLoop
 
         // 注入外部数据任务的环境约束（若命中）：让模型在生成阶段就知道环境事实
         var envConstraint = ExternalTaskDetector.Detect(request.Input);
-        chatHistory.AddUserMessage(
-            envConstraint is null
-                ? request.Input
-                : request.Input + "\n\n" + envConstraint);
+
+        // 工程感知 P0：工程模式下注入工程上下文数据块（确定性扫描，无模型调用）
+        var projectBlock = _options.ProjectRoot is null
+            ? null
+            : Agent.Infrastructure.Project.ProjectScanner.Scan(_options.ProjectRoot).ContextBlock;
+
+        var userMsg = request.Input;
+        if (envConstraint is not null) userMsg += "\n\n" + envConstraint;
+        if (projectBlock is not null) userMsg += "\n\n" + projectBlock;
+        chatHistory.AddUserMessage(userMsg);
         await _store.AppendTurnAsync(request.SessionId, new ChatTurn("user", request.Input), ct);
 
         // 注册工具 Plugin

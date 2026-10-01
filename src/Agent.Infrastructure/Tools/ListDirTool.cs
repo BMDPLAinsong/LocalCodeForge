@@ -9,14 +9,16 @@ namespace Agent.Infrastructure.Tools;
 /// </summary>
 public sealed class ListDirTool : AgentToolBase
 {
-    // 工作区根目录，构造时注入
+    // 工作区根目录 + 工程根（可选，工程感知 P0）
     private readonly string _workspaceRoot;
+    private readonly string? _projectRoot;
 
-    /// <summary>构造函数，注入工作区根目录。</summary>
-    public ListDirTool(string workspaceRoot)
+    /// <summary>构造函数，注入工作区根目录（+ 可选工程根）。</summary>
+    public ListDirTool(string workspaceRoot, string? projectRoot = null)
     {
         // 规范化路径，去掉末尾的斜杠
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
     }
 
     /// <summary>工具名。</summary>
@@ -24,7 +26,7 @@ public sealed class ListDirTool : AgentToolBase
 
     /// <summary>工具描述。</summary>
     public override string Description =>
-        "列出指定目录下的文件和子目录。path 相对于工作区根目录，传 \".\" 表示根目录。";
+        "列出指定目录下的文件和子目录。path 相对于工程根（若已 use/--project 设置工程模式），否则相对于任务工作区根目录；传 \".\" 表示根目录。";
 
     /// <summary>参数 Schema。</summary>
     protected override string SchemaJson => """
@@ -46,11 +48,16 @@ public sealed class ListDirTool : AgentToolBase
         // 取出 path 参数
         var relative = args.TryGetProperty("path", out var p) ? p.GetString() ?? "." : ".";
 
-        // 拼接并规范化完整路径
-        var fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, relative));
+        // 解析基准：工程模式下相对路径以工程根为基准（工程感知 P0）
+        var baseRoot = _projectRoot ?? _workspaceRoot;
 
-        // 安全检查：路径必须位于工作区内
-        if (!fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase))
+        // 拼接并规范化完整路径
+        var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
+
+        // 安全检查：路径必须位于任务工作区 或 工程根 内
+        var insideWorkspace = fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase);
+        var insideProject = _projectRoot is not null && fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase);
+        if (!insideWorkspace && !insideProject)
         {
             return Task.FromResult("错误：路径越界。");
         }

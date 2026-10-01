@@ -37,7 +37,8 @@ public static class DependencyInjection
         this IServiceCollection services,
         AgentOptions options,
         string workspaceRoot,
-        string dbPath)
+        string dbPath,
+        string? projectRoot = null)
     {
         // ─────────── 配置 ───────────
         services.AddSingleton(options);
@@ -81,8 +82,9 @@ public static class DependencyInjection
         });
 
         // ─────────── 【关键】工具（少了这几行就报这个错） ───────────
-        services.AddSingleton<IAgentTool>(_ => new ListDirTool(workspaceRoot));
-        services.AddSingleton<IAgentTool>(_ => new ReadFileTool(workspaceRoot));
+        // 工程感知 P0：只读工具可感知工程根（双根），写工具仍锁任务目录
+        services.AddSingleton<IAgentTool>(_ => new ListDirTool(workspaceRoot, projectRoot));
+        services.AddSingleton<IAgentTool>(_ => new ReadFileTool(workspaceRoot, projectRoot));
         services.AddSingleton<IAgentTool>(_ => new WriteFileTool(workspaceRoot));
         services.AddSingleton<IAgentTool>(_ => new EditFileTool(workspaceRoot));    // ← 新增
         services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot));   // ← 新增

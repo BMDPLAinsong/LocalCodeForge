@@ -109,6 +109,16 @@ public sealed class AgentOptions
     /// 单个文件的 Executor 最大重试次数（修复编译错误）。
     /// </summary>
     public int ExecutorMaxRetries { get; set; } = 3;
+
+    // ─────────── 工程感知 ───────────
+
+    /// <summary>
+    /// 工程根目录（工程感知 P0，可选）。
+    /// null = 沙箱模式（默认，工具只读写任务目录）；
+    /// 非 null = 工程模式（只读工具可感知工程文件，任务上下文注入工程数据块）。
+    /// 写工具始终锁定任务目录（可写修改为 P1 阶段）。
+    /// </summary>
+    public string? ProjectRoot { get; set; }
 }
 
 /// <summary>

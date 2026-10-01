@@ -9,16 +9,18 @@ namespace Agent.Infrastructure.Tools;
 /// </summary>
 public sealed class ReadFileTool : AgentToolBase
 {
-    // 工作区根目录
+    // 工作区根目录 + 工程根（可选，工程感知 P0）
     private readonly string _workspaceRoot;
+    private readonly string? _projectRoot;
     // 单文件读取大小上限，防止一次读入过大文件
     private const int MaxBytes = 200 * 1024;
 
     /// <summary>构造函数。</summary>
-    public ReadFileTool(string workspaceRoot)
+    public ReadFileTool(string workspaceRoot, string? projectRoot = null)
     {
         // 规范化路径
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
     }
 
     /// <summary>工具名。</summary>
@@ -26,7 +28,7 @@ public sealed class ReadFileTool : AgentToolBase
 
     /// <summary>工具描述。</summary>
     public override string Description =>
-        "读取工作区内某个文本文件的内容。path 相对于工作区根目录。";
+        "读取文本文件的内容。path 相对于工程根（若已 use/--project 设置工程模式），否则相对于任务工作区根目录。";
 
     /// <summary>参数 Schema。</summary>
     protected override string SchemaJson => """
@@ -45,11 +47,16 @@ public sealed class ReadFileTool : AgentToolBase
         // 取出 path 参数
         var relative = args.GetProperty("path").GetString()!;
 
-        // 完整路径
-        var fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, relative));
+        // 解析基准：工程模式下相对路径以工程根为基准（工程感知 P0）
+        var baseRoot = _projectRoot ?? _workspaceRoot;
 
-        // 越界检查
-        if (!fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase))
+        // 完整路径
+        var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
+
+        // 越界检查：任务工作区 或 工程根 内
+        var insideWorkspace = fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase);
+        var insideProject = _projectRoot is not null && fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase);
+        if (!insideWorkspace && !insideProject)
             return "错误：路径越界。";
 
         // 文件不存在
