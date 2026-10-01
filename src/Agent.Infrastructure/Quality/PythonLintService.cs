@@ -1,0 +1,222 @@
+﻿// ============================================================
+// PythonLintService.cs
+// Python 静态分析服务。优先用 ruff，未安装时降级到 py_compile。
+// ============================================================
+
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
+
+namespace Agent.Infrastructure.Quality;
+
+/// <summary>
+/// Python Lint 服务。
+/// 优先用 ruff（快、规则全），未安装时降级到 python -m py_compile。
+/// </summary>
+public sealed class PythonLintService : ILintService
+{
+    private readonly ILogger<PythonLintService> _logger;
+    private readonly bool _ruffAvailable;
+
+    public PythonLintService(ILogger<PythonLintService> logger)
+    {
+        _logger = logger;
+        _ruffAvailable = CheckRuffAvailable();
+
+        if (!_ruffAvailable)
+        {
+            _logger.LogWarning(
+                "未检测到 ruff，降级到 py_compile。建议安装：pip install ruff");
+        }
+    }
+
+    /// <summary>检查 ruff 是否可用。</summary>
+    private bool CheckRuffAvailable()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "ruff",
+                Arguments = "--version",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var process = Process.Start(psi);
+            if (process is null) return false;
+            process.WaitForExit(3000);
+            return process.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>检查一批文件。</summary>
+    public async Task<LintResult> LintAsync(
+        string workspaceRoot,
+        IReadOnlyList<string> filePaths,
+        string language,
+        CancellationToken ct)
+    {
+        // 只处理 Python 文件
+        var pyFiles = filePaths
+            .Where(p => p.EndsWith(".py", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (pyFiles.Count == 0)
+            return LintResult.Success();
+
+        return _ruffAvailable
+            ? await LintWithRuffAsync(workspaceRoot, pyFiles, ct)
+            : await LintWithPyCompileAsync(workspaceRoot, pyFiles, ct);
+    }
+
+    // ─────────── ruff 路径 ───────────
+
+    private async Task<LintResult> LintWithRuffAsync(
+        string workspaceRoot,
+        List<string> pyFiles,
+        CancellationToken ct)
+    {
+        // 关键规则集：
+        //   F821 - 未定义名（作用域外引用、漏 import）
+        //   F811 - 重复定义
+        //   F841 - 未使用变量
+        //   F401 - 未使用 import
+        // 语法错误 ruff 默认检测，不需要 select
+        var fileArgs = string.Join(" ", pyFiles.Select(f => $"\"{f}\""));
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "ruff",
+            Arguments = $"check --select F821,F811,F841,F401 --output-format=json --no-fix {fileArgs}",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = workspaceRoot,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        using var process = Process.Start(psi);
+        if (process is null)
+            return LintResult.Success();
+
+        var stdout = await process.StandardOutput.ReadToEndAsync(ct);
+        var stderr = await process.StandardError.ReadToEndAsync(ct);
+        await process.WaitForExitAsync(ct);
+
+        // 退出码：0 = 无错误；1 = 有 lint 错误；2 = 工具异常
+        if (process.ExitCode == 0)
+            return LintResult.Success(stdout);
+
+        if (process.ExitCode == 2)
+        {
+            _logger.LogWarning("ruff 执行异常：{Stderr}", stderr);
+            return LintResult.Success();   // 工具错误不阻断流程
+        }
+
+        var errors = ParseRuffOutput(stdout);
+        return LintResult.Fail(errors, stdout);
+    }
+
+    /// <summary>解析 ruff 的 JSON 输出。</summary>
+    private static List<LintError> ParseRuffOutput(string json)
+    {
+        var result = new List<LintError>();
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                var code = item.TryGetProperty("code", out var c) ? c.GetString() ?? "" : "";
+                var message = item.TryGetProperty("message", out var m) ? m.GetString() ?? "" : "";
+                var filename = item.TryGetProperty("filename", out var f) ? f.GetString() ?? "" : "";
+
+                var line = 0;
+                var col = 0;
+                if (item.TryGetProperty("location", out var loc))
+                {
+                    if (loc.TryGetProperty("row", out var r)) line = r.GetInt32();
+                    if (loc.TryGetProperty("column", out var cl)) col = cl.GetInt32();
+                }
+
+                result.Add(new LintError(filename, line, col, code, message));
+            }
+        }
+        catch
+        {
+            // JSON 解析失败，返回空
+        }
+
+        return result;
+    }
+
+    // ─────────── py_compile 兜底路径 ───────────
+
+    private async Task<LintResult> LintWithPyCompileAsync(
+        string workspaceRoot,
+        List<string> pyFiles,
+        CancellationToken ct)
+    {
+        var errors = new List<LintError>();
+        var allOutput = new StringBuilder();
+
+        foreach (var file in pyFiles)
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "python",
+                Arguments = $"-m py_compile \"{file}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = workspaceRoot,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+
+            using var process = Process.Start(psi);
+            if (process is null) continue;
+
+            var stderr = await process.StandardError.ReadToEndAsync(ct);
+            await process.WaitForExitAsync(ct);
+
+            if (process.ExitCode != 0)
+            {
+                allOutput.AppendLine(stderr);
+                var err = ParsePyCompileError(file, stderr);
+                if (err is not null) errors.Add(err);
+            }
+        }
+
+        return errors.Count == 0
+            ? LintResult.Success(allOutput.ToString())
+            : LintResult.Fail(errors, allOutput.ToString());
+    }
+
+    /// <summary>解析 py_compile 的错误输出。</summary>
+    private static LintError? ParsePyCompileError(string file, string stderr)
+    {
+        var lineMatch = Regex.Match(stderr, @"line (\d+)");
+        var line = lineMatch.Success ? int.Parse(lineMatch.Groups[1].Value) : 0;
+
+        var errMatch = Regex.Match(
+            stderr,
+            @"(SyntaxError|IndentationError|TabError|ValueError|NameError):\s*(.+)");
+
+        var rule = errMatch.Success ? errMatch.Groups[1].Value : "SyntaxError";
+        var message = errMatch.Success ? errMatch.Groups[2].Value.Trim() : "语法错误";
+
+        return new LintError(file, line, 0, rule, message);
+    }
+}

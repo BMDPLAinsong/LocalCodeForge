@@ -1,0 +1,18 @@
+# IDE / 编辑器
+.vs/
+*.user
+*.suo
+.idea/
+.vscode/
+
+# 构建产物
+bin/
+obj/
+artifacts/
+
+# 运行时数据（会话库 / 指标 / 任务产物）
+workspace/
+
+# 临时文件
+*.tmp
+*.log

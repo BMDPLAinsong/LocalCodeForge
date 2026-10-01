@@ -1,0 +1,19 @@
+﻿<!-- SDK 风格的项目文件 -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<!-- 项目属性 -->
+	<PropertyGroup>
+		<!-- 目标框架 .NET 10 -->
+		<TargetFramework>net10.0</TargetFramework>
+		<!-- 启用可空引用类型检查 -->
+		<Nullable>enable</Nullable>
+		<!-- 启用隐式 using -->
+		<ImplicitUsings>enable</ImplicitUsings>
+	</PropertyGroup>
+	<ItemGroup>
+	  <PackageReference Include="Microsoft.SemanticKernel.Connectors.Ollama" Version="1.80.1-alpha" />
+	</ItemGroup>
+
+	<!-- 【关键】删掉所有 PackageReference。Core 层保持零依赖。 -->
+
+</Project>

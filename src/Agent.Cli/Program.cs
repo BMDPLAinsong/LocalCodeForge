@@ -1,0 +1,849 @@
+﻿// 引入 DI
+// 引入 Core
+using Agent.Core.Abstractions;
+using Agent.Core.Models;
+// 引入 Infrastructure
+using Agent.Infrastructure;
+using Microsoft.Extensions.DependencyInjection;
+using System.Diagnostics;
+
+// 命名空间（可保留，也可删）
+namespace Agent.Cli;
+
+using Agent.Infrastructure.Metrics;
+using Agent.Infrastructure.Orchestration;
+
+/// <summary>
+/// Local AI Workbench 的控制台入口。
+/// </summary>
+internal class Program
+{
+    /// <summary>
+    /// 主入口。配置、启动、进入交互循环。
+    /// </summary>
+    static async Task Main(string[] args)
+    {
+        // ─────────── 配置区 ───────────
+        // 读环境变量
+        var dashscopeKey = Environment.GetEnvironmentVariable("DASHSCOPE_API_KEY") ?? "";
+
+        var options = new AgentOptions
+        {
+            // 意图分类器
+            Classifier = new ModelEndpoint
+            {
+                Provider = "ollama",
+                Model = "qwen2.5:1.5b",
+                Endpoint = "http://localhost:11434",
+                ApiKey = "ollama"
+            },
+
+            // 小模型：本地 7B
+            Small = new ModelEndpoint
+            {
+                Provider = "ollama",
+                Model = "qwen3-coder-flash-opt",//qwen3-coder-flash-custom  qwen2.5-coder:7b
+                Endpoint = "http://localhost:11434",
+                ApiKey = "ollama"
+            },
+
+            // 大模型：DashScope 云端兜底（备选）
+            Large = new ModelEndpoint
+            {
+                Provider = "openai",
+                Model = "qwen3.8-27b",
+                Endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                ApiKey = dashscopeKey
+            },
+
+            // AgentPro：本地 Agent 专用
+            AgentPro = new ModelEndpoint
+            {
+                Provider = "ollama",
+                Model = "qwen3.5:4b",
+                Endpoint = "http://localhost:11434",
+                ApiKey = "ollama"
+            },
+
+            EnableRouting = true,
+            MaxSteps = 20,
+            Temperature = 0.2
+        };
+
+        // 校验大模型 Key
+        if (string.IsNullOrEmpty(dashscopeKey))
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("提示：未设置 DASHSCOPE_API_KEY，路由到大模型时会失败。");
+            Console.ResetColor();
+        }
+
+        // ─────────── 工作区目录 ───────────
+        var baseDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        var runsRoot = Path.Combine(baseDir, "workspace", "runs");
+        // 【新增】清理旧 run 目录
+        CleanOldRuns(runsRoot, keepDays: 7, maxCount: 50);
+        Directory.CreateDirectory(runsRoot);
+
+        // 用启动时间 + 4 位随机数生成 run 名字
+        var runName = $"{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..4]}";
+        var workspace = Path.Combine(runsRoot, runName);
+        Directory.CreateDirectory(workspace);
+
+        // SQLite 数据库：所有 run 共用一个
+        var dbPath = Path.Combine(baseDir, "workspace", "sessions.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+
+        // ─────────── 构建 DI 容器 ───────────
+        var services = new ServiceCollection();
+        services.AddAgent(options, workspace, dbPath);
+        var provider = services.BuildServiceProvider();
+        // 【关键】启动时显式解析 IMetricsCollector，触发 SQLite 建表
+        // 否则 Singleton 工厂不会被调用，metrics.db 不会创建
+        _ = provider.GetRequiredService<IMetricsCollector>();
+
+        // 取出 Agent 主循环
+        var loop = provider.GetRequiredService<IAgentLoop>();
+
+        // 会话 ID
+        var sessionId = Guid.NewGuid().ToString("N");
+
+        // ─────────── 打印欢迎 ───────────
+        Console.WriteLine("=== Local AI Workbench ===");
+        Console.WriteLine($"运行目录: {workspace}");
+        Console.WriteLine($"会话库:   {dbPath}");
+        Console.WriteLine("输入需求，回车执行。输入 exit 退出。输入 new 开启新会话。");
+        Console.WriteLine();
+
+        // ─────────── 打印配置 ───────────
+        Console.WriteLine("=== 实际生效配置 ===");
+        Console.WriteLine($"Classifier: {options.Classifier.Model}");
+        Console.WriteLine($"Small:      {options.Small.Model}");
+        Console.WriteLine($"AgentPro:   {options.AgentPro.Model}   (ComplexToPro={options.ComplexToPro})");
+        Console.WriteLine($"Large:      {options.Large.Model}");
+        Console.WriteLine();
+
+        // ─────────── 本地模型健康检查 ───────────
+        await CheckLocalModelsAsync(options);
+
+        // ─────────── 主循环 ───────────
+        while (true)
+        {
+            Console.Write("> ");
+            var input = Console.ReadLine();
+
+            if (string.IsNullOrWhiteSpace(input) || input.Equals("exit", StringComparison.OrdinalIgnoreCase))
+                break;
+
+            if (input.Equals("new", StringComparison.OrdinalIgnoreCase))
+            {
+                sessionId = Guid.NewGuid().ToString("N");
+                Console.WriteLine("[系统] 已开启新会话。");
+                continue;
+            }
+
+            // ═══════════ 【临时测试】Planner 测试 ═══════════
+            if (input.StartsWith("plan ", StringComparison.OrdinalIgnoreCase))
+            {
+                var planner = provider.GetRequiredService<IPlannerService>();
+                var planInput = input.Substring(5).Trim();
+
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                Console.WriteLine($"[Planner] 正在规划：{planInput}");
+                Console.ResetColor();
+
+                var plan = await planner.GeneratePlanAsync(
+                    planInput, workspace, CancellationToken.None);
+
+                if (plan is null)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("[Plan 解析失败]");
+                    Console.ResetColor();
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine($"[Plan 生成成功]");
+                    Console.ResetColor();
+
+                    Console.WriteLine($"  Summary:  {plan.Summary}");
+                    Console.WriteLine($"  Language: {plan.Language}");
+                    Console.WriteLine($"  Files:    {plan.Files.Count} 个");
+                    foreach (var f in plan.Files)
+                    {
+                        Console.WriteLine($"    - {f.Path}  ({f.Purpose})");
+                        Console.WriteLine($"      要求：{f.Requirements}");
+                    }
+                    Console.WriteLine($"  Run:      {plan.RunCommand}");
+                    Console.WriteLine($"  Expect:   {plan.ExpectedOutput}");
+                }
+
+                Console.WriteLine();
+                continue;
+            }
+            // ═══════════ 临时测试结束 ═══════════
+
+            // ═══════════ 【临时测试】Orchestrator 测试 ═══════════
+            if (input.StartsWith("orch ", StringComparison.OrdinalIgnoreCase))
+            {
+                var orchestrator = provider.GetRequiredService<IOrchestrator>();
+                var orchInput = input.Substring(5).Trim();
+
+                Console.ForegroundColor = ConsoleColor.Magenta;
+                Console.WriteLine($"[Orchestrator] 启动三阶段编排：{orchInput}");
+                Console.ResetColor();
+
+                await foreach (var evt in orchestrator.RunAsync(orchInput, workspace, CancellationToken.None))
+                {
+                    switch (evt)
+                    {
+                        case AgentEvent.PlanGenerated pg:
+                            Console.ForegroundColor = ConsoleColor.DarkYellow;
+                            Console.WriteLine($"[规划] {pg.Summary}（{pg.Language}，{pg.FilePaths.Count} 个文件）");
+                            foreach (var p in pg.FilePaths)
+                                Console.WriteLine($"  - {p}");
+                            Console.ResetColor();
+                            break;
+
+                        case AgentEvent.FileWritten fw:
+                            Console.ForegroundColor = ConsoleColor.Cyan;
+                            Console.WriteLine($"[写入] {fw.Path}（{fw.Size} 字符）");
+                            Console.ResetColor();
+                            break;
+
+                        case AgentEvent.ToolCall tc:
+                            Console.ForegroundColor = ConsoleColor.DarkCyan;
+                            Console.WriteLine($"[工具调用] {tc.Name}  {FormatToolArgs(tc.Name, tc.Args)}");
+                            Console.ResetColor();
+                            break;
+
+                        case AgentEvent.ToolResultEvent tr:
+                            Console.ForegroundColor = tr.Success ? ConsoleColor.DarkGray : ConsoleColor.Red;
+                            Console.WriteLine($"[工具结果] {tr.Name}: {Truncate(tr.Output, 500)}");
+                            Console.ResetColor();
+                            break;
+
+                        case AgentEvent.FinalAnswer fa:
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"[完成] {fa.Text}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+
+                        case AgentEvent.Error e:
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"[错误] {e.Message}");
+                            Console.ResetColor();
+                            break;
+                    }
+                }
+
+                continue;
+            }
+            // ═══════════ Orchestrator 测试结束 ═══════════
+
+            // ═══════════ stats 命令 ═══════════
+            if (input.StartsWith("stats", StringComparison.OrdinalIgnoreCase))
+            {
+                var metrics = provider.GetRequiredService<IMetricsCollector>();
+
+                var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                var subCommand = parts.Length > 1 ? parts[1].ToLowerInvariant() : "summary";
+
+                if (subCommand == "failures" || subCommand == "fail")
+                {
+                    await PrintRecentFailuresAsync(metrics);
+                }
+                else if (subCommand == "recent")
+                {
+                    await PrintRecentAsync(metrics, 10);
+                }
+                else
+                {
+                    // 默认：显示汇总 + 最近 5 条
+                    await PrintSummaryAsync(metrics);
+                    await PrintRecentAsync(metrics, 5);
+                }
+
+                continue;
+            }
+
+            // ═══════════ 【自动分发】 ═══════════
+            // 【关键】为每个任务创建独立子目录
+            var taskId = Guid.NewGuid().ToString("N")[..8];
+            var taskWorkspace = Path.Combine(workspace, $"task_{taskId}");
+            Directory.CreateDirectory(taskWorkspace);
+
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine($"[任务目录] {Path.GetFileName(taskWorkspace)}");
+            Console.ResetColor();
+
+            // 【关键修复】为每个任务创建独立 DI 容器
+            // 因为工具（WriteFileTool 等）构造时绑定 workspaceRoot
+            // 必须让每个任务的工具指向自己的 taskWorkspace
+            var taskServices = new ServiceCollection();
+            taskServices.AddAgent(options, taskWorkspace, dbPath);
+            var taskProvider = taskServices.BuildServiceProvider();
+
+            if (TaskClassifier.ShouldOrchestrate(input))
+            {
+                // 走三阶段编排
+                Console.ForegroundColor = ConsoleColor.Magenta;
+                Console.WriteLine($"[自动编排] 任务复杂，启用 Planner-Executor");
+                Console.ResetColor();
+
+                var orchestrator = taskProvider.GetRequiredService<IOrchestrator>();
+                await foreach (var evt in orchestrator.RunAsync(input, taskWorkspace, CancellationToken.None))
+                {
+                    RenderEvent(evt);
+                }
+            }
+            else
+            {
+                // 走原有 AgentLoop
+                var taskLoop = taskProvider.GetRequiredService<IAgentLoop>();
+                var request = new AgentRequest(sessionId, input, taskWorkspace);
+
+                await foreach (var evt in taskLoop.RunAsync(request, CancellationToken.None))
+                {
+                    RenderEvent(evt);
+                }
+            }
+        }
+    }
+
+    // ─────────── 辅助方法 ───────────
+
+    /// <summary>字符串截断</summary>
+    static string Truncate(string s, int max)
+        => s.Length <= max ? s : s[..max] + "...";
+
+    /// <summary>
+    /// 根据工具类型，智能格式化参数显示。
+    /// write_file 只显示 path 和 content 长度，不显示全文。
+    /// </summary>
+    static string FormatToolArgs(string toolName, System.Text.Json.JsonElement args)
+    {
+        // 【新增】剥离工具名前缀
+        // SK 会把 pluginName 拼到工具名前，形如 "agent_tools-list_dir" 或 "_-list_dir"
+        var dashIndex = toolName.IndexOf('-');
+        if (dashIndex > 0 && dashIndex < toolName.Length - 1)
+        {
+            toolName = toolName[(dashIndex + 1)..];
+        }
+
+        try
+        {
+            // write_file：显示 path + content 长度
+            if (toolName.Contains("write_file"))
+            {
+                var path = args.TryGetProperty("path", out var p) ? p.GetString() : "?";
+                var content = args.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
+                return $"path=\"{path}\", content={content.Length} 字符";
+            }
+
+            // run_command：显示 command
+            if (toolName.Contains("run_command"))
+            {
+                var cmd = args.TryGetProperty("command", out var c) ? c.GetString() : "?";
+                return $"command=\"{cmd}\"";
+            }
+
+            // list_dir / read_file：显示 path
+            if (toolName.Contains("list_dir") || toolName.Contains("read_file"))
+            {
+                var path = args.TryGetProperty("path", out var p) ? p.GetString() : ".";
+                return $"path=\"{path}\"";
+            }
+
+            // 其它工具：原样输出，超长截断
+            var raw = args.ToString();
+            return raw.Length > 150 ? raw[..150] + "..." : raw;
+        }
+        catch
+        {
+            var raw = args.ToString();
+            return raw.Length > 150 ? raw[..150] + "..." : raw;
+        }
+    }
+
+    /// <summary>
+    /// 检查所有本地 Ollama 模型的可用性。
+    /// 对 Provider == "ollama" 的端点逐个检查：
+    ///   1. Ollama 服务是否在线
+    ///   2. 模型是否已拉取
+    /// </summary>
+    static async Task CheckLocalModelsAsync(AgentOptions options)
+    {
+        Console.WriteLine("=== 本地模型健康检查 ===");
+
+        // 判断目录是否含已安装模型（manifests 非空）
+        static bool HasModels(string dir)
+            => Directory.Exists(Path.Combine(dir, "manifests")) &&
+               Directory.EnumerateFileSystemEntries(Path.Combine(dir, "manifests")).Any();
+
+        // 收集所有本地端点（Provider == "ollama"）
+        var localEndpoints = new List<(string Name, ModelEndpoint Endpoint)>
+        {
+            ("Classifier", options.Classifier),
+            ("Small",      options.Small),
+            ("AgentPro",   options.AgentPro),
+        }
+        .Where(x => x.Endpoint.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
+        .ToList();
+
+        // 没有本地端点就直接返回
+        if (localEndpoints.Count == 0)
+        {
+            Console.WriteLine("  无本地模型，跳过检查。");
+            Console.WriteLine();
+            return;
+        }
+
+        // ── 检查 1：Ollama 服务是否在线（连接失败自动启动 + 轮询重试） ──
+        var ollamaEndpoint = localEndpoints[0].Endpoint.Endpoint;
+
+        // 探活：成功返回模型集 + 状态码；HTTP 非成功（服务在跑但异常）返回 (null, code)；连接失败抛异常
+        async Task<(HashSet<string>? Models, int StatusCode)> ProbeAsync()
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            var resp = await http.GetAsync($"{ollamaEndpoint.TrimEnd('/')}/api/tags");
+            var statusCode = (int)resp.StatusCode;
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                return (null, statusCode);
+            }
+
+            // 解析返回的 JSON，提取模型名列表
+            var json = await resp.Content.ReadAsStringAsync();
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return (
+                doc.RootElement
+                    .GetProperty("models")
+                    .EnumerateArray()
+                    .Select(m => m.GetProperty("name").GetString() ?? "")
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase),
+                statusCode);
+        }
+
+        HashSet<string>? installedModels = null;
+        var serviceError = false;
+        var serviceErrorCode = 0;
+
+        try
+        {
+            var (models, code) = await ProbeAsync();
+            installedModels = models;
+            serviceError = models == null;
+            serviceErrorCode = code;
+        }
+        catch
+        {
+            // 无法连接（端口拒绝 / 超时）→ 走自动启动分支
+        }
+
+        // 仅"连接失败"触发自动启动；HTTP 非成功（服务在跑但异常）不触发
+        if (!serviceError && installedModels == null)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("  Ollama 未启动，正在尝试自动启动：ollama serve ...");
+            Console.ResetColor();
+
+            try
+            {
+                // 后台启动长驻进程：不阻塞 CLI、不随 CLI 退出被杀
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "ollama",
+                    Arguments = "serve",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+
+                // 注入模型库根：进程环境已有 OLLAMA_MODELS 则继承（不覆盖）；
+                // 默认库根（%USERPROFILE%\.ollama\models）为空时，回退到已知自定义库
+                // X:\ollama\models（实测含 10 个模型，覆盖配置所需全部本地模型）。
+                // 否则 serve 会读默认空目录，健康检查模型全 FAIL。
+                if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OLLAMA_MODELS")))
+                {
+                    var defaultModelsDir = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                        ".ollama", "models");
+                    const string knownAltModelsDir = @"X:\ollama\models";
+
+                    var modelsRoot = HasModels(defaultModelsDir) ? null
+                        : HasModels(knownAltModelsDir) ? knownAltModelsDir : null;
+
+                    if (modelsRoot != null)
+                    {
+                        psi.Environment["OLLAMA_MODELS"] = modelsRoot;
+                    }
+                }
+
+                Process.Start(psi);
+            }
+            catch (Exception startEx)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"  [FAIL] 无法自动启动 Ollama：{startEx.Message}");
+                Console.WriteLine($"    请确认 Ollama 已安装并手动执行：ollama serve");
+                Console.ResetColor();
+                Console.WriteLine();
+                return;
+            }
+
+            // 轮询等待服务就绪（每 1 秒一次，最多 15 秒；不用固定 sleep，启动耗时因机器而异）
+            for (var i = 0; i < 15 && installedModels == null; i++)
+            {
+                await Task.Delay(1000);
+
+                try
+                {
+                    var (m, _) = await ProbeAsync();
+                    installedModels = m;
+                }
+                catch
+                {
+                    // 尚未就绪，继续轮询
+                }
+            }
+        }
+
+        if (installedModels != null)
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  [OK] Ollama 在线（{installedModels.Count} 个模型已安装）");
+            Console.ResetColor();
+        }
+        else if (serviceError)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  [FAIL] Ollama 服务异常（HTTP {serviceErrorCode}）");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("  [FAIL] 无法连接 Ollama：自动启动后 15 秒内服务未就绪（localhost:11434）");
+            Console.WriteLine("    请手动执行：ollama serve");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+
+        // ── 检查 2：逐个检查模型是否已拉取 ──
+        var missing = new List<string>();
+
+        foreach (var (name, endpoint) in localEndpoints)
+        {
+            // Ollama 的模型名可能带 ":latest" 或 ":tag"，兼容处理
+            var modelName = endpoint.Model;
+            var found = installedModels.Contains(modelName)
+                || installedModels.Contains($"{modelName}:latest");
+
+            if (found)
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"  [OK] {name,-10} {modelName}");
+                Console.ResetColor();
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"  [FAIL]  {name,-10} {modelName}  (未安装)");
+                Console.ResetColor();
+                missing.Add(modelName);
+            }
+        }
+
+        // ── 汇总缺失模型，给出修复命令 ──
+        if (missing.Count > 0)
+        {
+            Console.WriteLine();
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"  以下模型缺失，请执行：");
+            foreach (var m in missing)
+            {
+                Console.WriteLine($"    ollama pull {m}");
+            }
+            Console.ResetColor();
+        }
+
+        Console.WriteLine();
+    }
+
+    /// <summary>
+    /// 统一渲染 Agent 事件。
+    /// </summary>
+    static void RenderEvent(AgentEvent evt)
+    {
+        switch (evt)
+        {
+            case AgentEvent.Routing rt:
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                var intentText = string.IsNullOrEmpty(rt.Intent) ? "" : $" [{rt.Intent}]";
+                Console.WriteLine($"[路由] {rt.Tier}{intentText} → {rt.ServiceId}");
+                Console.ResetColor();
+                break;
+
+            case AgentEvent.PlanGenerated pg:
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                Console.WriteLine($"[规划] {pg.Summary}（{pg.Language}，{pg.FilePaths.Count} 个文件）");
+                foreach (var p in pg.FilePaths)
+                    Console.WriteLine($"  - {p}");
+                Console.ResetColor();
+                break;
+
+            case AgentEvent.FileWritten fw:
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine($"[写入] {fw.Path}（{fw.Size} 字符）");
+                Console.ResetColor();
+                break;
+
+            case AgentEvent.ToolCall tc:
+                // 剥前缀：_-run_command → run_command
+                var displayName = tc.Name;
+                var di = displayName.IndexOf('-');
+                if (di > 0 && di < displayName.Length - 1)
+                    displayName = displayName[(di + 1)..];
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine($"[工具调用] {tc.Name}  {FormatToolArgs(tc.Name, tc.Args)}");
+                Console.ResetColor();
+                break;
+
+            case AgentEvent.ToolResultEvent tr:
+                // 剥前缀
+                var resultName = tr.Name;
+                var rdi = resultName.IndexOf('-');
+                if (rdi > 0 && rdi < resultName.Length - 1)
+                    resultName = resultName[(rdi + 1)..];
+                Console.ForegroundColor = tr.Success ? ConsoleColor.DarkGray : ConsoleColor.Red;
+                Console.WriteLine($"[工具结果] {tr.Name}: {Truncate(tr.Output, 300)}");
+                Console.ResetColor();
+                break;
+
+            case AgentEvent.FinalAnswer fa:
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"[完成] {fa.Text}");
+                Console.ResetColor();
+                Console.WriteLine();
+                break;
+
+            case AgentEvent.Error e:
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"[错误] {e.Message}");
+                Console.ResetColor();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// 清理旧的 run 目录。
+    /// 规则：
+    ///   1. 删除 7 天前的
+    ///   2. 剩余中超过 maxCount 个的，删最旧的
+    /// </summary>
+    static void CleanOldRuns(string runsRoot, int keepDays, int maxCount)
+    {
+        if (!Directory.Exists(runsRoot)) return;
+
+        try
+        {
+            var cutoff = DateTime.Now.AddDays(-keepDays);
+            var allDirs = new DirectoryInfo(runsRoot)
+                .GetDirectories()
+                .OrderByDescending(d => d.CreationTime)
+                .ToList();
+
+            var deletedCount = 0;
+
+            // 规则 1：删超期的
+            foreach (var dir in allDirs.Where(d => d.CreationTime < cutoff).ToList())
+            {
+                try
+                {
+                    dir.Delete(recursive: true);
+                    deletedCount++;
+                }
+                catch
+                {
+                    // 忽略：可能被占用或无权限
+                }
+            }
+
+            // 规则 2：删超数量的
+            var remaining = new DirectoryInfo(runsRoot)
+                .GetDirectories()
+                .OrderByDescending(d => d.CreationTime)
+                .Skip(maxCount)
+                .ToList();
+
+            foreach (var dir in remaining)
+            {
+                try
+                {
+                    dir.Delete(recursive: true);
+                    deletedCount++;
+                }
+                catch
+                {
+                    // 忽略
+                }
+            }
+
+            if (deletedCount > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"[清理] 删除 {deletedCount} 个旧 run 目录");
+                Console.ResetColor();
+            }
+        }
+        catch
+        {
+            // 清理失败不影响主流程
+        }
+    }
+
+    /// <summary>打印指标汇总。</summary>
+    /// <summary>打印指标汇总。</summary>
+    static async Task PrintSummaryAsync(IMetricsCollector metrics)
+    {
+        var summary = await metrics.GetSummaryAsync(null, CancellationToken.None);
+
+        Console.WriteLine();
+        Console.WriteLine("=== 任务指标汇总 ===");
+
+        if (summary.TotalCount == 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("  暂无数据。跑几个任务后再看。");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+
+        // 成功率
+        var rateColor = summary.SuccessRate >= 0.8 ? ConsoleColor.Green
+                      : summary.SuccessRate >= 0.5 ? ConsoleColor.Yellow
+                      : ConsoleColor.Red;
+
+        Console.Write("  总任务数:  ");
+        Console.WriteLine(summary.TotalCount);
+
+        Console.Write("  成功 / 失败: ");
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.Write(summary.SuccessCount);
+        Console.ResetColor();
+        Console.Write(" / ");
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.Write(summary.FailureCount);
+        Console.ResetColor();
+        Console.WriteLine();
+
+        // 【新增】可疑数量
+        if (summary.SuspiciousCount > 0)
+        {
+            Console.Write("  可疑成功:  ");
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.Write(summary.SuspiciousCount);
+            Console.ResetColor();
+            Console.WriteLine("  （触发过模板检测，可能未真正实现需求）");
+        }
+
+        Console.Write("  成功率:    ");
+        Console.ForegroundColor = rateColor;
+        Console.WriteLine($"{summary.SuccessRate:P1}");
+        Console.ResetColor();
+
+        Console.WriteLine($"  平均修复:  {summary.AvgRetryCount:F2} 次");
+        Console.WriteLine($"  平均总耗时: {summary.AvgTotalMs:F0} ms");
+
+        if (summary.AvgPlannerMs > 0 || summary.AvgExecutorMs > 0 || summary.AvgValidatorMs > 0)
+        {
+            Console.WriteLine($"    - Planner:   {summary.AvgPlannerMs:F0} ms");
+            Console.WriteLine($"    - Executor:  {summary.AvgExecutorMs:F0} ms");
+            Console.WriteLine($"    - Validator: {summary.AvgValidatorMs:F0} ms");
+        }
+
+        Console.WriteLine();
+    }
+
+    /// <summary>打印最近 N 条记录。</summary>
+    static async Task PrintRecentAsync(IMetricsCollector metrics, int take)
+    {
+        var recent = await metrics.GetRecentAsync(take, CancellationToken.None);
+
+        if (recent.Count == 0)
+        {
+            return;
+        }
+
+        Console.WriteLine($"=== 最近 {recent.Count} 条任务 ===");
+        Console.WriteLine($"  {"时间",-20} {"模式",-14} {"结果",-8} {"耗时",-10} {"输入",-40}");
+        Console.WriteLine($"  {new string('-', 20)} {new string('-', 14)} {new string('-', 8)} {new string('-', 10)} {new string('-', 40)}");
+
+        foreach (var m in recent)
+        {
+            var time = m.StartedAt.ToString("MM-dd HH:mm:ss");
+            var mode = m.Mode;
+            var result = m.Success ? "[OK]" : "[FAIL]";
+            var duration = $"{m.TotalMs} ms";
+            var input = m.UserInput.Length > 38
+                ? m.UserInput[..38] + ".."
+                : m.UserInput;
+
+            Console.Write($"  {time,-20} {mode,-14} ");
+            Console.ForegroundColor = m.Success ? ConsoleColor.Green : ConsoleColor.Red;
+            Console.Write($"{result,-8}");
+            Console.ResetColor();
+            Console.WriteLine($" {duration,-10} {input}");
+        }
+
+        Console.WriteLine();
+    }
+
+    /// <summary>打印最近失败的记录。</summary>
+    static async Task PrintRecentFailuresAsync(IMetricsCollector metrics)
+    {
+        var failures = await metrics.GetRecentFailuresAsync(10, CancellationToken.None);
+
+        Console.WriteLine();
+        if (failures.Count == 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine("=== 最近没有失败记录 ===");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine($"=== 最近 {failures.Count} 条失败 ===");
+        Console.ResetColor();
+
+        foreach (var m in failures)
+        {
+            Console.WriteLine();
+            Console.Write($"  [{m.StartedAt:MM-dd HH:mm:ss}] {m.Mode}  ");
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine(m.UserInput.Length > 60 ? m.UserInput[..60] + "..." : m.UserInput);
+            Console.ResetColor();
+
+            if (!string.IsNullOrWhiteSpace(m.ErrorSummary))
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                var err = m.ErrorSummary.Length > 200
+                    ? m.ErrorSummary[..200] + "..."
+                    : m.ErrorSummary;
+                Console.WriteLine($"    错误: {err}");
+                Console.ResetColor();
+            }
+        }
+
+        Console.WriteLine();
+    }
+}

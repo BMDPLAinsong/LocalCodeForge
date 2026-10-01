@@ -1,0 +1,75 @@
+{
+  "rules": [
+    {
+      "name": "complex_keywords",
+      "description": "复杂任务关键词，走本地 AgentPro",
+      "type": "keyword_any",
+      "keywords": [ "爬虫", "应用", "项目", "系统", "网站", "服务", "框架", "微服务", "架构", "分布式" ],
+      "target": "agent_pro",
+      "priority": 150
+    },
+    {
+      "name": "recovery",
+      "description": "上一步失败，升级到本地 AgentPro",
+      "type": "after_failure",
+      "target": "agent_pro",
+      "priority": 200
+    },
+    {
+      "name": "force_code_simple",
+      "description": "明确的代码任务，走本地",
+      "type": "regex",
+      "pattern": "(写一个|写个|生成一个|创建一个|实现一个|用.*写|用.*实现|写.*函数|写.*方法|写.*算法|写.*程序|写.*脚本|判断.*方法|判断.*函数|判断.*算法)",
+      "target": "small",
+      "priority": 100
+    },
+    {
+      "name": "force_file_ops",
+      "description": "明确的文件操作，走本地",
+      "type": "regex",
+      "pattern": "^(列出|查看|显示|打开|读取|删除|重命名|复制|移动|创建|新建|写入)",
+      "target": "small",
+      "priority": 98
+    },
+    {
+      "name": "force_code_edit",
+      "description": "修改/扩展现有代码，走本地",
+      "type": "regex",
+      "pattern": "(修改|改一下|重构|优化|修复|fix|refactor|添加|新增|再加|加入|加上|扩展|补充|增加).*(代码|函数|方法|类|文件|脚本|模块)",
+      "target": "small",
+      "priority": 95
+    },
+    {
+      "name": "complex_keywords",
+      "description": "出现架构等词，走云端",
+      "type": "keyword_any",
+      "keywords": [ "架构", "系统设计", "技术选型", "微服务", "分布式", "高并发", "完整项目", "整个项目" ],
+      "target": "large",
+      "priority": 85
+    },
+    {
+      "name": "search_keywords",
+      "description": "联网搜索类，走云端",
+      "type": "keyword_any",
+      "keywords": [ "今天", "最新", "天气", "新闻", "股价", "实时" ],
+      "target": "large",
+      "priority": 82
+    },
+    {
+      "name": "long_input",
+      "description": "超长输入，走云端",
+      "type": "length_min",
+      "min": 200,
+      "target": "large",
+      "priority": 60
+    },
+    {
+      "name": "short_input",
+      "description": "超短输入，走本地 AgentPro（兼容多轮上下文）",
+      "type": "length_max",
+      "max": 8,
+      "target": "agent_pro",
+      "priority": 55
+    }
+  ]
+}
