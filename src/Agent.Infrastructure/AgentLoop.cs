@@ -12,6 +12,7 @@ using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Microsoft.Extensions.Logging;
 using Agent.Core.Abstractions;
 using Agent.Core.Models;
+using Agent.Infrastructure.Memory;
 using Agent.Infrastructure.Project;
 using Agent.Infrastructure.Routing;
 using Agent.Infrastructure.Quality;
@@ -29,6 +30,7 @@ public sealed class AgentLoop : IAgentLoop
     private readonly AgentOptions _options;
     private readonly IModelRouter _router;
     private readonly ProjectContextStore _projectContextStore;   // ← P2：工程上下文缓存
+    private readonly AgentMemoryStore _memoryStore;               // ← P3：模型级记忆
     private readonly ILogger<AgentLoop> _logger;
 
     private string? _lastToolName;
@@ -41,6 +43,7 @@ public sealed class AgentLoop : IAgentLoop
         AgentOptions options,
         IModelRouter router,
         ProjectContextStore projectContextStore,   // ← P2：工程上下文缓存
+        AgentMemoryStore memoryStore,              // ← P3：模型级记忆
         ILogger<AgentLoop> logger)
     {
         _kernel = kernel;
@@ -49,6 +52,7 @@ public sealed class AgentLoop : IAgentLoop
         _options = options;
         _router = router;
         _projectContextStore = projectContextStore;
+        _memoryStore = memoryStore;
         _logger = logger;
     }
 
@@ -79,6 +83,32 @@ public sealed class AgentLoop : IAgentLoop
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "工程上下文加载失败，降级为无工程块。");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 模型级记忆检索（工程感知 P3）：按任务输入关键词匹配 AgentMemoryStore，
+    /// 命中则注入"历史记忆"块——任务间真正"记住"模型此前发现/决策。
+    /// </summary>
+    private string? LoadRelevantMemory(string input)
+    {
+        try
+        {
+            var hits = _memoryStore.Search(input, limit: 3);
+            if (hits.Count == 0)
+                return null;
+
+            _logger.LogInformation("[记忆] 历史记忆命中 {Count} 条，已注入上下文。", hits.Count);
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("## 历史记忆（跨任务，来自此前任务）");
+            foreach (var h in hits)
+                sb.AppendLine($"- [{h.Kind}/{h.Topic}] {h.Content}");
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "历史记忆检索失败，降级为无记忆块。");
             return null;
         }
     }
@@ -144,9 +174,13 @@ public sealed class AgentLoop : IAgentLoop
         //   文件被修改（签名变化）自动重新扫描，保证正确性。）
         var projectBlock = _options.ProjectRoot is null ? null : LoadProjectCompactBlock(_options.ProjectRoot);
 
+        // 工程感知 P3：模型级记忆——按任务输入检索历史记忆（模型 previous 发现/决策），注入供参考
+        var memoryBlock = LoadRelevantMemory(request.Input);
+
         var userMsg = request.Input;
         if (envConstraint is not null) userMsg += "\n\n" + envConstraint;
         if (projectBlock is not null) userMsg += "\n\n" + projectBlock;
+        if (memoryBlock is not null) userMsg += "\n\n" + memoryBlock;
         chatHistory.AddUserMessage(userMsg);
         await _store.AppendTurnAsync(request.SessionId, new ChatTurn("user", request.Input), ct);
 

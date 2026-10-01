@@ -8,6 +8,7 @@
 using Agent.Core.Abstractions;
 using Agent.Core.Models;
 using Agent.Infrastructure.Metrics;
+using Agent.Infrastructure.Memory;
 using Agent.Infrastructure.Orchestration;
 using Agent.Infrastructure.Project;
 using Agent.Infrastructure.Quality;
@@ -91,6 +92,7 @@ public static class DependencyInjection
         services.AddSingleton<IAgentTool>(_ => new EditFileTool(workspaceRoot, projectRoot, projectWriteEnabled));    // ← 新增
         services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot, projectRoot, projectWriteEnabled));   // ← 新增
         services.AddSingleton<IAgentTool>(_ => new RunCommandTool(workspaceRoot, projectRoot));
+        services.AddSingleton<IAgentTool>(_ => new RememberTool(_.GetRequiredService<AgentMemoryStore>()));   // ← P3：模型级记忆
 
         // ─────────── 【关键】工具注册表（依赖上面的 IAgentTool 集合） ───────────
         services.AddSingleton<IToolRegistry>(sp =>
@@ -121,6 +123,16 @@ public static class DependencyInjection
                 Path.GetDirectoryName(dbPath) ?? ".",
                 "project_context.db");
             return new ProjectContextStore(ctxDbPath);
+        });
+
+        // ─────────── 模型级记忆（工程感知 P3） ───────────
+        services.AddSingleton<AgentMemoryStore>(_ =>
+        {
+            // agent_memory.db 放在和 sessions.db 同目录
+            var memDbPath = Path.Combine(
+                Path.GetDirectoryName(dbPath) ?? ".",
+                "agent_memory.db");
+            return new AgentMemoryStore(memDbPath);
         });
 
         // ─────────── 会话存储 ───────────

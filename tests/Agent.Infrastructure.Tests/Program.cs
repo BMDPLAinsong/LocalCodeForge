@@ -305,6 +305,49 @@ Console.WriteLine("== 工程感知 P2：跨任务记忆（§14-3w P2） ==");
         store.TryGet(projP2, sig2.FileCount, sig2.DirCount, sig2.TotalBytes, sig2.MaxMtimeTicks) is not null);
 }
 
+Console.WriteLine("== 工程感知 P3：模型级记忆（§14-3w P3） ==");
+{
+    var memDb = Path.Combine(TestTmp, "agent_memory_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db");
+    var mem = new Agent.Infrastructure.Memory.AgentMemoryStore(memDb);
+
+    // Tokenize
+    var toks = Agent.Infrastructure.Memory.AgentMemoryStore.Tokenize("读取 src/Agent.Core/Models/AgentOptions.cs 中 ProjectRoot 属性附近的内容");
+    Check("Tokenize 含中文串", toks.Any(x => x.Contains("读取")) || toks.Any(x => x.Contains("属性附近")) || toks.Any(x => x.Contains("内容")));
+    Check("Tokenize 含文件 token", toks.Any(x => x.Contains("AgentOptions")));
+    Check("Tokenize 含路径 token", toks.Any(x => x.Contains("Agent.Core")));
+
+    // Add + Search 命中
+    mem.Add("model", "ProjectRoot 属性含义", "ProjectRoot 为 null 时沙箱模式，非 null 时工程模式。", "task_demo");
+    mem.Add("model", "构建命令", "构建用 dotnet build LocalAiWorkbench.slnx，入口 src/Agent.Cli。");
+    mem.Add("model", "天气 API", "wttr.in 无需 API Key，format=j1 返回 JSON。");
+    var hits = mem.Search("读取 ProjectRoot 属性的代码", limit: 2);
+    Check("Search 命中 ProjectRoot 记忆", hits.Any(h => h.Topic.Contains("ProjectRoot")));
+    Check("Search 不命中无关记忆（limit 截断）", hits.All(h => !h.Topic.Contains("天气")));
+
+    // 命中计数
+    var h1 = hits.FirstOrDefault(h => h.Topic.Contains("ProjectRoot"));
+    Check("命中计数 > 0", h1 is not null && h1.HitCount >= 1);
+
+    // 二次检索命中数递增
+    mem.Search("ProjectRoot 属性的含义", limit: 2);
+    var hits2 = mem.Search("ProjectRoot 属性的含义", limit: 2);
+    var h2 = hits2.FirstOrDefault(h => h.Topic.Contains("ProjectRoot"));
+    Check("命中计数递增", h2 is not null && h2.HitCount >= 2);
+
+    // 空/无效写入被忽略
+    mem.Add("model", "   ", "内容");
+    mem.Add("model", "主题", "  ");
+    Check("空 topic/content 不写入", mem.Search("主题").Count == 0);
+
+    // RememberTool 校验
+    var tool = new Agent.Infrastructure.Tools.RememberTool(mem);
+    var rEmpty = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse("{\"topic\":\"x\",\"content\":\" \"}").RootElement, CancellationToken.None).Result;
+    Check("RememberTool 空 content 拒绝", rEmpty.Contains("不能为空"));
+    var rOk = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse("{\"topic\":\"记忆工具验证\",\"content\":\"remember 工具写入正常\"}").RootElement, CancellationToken.None).Result;
+    Check("RememberTool 写入成功", rOk.Contains("已记住"));
+    Check("RememberTool 写入可检索", mem.Search("记忆工具验证").Any(h => h.Topic.Contains("记忆工具验证")));
+}
+
 Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==");
 {
     var baseTmp = Path.Combine(TestTmp, "tests_p1rc");
