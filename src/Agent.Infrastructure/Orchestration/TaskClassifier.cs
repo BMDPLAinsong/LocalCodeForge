@@ -107,6 +107,16 @@ public static class TaskClassifier
                 return true;
         }
 
+        // 5.5 文件引用检查——任务明确引用具体文件（含扩展名路径）时走 AgentLoop
+        // （工程模式任务天然带长路径：修改/读取具体文件由 read_file/edit_file 工具处理，
+        //   不需要 orchestrator 的多文件规划；避免长度规则把带路径任务误拉入编排卡死）
+        if (System.Text.RegularExpressions.Regex.IsMatch(input,
+            @"[\w\-\.]+\.[a-z]{1,5}(\s|$|/|\\)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        {
+            return false;
+        }
+
         // 6. 长输入（> 60 字）——倾向于编排
         // （40 太宽：带路径的读取类任务自然超 40 字，误入编排卡死；
         //   查询词已在前面拦截读取/查看/检查类，长阈值只兜底真正复杂的长描述）

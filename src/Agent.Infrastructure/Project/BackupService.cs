@@ -20,7 +20,7 @@ public static class BackupService
         try
         {
             var rel = Path.GetRelativePath(projectRoot, fullPath);
-            var runRoot = Path.GetDirectoryName(workspaceRoot)!; // runs/<run>
+            var runRoot = GetRunRoot(workspaceRoot); // runs/<run>（任务目录→其父）
             var stamp = DateTime.Now.ToString("HHmmss");
             var dest = Path.Combine(runRoot, ".backup", stamp, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
@@ -37,7 +37,7 @@ public static class BackupService
     public static List<(string Stamp, string Rel, string Full)> ListBackups(string workspaceRoot)
     {
         var result = new List<(string, string, string)>();
-        var runRoot = Path.GetDirectoryName(workspaceRoot)!;
+        var runRoot = GetRunRoot(workspaceRoot);
         var dir = Path.Combine(runRoot, ".backup");
         if (!Directory.Exists(dir)) return result;
 
@@ -55,9 +55,22 @@ public static class BackupService
     /// <summary>
     /// 回滚：将相对路径（相对工程根）的最近一次备份恢复到工程根。返回恢复路径；无备份返回 null。
     /// </summary>
+    /// <summary>
+    /// 归一化备份根：写工具传入任务目录（runs/&lt;run&gt;/task_xxx），CLI rollback 传入 run 目录（runs/&lt;run&gt;），
+    /// 两者差一层。统一取 run 目录：workspaceRoot 名以 task_ 开头取父目录，否则视为 run 目录本身。
+    /// （§14-3w P1 端到端修复：此前备份落 runs/&lt;run&gt;/.backup，rollback 却找 runs/.backup，差一层找不到。）
+    /// </summary>
+    private static string GetRunRoot(string workspaceRoot)
+    {
+        var name = Path.GetFileName(workspaceRoot);
+        return name.StartsWith("task_", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetDirectoryName(workspaceRoot)!
+            : workspaceRoot;
+    }
+
     public static string? Rollback(string workspaceRoot, string rel, string projectRoot)
     {
-        var runRoot = Path.GetDirectoryName(workspaceRoot)!;
+        var runRoot = GetRunRoot(workspaceRoot);
         var dir = Path.Combine(runRoot, ".backup");
         if (!Directory.Exists(dir)) return null;
 

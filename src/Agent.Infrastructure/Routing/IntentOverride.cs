@@ -1,0 +1,63 @@
+// ============================================================
+// IntentOverride.cs
+// L2 意图分类的确定性覆盖层（§14-3w 补充）。
+// 0.8B 意图分类器不稳：把"在 xx.cs 添加一行注释"判成 SimpleQA，
+// 导致模型进入问答模式、不调用工具、空响应卡死。
+// 用确定性规则兜底——SimpleQA 但含操作动词 + 文件/代码语境 → 强制 CodeGenerate。
+// 属工程化/数据结构性手段，不依赖提示词。
+// ============================================================
+
+using System;
+
+namespace Agent.Infrastructure.Routing;
+
+/// <summary>
+/// L2 意图分类结果的确定性修正。
+/// </summary>
+public static class IntentOverride
+{
+    /// <summary>操作动词。命中表示用户要"做事"而非"问答"。</summary>
+    private static readonly string[] OperationVerbs =
+    {
+        "添加", "新增", "修改", "写入", "创建", "删除", "编辑",
+        "改一下", "加上", "加入", "增加", "重构", "修复",
+        "插入", "替换", "移动", "复制", "改名", "更新"
+    };
+
+    /// <summary>文件/代码语境。命中表示操作对象是文件或代码。</summary>
+    private static readonly string[] CodeContext =
+    {
+        ".cs", ".py", ".js", ".ts", ".json", ".csproj", ".sln",
+        ".slnx", ".md", ".txt", ".xml", ".yaml", ".yml",
+        "代码", "文件", "注释", "属性", "函数", "方法", "类",
+        "脚本", "模块", "配置", "接口", "实现"
+    };
+
+    /// <summary>
+    /// 覆盖意图分类结果：
+    /// SimpleQA + 操作动词 + 文件/代码语境 → CodeGenerate（改代码类任务）。
+    /// 非 SimpleQA 结果原样返回。
+    /// </summary>
+    public static IntentType Apply(IntentType intent, string input)
+    {
+        if (intent != IntentType.SimpleQA)
+            return intent;
+
+        if (string.IsNullOrWhiteSpace(input))
+            return intent;
+
+        var hasVerb = ContainsAny(input, OperationVerbs);
+        var hasContext = ContainsAny(input, CodeContext);
+        return hasVerb && hasContext ? IntentType.CodeGenerate : intent;
+    }
+
+    private static bool ContainsAny(string input, string[] keywords)
+    {
+        foreach (var kw in keywords)
+        {
+            if (input.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+}

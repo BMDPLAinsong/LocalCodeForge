@@ -251,6 +251,24 @@ Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
     // 7) 工程可写：路径穿越（越出工程根）→ 越界拒绝
     Check("工程可写路径穿越 → 越界拒绝",
         W(wRw, "../../../../Windows/test.txt", "x").Contains("越界"));
+
+    // 8) 备份根归一化（§14-3w）：任务目录（task_*）写入备份 → run 目录（CLI rollback）能找到并恢复
+    //    模拟 CLI：run 目录 ws2，任务目录 ws2/task_xxx，EditFileTool 用任务目录，rollback 用 run 目录
+    var ws2 = Path.Combine(TestTmp, "run_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6]);
+    var taskWs = Path.Combine(ws2, "task_smoke");
+    Directory.CreateDirectory(taskWs);
+    Directory.CreateDirectory(Path.Combine(proj, "src"));
+    File.WriteAllText(Path.Combine(proj, "src", "B.cs"), "// v1");
+    var eTask = new Agent.Infrastructure.Tools.EditFileTool(taskWs, proj, true);
+    E(eTask, "src/B.cs", "// v1", "// v2");
+    Check("任务目录工具改工程文件 → 内容已变",
+        File.ReadAllText(Path.Combine(proj, "src", "B.cs")).Contains("v2"));
+    var backupsRun = Agent.Infrastructure.Project.BackupService.ListBackups(ws2);
+    Check("任务目录备份 → run 目录能列出（备份根归一化）",
+        backupsRun.Any(b => b.Rel.Replace('\\', '/').EndsWith("src/B.cs")));
+    var restoredB = Agent.Infrastructure.Project.BackupService.Rollback(ws2, "src/B.cs", proj);
+    Check("run 目录 rollback → 恢复任务目录产生的备份",
+        restoredB is not null && File.ReadAllText(Path.Combine(proj, "src", "B.cs")).Contains("v1"));
 }
 
 
@@ -300,6 +318,30 @@ Console.WriteLine("== TaskClassifier 编排判定（§14-3w） ==");
         !Orc("用 C# 写一个判断奇数偶数函数"));
     Check("订单明细项目 → 编排（系统/服务词）",
         Orc("用 C# 写一个订单明细项目，分 Order 模型、OrderItem 模型、OrderService 服务、Program 入口，多文件组织"));
+    Check("添加注释到具体文件（长路径）→ 走 Agent（文件引用排除）",
+        !Orc("在 src/Agent.Core/Models/AgentOptions.cs 中 ProjectRoot 属性定义之后添加一行注释：// P1 冒烟验证标记"));
+    Check("带路径修改任务 → 走 Agent（文件引用排除）",
+        !Orc("修改 src/Agent.Core/Models/AgentOptions.cs 中 ProjectWriteEnabled 属性的注释说明"));
+    Check("含多文件词的工程任务 → 仍编排（强多文件词优先于文件引用）",
+        Orc("做一个多文件的 C# 项目：src/Agent.Core/Models/AgentOptions.cs 和 Program.cs"));
+}
+
+Console.WriteLine("== IntentOverride 意图覆盖（§14-3w） ==");
+{
+    Agent.Infrastructure.Routing.IntentType Ov(Agent.Infrastructure.Routing.IntentType i, string s) => Agent.Infrastructure.Routing.IntentOverride.Apply(i, s);
+
+    Check("SimpleQA + 添加注释到文件 → CodeGenerate",
+        Ov(Agent.Infrastructure.Routing.IntentType.SimpleQA, "在 src/Agent.Core/Models/AgentOptions.cs 中 ProjectRoot 属性定义之后添加一行注释：// 标记") == Agent.Infrastructure.Routing.IntentType.CodeGenerate);
+    Check("SimpleQA + 修改代码 → CodeGenerate",
+        Ov(Agent.Infrastructure.Routing.IntentType.SimpleQA, "修改 AgentOptions.cs 中 ProjectWriteEnabled 属性的注释说明") == Agent.Infrastructure.Routing.IntentType.CodeGenerate);
+    Check("SimpleQA + 纯问答 → 保持 SimpleQA",
+        Ov(Agent.Infrastructure.Routing.IntentType.SimpleQA, "今天天气怎么样") == Agent.Infrastructure.Routing.IntentType.SimpleQA);
+    Check("SimpleQA + 操作词但无文件语境 → 保持 SimpleQA",
+        Ov(Agent.Infrastructure.Routing.IntentType.SimpleQA, "帮我添加一些建议") == Agent.Infrastructure.Routing.IntentType.SimpleQA);
+    Check("非 SimpleQA 原样返回",
+        Ov(Agent.Infrastructure.Routing.IntentType.FileProcess, "读取 src/Agent.Core/Models/AgentOptions.cs") == Agent.Infrastructure.Routing.IntentType.FileProcess);
+    Check("空输入保持原样",
+        Ov(Agent.Infrastructure.Routing.IntentType.SimpleQA, "   ") == Agent.Infrastructure.Routing.IntentType.SimpleQA);
 }
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

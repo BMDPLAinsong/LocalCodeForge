@@ -68,6 +68,14 @@ public sealed class ModelRouter : IModelRouter
         try
         {
             intent = await _classifier.ClassifyAsync(context.UserInput, ct);
+
+            // 【确定性覆盖】0.8B 分类器不稳：SimpleQA + 操作动词 + 文件/代码语境 → CodeGenerate
+            // （避免"在 xx.cs 添加一行注释"被判 SimpleQA 进入问答模式、不调工具卡死）
+            var overridden = IntentOverride.Apply(intent, context.UserInput);
+            if (overridden != intent)
+                _logger.LogInformation("[L2-意图] 覆盖 {From} → {To}（操作动词+文件语境）", intent, overridden);
+            intent = overridden;
+
             _logger.LogInformation("[L2-意图] {Intent}", intent);
         }
         catch (Exception ex)

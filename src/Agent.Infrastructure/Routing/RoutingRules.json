@@ -46,7 +46,7 @@
       "name": "force_code_edit",
       "description": "修改/扩展现有代码，走本地",
       "type": "regex",
-      "pattern": "(修改|改一下|重构|优化|修复|fix|refactor|添加|新增|再加|加入|加上|扩展|补充|增加).*(代码|函数|方法|类|文件|脚本|模块)",
+      "pattern": "(修改|改一下|重构|优化|修复|fix|refactor|添加|新增|再加|加入|加上|扩展|补充|增加).*(代码|函数|方法|类|文件|脚本|模块|注释|配置)",
       "target": "small",
       "priority": 95
     },
