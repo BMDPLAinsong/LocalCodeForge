@@ -33,6 +33,9 @@ public sealed class AgentLoop : IAgentLoop
     private readonly AgentMemoryStore _memoryStore;               // ← P3：模型级记忆
     private readonly ILogger<AgentLoop> _logger;
 
+    // 方案 2 循环熔断：本轮已成功执行的工具签名（工具名+首参+输出指纹）
+    private readonly HashSet<string> _toolSignatures = new();
+
     private string? _lastToolName;
     private bool _lastStepFailed;
 
@@ -321,15 +324,32 @@ public sealed class AgentLoop : IAgentLoop
 
                     yield return new AgentEvent.ToolCall(cleanName, argsJson);
 
-                    var (output, ok) = await ExecuteToolAsync(cleanName, argsJson, ct);
+                    var (output, ok) = await ExecuteToolAsync(cleanName, argsJson, request.Input, ct);
                     yield return new AgentEvent.ToolResultEvent(cleanName, output, ok);
 
                     _lastToolName = cleanName;
                     _lastStepFailed = !ok && !output.StartsWith("错误：工具");
+
                     // 上下文治理：仅 run_command 截断（大段 stdout/stderr 膨胀源）；
                     // read_file 保留完整——edit_file 精确匹配依赖完整文件内容，截断会破坏修复
                     var condensed = cleanName == "run_command" ? SummarizeOutput(output) : output;
                     _lastFailureSummary = condensed;
+
+                    // ── 方案 2：循环熔断（工具序列重复且无新进展 → 以工具验证收尾）──
+                    // 写任务 large 常"写了又写/验了又验"不交付最终回答（达最大步数失败）。
+                    // 同一工具+首参+输出指纹第二次成功执行 = 重复无进展 → 强制收尾。
+                    if (ok)
+                    {
+                        var sig = BuildCycleSignature(cleanName, argsJson, condensed);
+                        if (!_toolSignatures.Add(sig))
+                        {
+                            _logger.LogWarning("[熔断] 工具序列重复无进展（{Sig}），以工具验证结果收尾。", sig);
+                            var closeText = $"任务完成：工具已验证（{cleanName}）。最后验证：{TruncateForAnswer(condensed)}";
+                            await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", closeText), ct);
+                            yield return new AgentEvent.FinalAnswer(closeText);
+                            yield break;
+                        }
+                    }
 
                     var frc = new FunctionResultContent(
                         functionName: cleanName,
@@ -396,7 +416,7 @@ public sealed class AgentLoop : IAgentLoop
                 {
                     yield return new AgentEvent.ToolCall(pc.Name, pc.Args);
 
-                    var (output, ok) = await ExecuteToolAsync(pc.Name, pc.Args, ct);
+                    var (output, ok) = await ExecuteToolAsync(pc.Name, pc.Args, request.Input, ct);
                     yield return new AgentEvent.ToolResultEvent(pc.Name, output, ok);
 
                     _lastToolName = pc.Name;
@@ -572,8 +592,9 @@ public sealed class AgentLoop : IAgentLoop
 
                         chatHistory.Add(new ChatMessageContent(AuthorRole.Assistant, text));
                         chatHistory.AddUserMessage(
-                            "你当前交付的代码只输出了 Hello World，**没有实现用户要求的功能**。\n" +
-                            "请重新实现：用 edit_file 或 write_file 把真正的功能加进去，然后重新 run_command 验证。\n" +
+                            "你当前交付的代码只输出了 Hello World，没有实现用户要求的功能。\n" +
+                            "如果任务实际已完成（功能已实现并通过验证），请直接给出最终总结收尾；\n" +
+                            "否则请重新实现：用 edit_file 或 write_file 把真正的功能加进去，然后重新 run_command 验证。\n" +
                             "用户需求：" + request.Input);
                         continue;
                     }
@@ -697,7 +718,7 @@ public sealed class AgentLoop : IAgentLoop
     }
 
     /// <summary>执行一个工具，返回（输出, 是否成功）。</summary>
-    private async Task<(string output, bool ok)> ExecuteToolAsync(string name, JsonElement args, CancellationToken ct)
+    private async Task<(string output, bool ok)> ExecuteToolAsync(string name, JsonElement args, string taskInput, CancellationToken ct)
     {
         try
         {
@@ -835,8 +856,9 @@ public sealed class AgentLoop : IAgentLoop
                         }
                     }
 
-                    // 4.2 模板输出检测
-                    if (OutputVerifier.IsTemplateOutput(stdoutLines))
+                    // 4.2 模板输出检测（方案 1 降级：任务要求的内容不判模板）
+                    if (OutputVerifier.IsTemplateOutput(stdoutLines) &&
+                        !OutputVerifier.IsTaskExpectedOutput(taskInput, stdoutLines))
                     {
                         return (output + "\n[检测] 输出疑似模板内容。", false);
                     }
@@ -1026,6 +1048,37 @@ public sealed class AgentLoop : IAgentLoop
     }
 
     /// <summary>空响应升级链：small → agent_pro → large；已在最高层返回 null。</summary>
+    /// <summary>
+    /// 循环熔断签名：工具名 + 首参 + 输出指纹（前 60 字符）。
+    /// 同签名二次成功执行 = 重复无进展。
+    /// </summary>
+    public static string BuildCycleSignature(string toolName, JsonElement args, string output)
+    {
+        var firstArg = "";
+        try
+        {
+            if (args.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in args.EnumerateObject())
+                {
+                    firstArg = prop.Value.ValueKind == JsonValueKind.String
+                        ? prop.Value.GetString() ?? ""
+                        : prop.Value.ToString();
+                    break;
+                }
+            }
+        }
+        catch
+        {
+        }
+        var fp = output is null ? "" : (output.Length > 60 ? output[..60] : output);
+        return $"{toolName}:{firstArg}:{fp}";
+    }
+
+    /// <summary>最终回答截断。</summary>
+    private static string TruncateForAnswer(string s)
+        => s is null ? "" : (s.Length > 200 ? s[..200] : s);
+
     /// <summary>
     /// 空响应升级（路由层修复 B）：4B（small/agent_pro）空响应高发且升级无意义——
     /// 空响应是生成能力问题，直接跳到 large；large 层空响应返回 null 走原层重试。

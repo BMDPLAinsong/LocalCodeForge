@@ -635,8 +635,9 @@ public sealed class Orchestrator : IOrchestrator
                     return (false, result + "\n[检测] 输出疑似占位符。");
                 }
 
-                // 4.2 模板输出检测（单行 + 模板类词）
-                if (OutputVerifier.IsTemplateOutput(stdoutLines))
+                // 4.2 模板输出检测（方案 1 降级：计划预期内容不判模板）
+                if (OutputVerifier.IsTemplateOutput(stdoutLines) &&
+                    !OutputVerifier.IsTaskExpectedOutput(expectedOutput, stdoutLines))
                 {
                     return (false, result + "\n[检测] 输出疑似模板内容。");
                 }

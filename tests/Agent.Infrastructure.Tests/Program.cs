@@ -423,6 +423,52 @@ Console.WriteLine("== 路由层修复 A+B：写任务直连 + 空响应跳层（
     Check("写任务判定稳定", Agent.Infrastructure.Routing.IntentOverride.IsWriteTask("创建一个 hello.txt 文件，内容为 hello"));
 }
 
+Console.WriteLine("== 模板检测降级：任务要求输出豁免（方案 1） ==");
+{
+    // 任务要求内容为 hello，type 输出 hello → 合法（豁免模板判定）
+    Check("任务要求的 hello 输出 → 豁免",
+        Agent.Infrastructure.Quality.OutputVerifier.IsTaskExpectedOutput(
+            "创建一个 hello.txt 文件，内容为 hello", new List<string> { "hello" }));
+    // 单行非任务要求 → 不豁免（Hello World 糊弄仍拦截）
+    Check("任务无关的 hello → 不豁免",
+        !Agent.Infrastructure.Quality.OutputVerifier.IsTaskExpectedOutput(
+            "用 C# 写一个加法计算器", new List<string> { "hello" }));
+    // 多行输出：IsTemplateOutput 仅单行判定（多行不判模板），数据行无需走豁免
+    Check("多行输出不判模板（单行限制）",
+        !Agent.Infrastructure.Quality.OutputVerifier.IsTemplateOutput(
+            new List<string> { "订单总价：300.00", "数量：2" }));
+    // 输入包含整行 → 豁免（单行任务要求内容）
+    Check("输入含输出行 → 豁免",
+        Agent.Infrastructure.Quality.OutputVerifier.IsTaskExpectedOutput(
+            "内容为 hello", new List<string> { "hello" }));
+    // 空预期 → 不豁免
+    Check("空预期 → 不豁免",
+        !Agent.Infrastructure.Quality.OutputVerifier.IsTaskExpectedOutput("", new List<string> { "hello" }));
+    // 大小写不敏感
+    Check("大小写不敏感 → 豁免",
+        Agent.Infrastructure.Quality.OutputVerifier.IsTaskExpectedOutput(
+            "Hello World 示例", new List<string> { "hello world" }));
+    // 方案 2：循环熔断签名——同工具+首参+输出指纹
+    {
+        var argsHello = System.Text.Json.JsonDocument.Parse("{\"path\":\"hello.txt\",\"content\":\"hello\"}").RootElement;
+        var s1 = Agent.Infrastructure.AgentLoop.BuildCycleSignature("write_file", argsHello, "已写入 hello.txt，共 5 字符。");
+        var s2 = Agent.Infrastructure.AgentLoop.BuildCycleSignature("write_file", argsHello, "已写入 hello.txt，共 5 字符。");
+        var s3 = Agent.Infrastructure.AgentLoop.BuildCycleSignature("write_file", argsHello, "已写入 hello.txt，共 6 字符。");
+        Check("同工具同参同输出 → 同签名", s1 == s2);
+        Check("输出变化 → 签名变化", s1 != s3);
+        var argsRun = System.Text.Json.JsonDocument.Parse("{\"command\":\"type hello.txt\"}").RootElement;
+        var r1 = Agent.Infrastructure.AgentLoop.BuildCycleSignature("run_command", argsRun, "hello");
+        Check("不同工具/参数 → 不同签名", r1 != s1);
+    }
+
+    // 组合实证：IsTemplateOutput && !IsTaskExpectedOutput 不应判模板
+    var comboIsTemplate = Agent.Infrastructure.Quality.OutputVerifier.IsTemplateOutput(new List<string> { "hello" });
+    var comboIsExpected = Agent.Infrastructure.Quality.OutputVerifier.IsTaskExpectedOutput(
+        "创建一个 hello.txt 文件，内容为 hello", new List<string> { "hello" });
+    Console.WriteLine($"  [组合实证] IsTemplateOutput={comboIsTemplate} IsTaskExpectedOutput={comboIsExpected} → 判模板={(comboIsTemplate && !comboIsExpected)}");
+    Check("组合条件不判模板", !(comboIsTemplate && !comboIsExpected));
+}
+
 Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==");
 {
     var baseTmp = Path.Combine(TestTmp, "tests_p1rc");

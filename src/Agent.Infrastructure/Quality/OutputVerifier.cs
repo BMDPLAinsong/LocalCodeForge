@@ -17,7 +17,7 @@ namespace Agent.Infrastructure.Quality;
 /// <summary>
 /// 输出判定公共验证器（双路径共用，判定逻辑单一来源）。
 /// </summary>
-internal static class OutputVerifier
+public static class OutputVerifier
 {
     // ──────────────────────────────────────────────────────────
     // 检查 0.5：外部凭据失败（硬失败，无容错）
@@ -271,5 +271,26 @@ internal static class OutputVerifier
             line.StartsWith("运行成功") ||
             line.StartsWith("example") ||
             line.StartsWith("示例");
+    }
+
+    /// <summary>
+    /// 模板检测降级（方案 1）：stdout 单行内容被任务输入/预期输出明确包含时，
+    /// 视为任务要求的合法输出（如任务要求"内容为 hello"，type 输出 hello 是正确结果），
+    /// 豁免 IsTemplateOutput 判定——避免"创建 hello 文件"被误判模板而死循环。
+    /// 任务无关的 Hello World 糊弄（如任务要算加法、输出 hello）仍会被模板检测拦截。
+    /// </summary>
+    public static bool IsTaskExpectedOutput(string expectedText, IReadOnlyList<string> stdoutLines)
+    {
+        if (string.IsNullOrWhiteSpace(expectedText))
+            return false;
+
+        var expectedNorm = expectedText.ToLowerInvariant();
+        foreach (var line in stdoutLines)
+        {
+            var trimmed = line.Trim().ToLowerInvariant();
+            if (trimmed.Length > 0 && expectedNorm.Contains(trimmed))
+                return true;
+        }
+        return false;
     }
 }
