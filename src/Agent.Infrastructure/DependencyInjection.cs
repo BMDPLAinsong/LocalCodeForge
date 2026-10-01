@@ -89,7 +89,7 @@ public static class DependencyInjection
         services.AddSingleton<IAgentTool>(_ => new WriteFileTool(workspaceRoot, projectRoot, projectWriteEnabled));
         services.AddSingleton<IAgentTool>(_ => new EditFileTool(workspaceRoot, projectRoot, projectWriteEnabled));    // ← 新增
         services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot, projectRoot, projectWriteEnabled));   // ← 新增
-        services.AddSingleton<IAgentTool>(_ => new RunCommandTool(workspaceRoot));
+        services.AddSingleton<IAgentTool>(_ => new RunCommandTool(workspaceRoot, projectRoot));
 
         // ─────────── 【关键】工具注册表（依赖上面的 IAgentTool 集合） ───────────
         services.AddSingleton<IToolRegistry>(sp =>

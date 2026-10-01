@@ -248,5 +248,33 @@ Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
         W(wRw, "../../../../Windows/test.txt", "x").Contains("越界"));
 }
 
+
+Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==");
+{
+    var baseTmp = Path.Combine(Path.GetTempPath(), "lawcheck", "tests_p1rc");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    var ws = Path.Combine(baseTmp, "task");
+    var proj = Path.Combine(baseTmp, "proj");
+    Directory.CreateDirectory(ws);
+    Directory.CreateDirectory(proj);
+
+    string Rc(string? projectRoot, string command)
+    {
+        var tool = new Agent.Infrastructure.Tools.RunCommandTool(ws, projectRoot);
+        var args = JsonSerializer.Deserialize<JsonElement>($"{{\"command\":{JsonSerializer.Serialize(command)}}}");
+        return tool.InvokeAsync(args, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    Check("工程模式：盘符路径越界（C:\\Windows）→ 拒绝",
+        Rc(proj, "dir C:\\Windows").Contains("越界"));
+    Check("工程模式：路径穿越（..）→ 拒绝",
+        Rc(proj, "type ..\\..\\Windows\\win.ini").Contains("越界"));
+    Check("工程模式：工程根内绝对路径 → 放行",
+        !Rc(proj, "dir \"" + proj.Replace("\\", "/") + "\"").Contains("越界"));
+    Check("工程模式：相对路径命令 → 放行",
+        !Rc(proj, "python main.py").Contains("越界"));
+    Check("沙箱模式：不启用边界检查（现状保持）",
+        !Rc(null, "dir C:\\Windows").Contains("越界"));
+}
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

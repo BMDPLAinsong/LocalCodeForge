@@ -13,6 +13,8 @@ public sealed class RunCommandTool : AgentToolBase
 {
     // 工作区根目录，命令在此目录下执行
     private readonly string _workspaceRoot;
+    // 工程根（可选，工程感知 §14-3t）：非 null 时启用路径边界检查
+    private readonly string? _projectRoot;
 
     // 允许执行的命令白名单，按命令的第一个 token 匹配
     private static readonly HashSet<string> AllowedCommands = new(StringComparer.OrdinalIgnoreCase)
@@ -27,10 +29,11 @@ public sealed class RunCommandTool : AgentToolBase
     private const int TimeoutSeconds = 30;
 
     /// <summary>构造函数。</summary>
-    public RunCommandTool(string workspaceRoot)
+    public RunCommandTool(string workspaceRoot, string? projectRoot = null)
     {
         // 规范化
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
     }
 
     /// <summary>工具名。</summary>
@@ -59,6 +62,18 @@ public sealed class RunCommandTool : AgentToolBase
 
         // 【新增】命令规范化
         command = NormalizeCommand(command);
+
+        // 【工程感知 §14-3t】工程模式路径边界：命令中的显式盘符路径必须落在
+        // 任务根 或 工程根 内；.. 穿越直接拒绝（检查在 NormalizePython 之前，
+        // 工具注入的系统 python 绝对路径不参与检查）。沙箱模式（projectRoot=null）保持现状。
+        if (_projectRoot is not null)
+        {
+            var boundaryError = CheckPathBoundary(command, _workspaceRoot, _projectRoot);
+            if (boundaryError is not null)
+            {
+                return boundaryError;
+            }
+        }
 
         // 提取第一个 token 作为命令名
         var firstToken = command.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)[0];
@@ -218,6 +233,42 @@ public sealed class RunCommandTool : AgentToolBase
             {
                 _systemPython = candidate;
                 return _systemPython;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 工程模式路径边界检查（§14-3t）。
+    /// 1) 命令含 .. 路径片段（..\ 或 ../）→ 拒绝（防穿越逃逸）。
+    /// 2) 显式盘符绝对路径（含引号包裹的空格路径）→ Path.GetFullPath 解析，
+    ///    必须位于任务工作区 或 工程根 内，否则拒绝。
+    /// 返回 null 表示放行，否则返回错误消息（带非 0 退出码）。
+    /// </summary>
+    private static string? CheckPathBoundary(string command, string workspaceRoot, string projectRoot)
+    {
+        // 1) 路径穿越
+        if (System.Text.RegularExpressions.Regex.IsMatch(command, @"\.\.(\\|/)"))
+        {
+            return "错误：路径越界（命令含路径穿越 ..），拒绝执行。\n退出码：126";
+        }
+
+        // 2) 显式盘符绝对路径：引号包裹的完整路径 或 未加引号的盘符路径
+        var pathMatches = System.Text.RegularExpressions.Regex.Matches(
+            command, "\"[A-Za-z]:[^\"]*\"|\\b[A-Za-z]:\\\\[^ \t\n\r]*");
+        foreach (System.Text.RegularExpressions.Match m in pathMatches)
+        {
+            var token = m.Value.Trim('"');
+            string full;
+            try { full = Path.GetFullPath(token); }
+            catch { continue; }
+
+            var insideWorkspace = full.StartsWith(workspaceRoot, StringComparison.OrdinalIgnoreCase);
+            var insideProject = full.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase);
+            if (!insideWorkspace && !insideProject)
+            {
+                return $"错误：路径越界（命令引用工作区/工程根之外的路径）：{token}\n退出码：126";
             }
         }
 
