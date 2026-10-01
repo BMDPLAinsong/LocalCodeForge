@@ -281,5 +281,25 @@ Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==
     Check("沙箱模式：不启用边界检查（现状保持）",
         !Rc(null, "dir C:\\Windows").Contains("越界"));
 }
+
+Console.WriteLine("== TaskClassifier 编排判定（§14-3w） ==");
+{
+    bool Orc(string input) => Agent.Infrastructure.Orchestration.TaskClassifier.ShouldOrchestrate(input);
+
+    Check("读取工程文件长描述 → 走 Agent（不编排）",
+        !Orc("读取 src/Agent.Core/Models/AgentOptions.cs 中 ProjectRoot 属性附近的内容"));
+    Check("构建验证任务 → 走 Agent（不编排）",
+        !Orc("运行 dotnet build 检查工程能否构建"));
+    Check("多文件项目 → 编排（强多文件词）",
+        Orc("帮我做一个 C# 项目，包含订单模型、订单服务、主程序，多文件组织"));
+    Check("学生管理系统多文件 → 编排（回归）",
+        Orc("设计一个学生管理系统，使用C#多文件组织"));
+    Check("天气方法 → 走 Agent（回归）",
+        !Orc("写一个获取天气信息的方法"));
+    Check("奇数偶数函数 → 走 Agent（回归）",
+        !Orc("用 C# 写一个判断奇数偶数函数"));
+    Check("订单明细项目 → 编排（系统/服务词）",
+        Orc("用 C# 写一个订单明细项目，分 Order 模型、OrderItem 模型、OrderService 服务、Program 入口，多文件组织"));
+}
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

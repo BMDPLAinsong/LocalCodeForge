@@ -26,7 +26,7 @@ public static class TaskClassifier
     /// </summary>
     private static readonly string[] ProjectKeywords =
     {
-        "项目", "工程", "系统", "应用", "服务", "框架",
+        "项目", "系统", "应用", "服务", "框架",
         "爬虫", "网站", "后台", "平台", "整套"
     };
 
@@ -49,7 +49,8 @@ public static class TaskClassifier
     {
     "看看", "查看", "看一下", "列出", "显示",
     "读一下", "读一下", "分析一下", "解释一下",
-    "这个函数", "这个文件", "这段代码", "这个项目"
+    "这个函数", "这个文件", "这段代码", "这个项目",
+    "读取", "检查"
 };
 
     /// <summary>
@@ -106,8 +107,10 @@ public static class TaskClassifier
                 return true;
         }
 
-        // 6. 长输入（> 40 字）——倾向于编排
-        if (input.Length > 40)
+        // 6. 长输入（> 60 字）——倾向于编排
+        // （40 太宽：带路径的读取类任务自然超 40 字，误入编排卡死；
+        //   查询词已在前面拦截读取/查看/检查类，长阈值只兜底真正复杂的长描述）
+        if (input.Length > 60)
             return true;
 
         // 7. 默认走 AgentLoop
