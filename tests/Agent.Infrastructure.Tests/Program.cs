@@ -10,6 +10,11 @@
 using System.Reflection;
 using System.Text.Json;
 
+// 测试临时根：X 盘（§14-3v，用户要求不在 C 盘 Temp 跑测试）。
+// workspace 已 gitignore；按进程隔离防并发互删。
+var TestTmp = Path.Combine(@"X:\.NET AI\LocalAiWorkbench\workspace\test-tmp", Environment.ProcessId.ToString());
+Directory.CreateDirectory(TestTmp);
+
 var asm = Assembly.Load("Agent.Infrastructure");
 var t = asm.GetType("Agent.Infrastructure.Quality.OutputVerifier", throwOnError: true)!;
 
@@ -110,7 +115,7 @@ Check("多行正常输出不判模板", !(bool)Invoke(mTmpl, new object?[] { (IR
 
 Console.WriteLine("== WriteFileTool 写入时 timeout 静态检查（§14-3h） ==");
 {
-    var ws = Path.Combine(Path.GetTempPath(), "lawcheck", "tests_timeout");
+    var ws = Path.Combine(TestTmp, "tests_timeout");
     if (Directory.Exists(ws)) Directory.Delete(ws, true);
     Directory.CreateDirectory(ws);
     var tool = new Agent.Infrastructure.Tools.WriteFileTool(ws);
@@ -138,7 +143,7 @@ Console.WriteLine("== WriteFileTool 写入时 timeout 静态检查（§14-3h） 
 
 Console.WriteLine("== PyCodeGuard 交互拒绝 + edit_file 后处理（§14-3j） ==");
 {
-    var ws = Path.Combine(Path.GetTempPath(), "lawcheck", "tests_guard");
+    var ws = Path.Combine(TestTmp, "tests_guard");
     if (Directory.Exists(ws)) Directory.Delete(ws, true);
     Directory.CreateDirectory(ws);
     var wTool = new Agent.Infrastructure.Tools.WriteFileTool(ws);
@@ -178,7 +183,7 @@ Console.WriteLine("== PyCodeGuard 交互拒绝 + edit_file 后处理（§14-3j�
 
 Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
 {
-    var baseTmp = Path.Combine(Path.GetTempPath(), "lawcheck", "tests_p1");
+    var baseTmp = Path.Combine(TestTmp, "tests_p1");
     if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
     var ws = Path.Combine(baseTmp, "task");      // 任务工作区（沙箱根）
     var proj = Path.Combine(baseTmp, "proj");    // 工程根
@@ -251,7 +256,7 @@ Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
 
 Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==");
 {
-    var baseTmp = Path.Combine(Path.GetTempPath(), "lawcheck", "tests_p1rc");
+    var baseTmp = Path.Combine(TestTmp, "tests_p1rc");
     if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
     var ws = Path.Combine(baseTmp, "task");
     var proj = Path.Combine(baseTmp, "proj");
