@@ -349,6 +349,10 @@ public sealed class AgentLoop : IAgentLoop
                         RoutingTier.LargeModel,
                         $"空响应升级（{decision.ServiceId} → {promoted}）");
                     firstDecision = decision; // 下一轮循环复用升级后的决策
+                    // 【修复 10-01】空响应升级是主动决策：重置 _lastStepFailed，
+                    // 避免下一轮被 recovery 规则（recovery 只该响应工具失败）重路由回原层，
+                    // 导致升级白升（16:56 天气任务实证：升级 large 后 recovery→agent_pro→空响应→终止）。
+                    _lastStepFailed = false;
                 }
                 else
                 {
