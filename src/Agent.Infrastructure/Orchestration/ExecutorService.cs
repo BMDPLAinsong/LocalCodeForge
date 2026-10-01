@@ -330,10 +330,15 @@ class Program
         IReadOnlyDictionary<string, string> allFiles,
         CancellationToken ct)
     {
-        var chat = _kernel.GetRequiredService<IChatCompletionService>(RoutingDecision.Small);
-        var history = new ChatHistory();
+        // 【A：修复输出相同升级链（§14-3l）】修复模型（small）能力不足时可能无效输出原文——
+        // 检测"输出与原文相同"→ 升级 small→agent_pro→large 重试，每层至多一次（模型能力层兜底，非提示词）。
+        var fixTiers = new[] { RoutingDecision.Small, RoutingDecision.AgentPro, RoutingDecision.Large };
+        for (var tierIndex = 0; tierIndex < fixTiers.Length; tierIndex++)
+        {
+            var chat = _kernel.GetRequiredService<IChatCompletionService>(fixTiers[tierIndex]);
+            var history = new ChatHistory();
 
-        // ─────────── System Prompt ───────────
+            // ─────────── System Prompt ───────────
         history.AddSystemMessage("""
             你是代码修复器。根据错误信息，修复给出的代码文件。
 
@@ -516,19 +521,41 @@ class Program
             }
         };
 
-        var raw = await CallAsync(chat, history, settings, ct);
-        var cleaned = CleanOutput(raw);
+            var raw = await CallAsync(chat, history, settings, ct);
+            var cleaned = CleanOutput(raw);
 
-        // ─────────── 后处理 ───────────
-        cleaned = EnsureArgparseDefaults(cleaned, plan.Language, spec.Path);
-        cleaned = EnsureCsprojTargetFramework(cleaned, spec.Path);
+            // ─────────── 后处理 ───────────
+            cleaned = EnsureArgparseDefaults(cleaned, plan.Language, spec.Path);
+            cleaned = EnsureCsprojTargetFramework(cleaned, spec.Path);
 
-        return cleaned;
+            // 输出与原文相同 → 升级模型重试（每层至多一次）
+            if (!IsSameOutput(cleaned, currentContent))
+                return cleaned;
+
+            var nextTier = tierIndex + 1 < fixTiers.Length ? fixTiers[tierIndex + 1] : null;
+            if (nextTier is null)
+            {
+                _logger.LogWarning(
+                    "修复输出与原文相同（已到最高层 {Tier}），返回原样，由调用方判修复失败。",
+                    fixTiers[tierIndex]);
+                return cleaned;
+            }
+
+            _logger.LogWarning(
+                "修复输出与原文相同（{Tier}），升级到 {Next} 重试。",
+                fixTiers[tierIndex], nextTier);
+        }
+
+        return currentContent; // 不可达（循环内必 return）
     }
 
     // ============================================================
     // 后处理
     // ============================================================
+
+    /// <summary>修复输出与原文相同判定（Trim 后精确比较，忽略末尾空白差异）。</summary>
+    private static bool IsSameOutput(string cleaned, string original) =>
+        string.Equals(cleaned.Trim(), original.Trim(), StringComparison.Ordinal);
 
     /// <summary>后处理：给 Python argparse 的 add_argument 强制加 default 值。</summary>
     private static string EnsureArgparseDefaults(string code, string language, string filePath)

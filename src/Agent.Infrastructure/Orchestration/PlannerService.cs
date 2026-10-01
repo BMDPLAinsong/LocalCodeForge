@@ -328,12 +328,15 @@ C# 项目的文件组织原则：
             }
         }
 
-        // 第 2 次重试
+        // 第 2 次重试：升级到 Large（§14-3l 规划失败升级链——同模型再试收益有限，
+        // 4B 生成的 JSON 截断（requirements 过长）往往再试仍截断，大模型一次机会）
         _logger.LogWarning(
-            "Plan 再次解析失败，重试第 2/2 次。原始输出前 500 字符：{Raw}",
+            "Plan 再次解析失败，升级到 Large 重试。原始输出前 500 字符：{Raw}",
             (raw2 ?? string.Empty).Length > 500
                 ? (raw2 ?? string.Empty)[..500]
                 : (raw2 ?? string.Empty));
+
+        chat = _kernel.GetRequiredService<IChatCompletionService>(RoutingDecision.Large);
 
         if (!string.IsNullOrWhiteSpace(raw2))
         {
