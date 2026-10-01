@@ -343,5 +343,25 @@ Console.WriteLine("== IntentOverride 意图覆盖（§14-3w） ==");
     Check("空输入保持原样",
         Ov(Agent.Infrastructure.Routing.IntentType.SimpleQA, "   ") == Agent.Infrastructure.Routing.IntentType.SimpleQA);
 }
+
+Console.WriteLine("== IntentOverride 写任务判定（§14-3w 直连 large） ==");
+{
+    bool Wr(string s) => Agent.Infrastructure.Routing.IntentOverride.IsWriteTask(s);
+
+    Check("添加注释到文件 → 写任务",
+        Wr("在 src/Agent.Core/Models/AgentOptions.cs 中 ProjectRoot 属性定义之后添加一行注释：// 标记"));
+    Check("修改代码 → 写任务",
+        Wr("修改 AgentOptions.cs 中 ProjectWriteEnabled 属性的注释说明"));
+    Check("创建新文件 → 写任务",
+        Wr("创建一个 Program.cs 文件"));
+    Check("纯问答 → 非写任务",
+        !Wr("今天天气怎么样"));
+    Check("读取文件 → 非写任务（读保持 small）",
+        !Wr("读取 src/Agent.Core/Models/AgentOptions.cs"));
+    Check("列出目录 → 非写任务",
+        !Wr("列出 src/Agent.Core/Models 目录"));
+    Check("操作词但无文件语境 → 非写任务",
+        !Wr("帮我添加一些建议"));
+}
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

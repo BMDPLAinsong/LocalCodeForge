@@ -43,12 +43,19 @@ public static class IntentOverride
         if (intent != IntentType.SimpleQA)
             return intent;
 
-        if (string.IsNullOrWhiteSpace(input))
-            return intent;
+        return IsWriteTask(input) ? IntentType.CodeGenerate : intent;
+    }
 
-        var hasVerb = ContainsAny(input, OperationVerbs);
-        var hasContext = ContainsAny(input, CodeContext);
-        return hasVerb && hasContext ? IntentType.CodeGenerate : intent;
+    /// <summary>
+    /// 是否为写操作任务：操作动词 + 文件/代码语境同时命中。
+    /// （工程可写模式路由直连 large 的依据；读/查询类不含写动词，不受影响。）
+    /// </summary>
+    public static bool IsWriteTask(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return false;
+
+        return ContainsAny(input, OperationVerbs) && ContainsAny(input, CodeContext);
     }
 
     private static bool ContainsAny(string input, string[] keywords)
