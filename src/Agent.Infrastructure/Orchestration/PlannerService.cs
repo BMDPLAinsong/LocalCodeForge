@@ -510,12 +510,16 @@ C# 项目的文件组织原则：
             ["plt."] = "print('*' * n)  // ",
             ["numpy"] = "list/dict",
             ["pandas"] = "csv 模块",
-            ["requests"] = "urllib.request",
             ["flask"] = "标准库",
             ["django"] = "标准库",
             ["pillow"] = "标准库",
             ["PIL"] = "标准库",
         };
+
+        // ─────────── 2.5 外部数据任务判定（P1-4）───────────
+        // 外部任务（天气/汇率/行情等）需用 requests 访问 HTTP 服务（约束块/参考实现同款），
+        // 不替换；本地任务仍强制 urllib.request（防乱用第三方库）。
+        var isExternal = ExternalTaskDetector.Detect(userInput) is not null;
 
         // ─────────── 3. 逐文件处理 ───────────
         var sanitizedFiles = new List<FileSpec>();
@@ -535,8 +539,8 @@ C# 项目的文件组织原则：
                 }
             }
 
-            // 【新增】如果 requirements 里还有 "requests"，强制改成 urllib.request
-            if (req.Contains("requests", StringComparison.OrdinalIgnoreCase))
+            // 【P1-4】requirements 残留 requests：仅本地任务强制改 urllib.request；外部任务保留
+            if (!isExternal && req.Contains("requests", StringComparison.OrdinalIgnoreCase))
             {
                 req = Regex.Replace(req, @"\brequests\b", "urllib.request", RegexOptions.IgnoreCase);
             }

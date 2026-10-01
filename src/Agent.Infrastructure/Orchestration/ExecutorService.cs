@@ -82,8 +82,9 @@ C# 代码绝对不能使用以下命名空间（会编译失败）：
 - System.Net.Http（HTTP 请求）
 
 Python 代码同理：
-- 不用 requests、numpy、pandas、flask、django、matplotlib
+- 不用 numpy、pandas、flask、django、matplotlib（非标准库）
 - 只用标准库：json、os、sys、re、math、sqlite3、urllib、http.client、csv、argparse
+- 若任务附带了[环境约束]（外部数据任务），可按约束使用 requests 访问外部 HTTP 服务（必须带 timeout）
 
 ## 【C# 类型规则】
 - 字面量类型必须匹配变量声明：
