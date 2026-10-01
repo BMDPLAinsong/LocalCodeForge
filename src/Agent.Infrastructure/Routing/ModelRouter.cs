@@ -53,18 +53,18 @@ public sealed class ModelRouter : IModelRouter
                 "查询类任务，走本地 Small");
         }
 
-        // ---------- L0.5：工程可写 + 写任务 → 直连 large ----------
-        // （§14-3w 优化）本地 small/agent_pro（4B）对"读+改"两步工具链生成不稳、
+        // ---------- L0.5：写任务 → 直连 large ----------
+        // （路由层修复 A）本地 small/agent_pro（4B）对"读+改"两步工具链生成不稳、
         // 常空响应（每层空等 10-20 分钟再升级），最终仍需 large 执行。
-        // 写操作任务（操作动词+文件/代码语境）在工程可写模式下直接走 large：
+        // 写操作任务（操作动词+文件/代码语境）全模式直连 large（不再要求工程可写）：
         // 一次成功率更高，总时间反而更短。读任务保持 small（已验证能完成）。
-        if (_options.ProjectWriteEnabled && IntentOverride.IsWriteTask(context.UserInput))
+        if (IntentOverride.IsWriteTask(context.UserInput))
         {
-            _logger.LogInformation("[L0.5-工程写] 工程可写 + 写任务 → 直连 large");
+            _logger.LogInformation("[L0.5-写任务] 写任务 → 直连 large");
             return new RoutingDecision(
                 RoutingDecision.Large,
                 RoutingTier.Rule,
-                "工程可写写任务，直连 large（跳过 4B 空响应）");
+                "写任务直连 large（跳过 4B 空响应）");
         }
 
         // ---------- Layer 1：规则拦截 ----------

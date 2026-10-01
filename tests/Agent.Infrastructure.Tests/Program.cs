@@ -412,6 +412,17 @@ Console.WriteLine("== 工程感知 P3 补足：失败教训注入（少走弯路
     Check("仅参考无警示组", built3 is not null && !built3.Contains("历史失败教训") && built3.Contains("历史参考"));
 }
 
+Console.WriteLine("== 路由层修复 A+B：写任务直连 + 空响应跳层（§14-3w） ==");
+{
+    // B：空响应升级跳层——4B 空响应直接跳 large
+    Check("small 空响应 → 直达 large", Agent.Infrastructure.AgentLoop.PromoteService("small") == "large");
+    Check("agent_pro 空响应 → 直达 large", Agent.Infrastructure.AgentLoop.PromoteService("agent_pro") == "large");
+    Check("large 空响应 → null（原层重试）", Agent.Infrastructure.AgentLoop.PromoteService("large") is null);
+
+    // A：写任务判定（IsWriteTask 覆盖已测）——工程可写条件移除由 ModelRouter 运行时日志验证
+    Check("写任务判定稳定", Agent.Infrastructure.Routing.IntentOverride.IsWriteTask("创建一个 hello.txt 文件，内容为 hello"));
+}
+
 Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==");
 {
     var baseTmp = Path.Combine(TestTmp, "tests_p1rc");

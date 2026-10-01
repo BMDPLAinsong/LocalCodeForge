@@ -1026,10 +1026,14 @@ public sealed class AgentLoop : IAgentLoop
     }
 
     /// <summary>空响应升级链：small → agent_pro → large；已在最高层返回 null。</summary>
-    private static string? PromoteService(string serviceId) =>
+    /// <summary>
+    /// 空响应升级（路由层修复 B）：4B（small/agent_pro）空响应高发且升级无意义——
+    /// 空响应是生成能力问题，直接跳到 large；large 层空响应返回 null 走原层重试。
+    /// </summary>
+    public static string? PromoteService(string serviceId) =>
         serviceId switch
         {
-            RoutingDecision.Small => RoutingDecision.AgentPro,
+            RoutingDecision.Small => RoutingDecision.Large,
             RoutingDecision.AgentPro => RoutingDecision.Large,
             _ => null
         };
