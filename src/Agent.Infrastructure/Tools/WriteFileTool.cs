@@ -4,19 +4,25 @@ using System.Text.Json;
 // 命名空间
 namespace Agent.Infrastructure.Tools;
 
+using Agent.Infrastructure.Project;
+
 /// <summary>
 /// 写入文件的工具。用于创建新文件。
 /// </summary>
 public sealed class WriteFileTool : AgentToolBase
 {
-    // 工作区根目录
+    // 工作区根目录 + 工程根（可选）+ 工程可写授权（P1）
     private readonly string _workspaceRoot;
+    private readonly string? _projectRoot;
+    private readonly bool _projectWriteEnabled;
 
     /// <summary>构造函数。</summary>
-    public WriteFileTool(string workspaceRoot)
+    public WriteFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false)
     {
         // 规范化
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
+        _projectWriteEnabled = projectWriteEnabled;
     }
 
     /// <summary>工具名。</summary>
@@ -24,7 +30,7 @@ public sealed class WriteFileTool : AgentToolBase
 
     /// <summary>工具描述。</summary>
     public override string Description =>
-        "在工作区内创建或覆盖一个文本文件。path 相对于工作区根目录。";
+        "创建或覆盖一个文本文件。path 相对于工程根（若 use --write 工程可写），否则相对于任务工作区根目录。";
 
     /// <summary>参数 Schema。</summary>
     protected override string SchemaJson => """
@@ -99,12 +105,24 @@ public sealed class WriteFileTool : AgentToolBase
             }
         }
 
-        // 完整路径
-        var fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, relative));
+        // 解析基准：工程可写时以工程根为基准（工程感知 P1），否则任务目录
+        var baseRoot = _projectWriteEnabled && _projectRoot is not null ? _projectRoot : _workspaceRoot;
 
-        // 越界检查
-        if (!fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase))
+        // 完整路径
+        var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
+
+        // 越界检查：任务工作区 或（工程可写时）工程根 内
+        var insideWorkspace = fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase);
+        var insideProject = _projectWriteEnabled && _projectRoot is not null
+            && fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase);
+        if (!insideWorkspace && !insideProject)
             return "错误：路径越界。";
+
+        // 工程感知 P1：写工程根内已存在文件前自动备份（可 rollback 恢复）
+        if (insideProject && File.Exists(fullPath))
+        {
+            BackupService.Backup(_workspaceRoot, fullPath, _projectRoot!);
+        }
 
         // 确保父目录存在
         var parent = Path.GetDirectoryName(fullPath);
@@ -117,7 +135,7 @@ public sealed class WriteFileTool : AgentToolBase
         await File.WriteAllTextAsync(fullPath, content, ct);
 
         // 【关键】如果写的是 .cs 文件，且同目录下没有 .csproj，自动补一个
-        var autoCreatedCsproj = TryAutoCreateCsproj(fullPath);
+        var autoCreatedCsproj = TryAutoCreateCsproj(fullPath, baseRoot);
 
         // 返回确认信息
         var msg = $"已写入 {relative}，共 {content.Length} 字符。";
@@ -221,7 +239,7 @@ public sealed class WriteFileTool : AgentToolBase
     /// <summary>
     /// 如果写的是 .cs 文件，且同目录下没有 .csproj，自动创建一个。
     /// </summary>
-    private string? TryAutoCreateCsproj(string fullCsPath)
+    private string? TryAutoCreateCsproj(string fullCsPath, string baseRoot)
     {
         // 只在 .cs 文件时触发
         if (!fullCsPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
@@ -267,8 +285,8 @@ public sealed class WriteFileTool : AgentToolBase
         // 写文件
         File.WriteAllText(csprojPath, csprojContent);
 
-        // 返回相对路径
-        var relative = Path.GetRelativePath(_workspaceRoot, csprojPath);
+        // 返回相对路径（基于实际写入根）
+        var relative = Path.GetRelativePath(baseRoot, csprojPath);
         return relative;
     }
 

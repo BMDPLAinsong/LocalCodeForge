@@ -175,5 +175,78 @@ Console.WriteLine("== PyCodeGuard 交互拒绝 + edit_file 后处理（§14-3j�
         R("e.py").Contains(", timeout=8"));
 }
 
+
+Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
+{
+    var baseTmp = Path.Combine(Path.GetTempPath(), "lawcheck", "tests_p1");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    var ws = Path.Combine(baseTmp, "task");      // 任务工作区（沙箱根）
+    var proj = Path.Combine(baseTmp, "proj");    // 工程根
+    Directory.CreateDirectory(ws);
+    Directory.CreateDirectory(Path.Combine(proj, "src"));
+    File.WriteAllText(Path.Combine(proj, "src", "A.cs"), "// original\n");
+
+    string CallTool(Agent.Infrastructure.Tools.AgentToolBase tool, string json)
+    {
+        var args = JsonSerializer.Deserialize<JsonElement>(json);
+        return tool.InvokeAsync(args, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    // 1) 沙箱模式（无工程）：写任务根外的路径 → 越界拒绝
+    var wSandbox = new Agent.Infrastructure.Tools.WriteFileTool(ws);
+    Check("沙箱模式写任务根外 → 越界拒绝",
+        W(wSandbox, "../proj/src/X.cs", "x").Contains("越界"));
+
+    // 2) 工程只读（--write 未开）：写基准仍为任务目录 → 不触碰工程根
+    var wRo = new Agent.Infrastructure.Tools.WriteFileTool(ws, proj, false);
+    W(wRo, "src/X.cs", "x");
+    Check("工程只读 → 写入任务目录而非工程",
+        File.Exists(Path.Combine(ws, "src", "X.cs")) && !File.Exists(Path.Combine(proj, "src", "X.cs")));
+
+    // 3) 工程可写：写工程根新文件 → 成功
+    var wRw = new Agent.Infrastructure.Tools.WriteFileTool(ws, proj, true);
+    string W(Agent.Infrastructure.Tools.AgentToolBase tool, string path, string content)
+    {
+        var json = $"{{\"path\":\"{path}\",\"content\":{JsonSerializer.Serialize(content)}}}";
+        return CallTool(tool, json);
+    }
+    string E(Agent.Infrastructure.Tools.AgentToolBase tool, string path, string oldStr, string newStr)
+    {
+        var json = $"{{\"path\":\"{path}\",\"old_string\":{JsonSerializer.Serialize(oldStr)},\"new_string\":{JsonSerializer.Serialize(newStr)}}}";
+        return CallTool(tool, json);
+    }
+    Check("工程可写创建文件 → 成功",
+        W(wRw, "src/B.cs", "// new\n").Contains("已写入")
+        && File.Exists(Path.Combine(proj, "src", "B.cs")));
+
+    // 4) 工程可写：覆盖已存在文件 → 自动备份 + 内容变更
+    W(wRw, "src/A.cs", "// v2\n");
+    var backupsA = Agent.Infrastructure.Project.BackupService.ListBackups(ws);
+    Check("覆盖工程文件 → 备份生成",
+        backupsA.Any(b => b.Rel.Replace('\\', '/').EndsWith("src/A.cs")));
+    Check("覆盖工程文件 → 内容已变",
+        File.ReadAllText(Path.Combine(proj, "src", "A.cs")).Contains("v2"));
+
+    // 5) edit_file 工程可写：改工程文件 → 备份 + 内容变更
+    var eRw = new Agent.Infrastructure.Tools.EditFileTool(ws, proj, true);
+    E(eRw, "src/A.cs", "// v2", "// v3");
+    Check("edit 工程文件 → 内容已变",
+        File.ReadAllText(Path.Combine(proj, "src", "A.cs")).Contains("v3"));
+    Check("edit 工程文件 → 备份已生成",
+        Agent.Infrastructure.Project.BackupService.ListBackups(ws)
+            .Any(b => b.Rel.Replace('\\', '/').EndsWith("src/A.cs")));
+
+    // 6) rollback → 恢复最近一次备份（v3 改前备份了 v2）
+    var restored = Agent.Infrastructure.Project.BackupService.Rollback(ws, "src/A.cs", proj);
+    var contentAfterRollback = File.ReadAllText(Path.Combine(proj, "src", "A.cs"));
+    Check("rollback 恢复 → 返回恢复路径", restored is not null);
+    Check("rollback 恢复 → 内容回到修改前",
+        contentAfterRollback.Contains("v2") && !contentAfterRollback.Contains("v3"));
+
+    // 7) 工程可写：路径穿越（越出工程根）→ 越界拒绝
+    Check("工程可写路径穿越 → 越界拒绝",
+        W(wRw, "../../../../Windows/test.txt", "x").Contains("越界"));
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

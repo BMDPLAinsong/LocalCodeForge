@@ -116,9 +116,16 @@ public sealed class AgentOptions
     /// 工程根目录（工程感知 P0，可选）。
     /// null = 沙箱模式（默认，工具只读写任务目录）；
     /// 非 null = 工程模式（只读工具可感知工程文件，任务上下文注入工程数据块）。
-    /// 写工具始终锁定任务目录（可写修改为 P1 阶段）。
     /// </summary>
     public string? ProjectRoot { get; set; }
+
+    /// <summary>
+    /// 工程可写授权（工程感知 P1）。
+    /// false = 工程模式只读（写工具仍锁任务目录）；
+    /// true = 写工具可在工程根内创建/修改文件（改动前自动备份，CLI rollback 可恢复）。
+    /// 仅 ProjectRoot 非 null 时生效；开启方式：use --write &lt;路径&gt; 或 --project &lt;路径&gt; --write。
+    /// </summary>
+    public bool ProjectWriteEnabled { get; set; }
 }
 
 /// <summary>

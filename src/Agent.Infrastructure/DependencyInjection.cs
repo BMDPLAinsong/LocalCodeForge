@@ -38,7 +38,8 @@ public static class DependencyInjection
         AgentOptions options,
         string workspaceRoot,
         string dbPath,
-        string? projectRoot = null)
+        string? projectRoot = null,
+        bool projectWriteEnabled = false)
     {
         // ─────────── 配置 ───────────
         services.AddSingleton(options);
@@ -82,12 +83,12 @@ public static class DependencyInjection
         });
 
         // ─────────── 【关键】工具（少了这几行就报这个错） ───────────
-        // 工程感知 P0：只读工具可感知工程根（双根），写工具仍锁任务目录
+        // 工程感知 P0/P1：只读工具可感知工程根（双根）；写工具在 --write 授权下可写工程根（改前备份）
         services.AddSingleton<IAgentTool>(_ => new ListDirTool(workspaceRoot, projectRoot));
         services.AddSingleton<IAgentTool>(_ => new ReadFileTool(workspaceRoot, projectRoot));
-        services.AddSingleton<IAgentTool>(_ => new WriteFileTool(workspaceRoot));
-        services.AddSingleton<IAgentTool>(_ => new EditFileTool(workspaceRoot));    // ← 新增
-        services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot));   // ← 新增
+        services.AddSingleton<IAgentTool>(_ => new WriteFileTool(workspaceRoot, projectRoot, projectWriteEnabled));
+        services.AddSingleton<IAgentTool>(_ => new EditFileTool(workspaceRoot, projectRoot, projectWriteEnabled));    // ← 新增
+        services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot, projectRoot, projectWriteEnabled));   // ← 新增
         services.AddSingleton<IAgentTool>(_ => new RunCommandTool(workspaceRoot));
 
         // ─────────── 【关键】工具注册表（依赖上面的 IAgentTool 集合） ───────────

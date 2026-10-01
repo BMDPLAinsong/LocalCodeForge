@@ -7,6 +7,8 @@ using System.Text.Json;
 
 namespace Agent.Infrastructure.Tools;
 
+using Agent.Infrastructure.Project;
+
 /// <summary>
 /// 局部编辑文件的工具。
 /// 通过 old_string / new_string 精确替换文件片段。
@@ -14,11 +16,15 @@ namespace Agent.Infrastructure.Tools;
 public sealed class EditFileTool : AgentToolBase
 {
     private readonly string _workspaceRoot;
+    private readonly string? _projectRoot;
+    private readonly bool _projectWriteEnabled;
 
     /// <summary>构造函数。</summary>
-    public EditFileTool(string workspaceRoot)
+    public EditFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
+        _projectWriteEnabled = projectWriteEnabled;
     }
 
     /// <summary>工具名。</summary>
@@ -28,6 +34,7 @@ public sealed class EditFileTool : AgentToolBase
     public override string Description =>
         "在已有文件中精确替换一段文本。old_string 必须在文件中唯一出现（否则会失败）。" +
         "适合修改单个函数/类/配置项，比 write_file 整体重写更安全。" +
+        "path 相对于工程根（若 use --write 工程可写），否则相对于任务工作区根目录。" +
         "使用前必须先用 read_file 查看文件当前内容。";
 
     /// <summary>参数 Schema。</summary>
@@ -65,11 +72,22 @@ public sealed class EditFileTool : AgentToolBase
             return "错误：old_string 不能为空。如需向空文件写入内容，请用 write_file。";
         }
 
-        var fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, relative));
+        // 解析基准：工程可写时以工程根为基准（工程感知 P1），否则任务目录
+        var baseRoot = _projectWriteEnabled && _projectRoot is not null ? _projectRoot : _workspaceRoot;
+        var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
 
-        // 越界检查
-        if (!fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase))
+        // 越界检查：任务工作区 或（工程可写时）工程根 内
+        var insideWorkspace = fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase);
+        var insideProject = _projectWriteEnabled && _projectRoot is not null
+            && fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase);
+        if (!insideWorkspace && !insideProject)
             return "错误：路径越界。";
+
+        // 工程感知 P1：修改工程根内文件前自动备份（可 rollback 恢复）
+        if (insideProject)
+        {
+            BackupService.Backup(_workspaceRoot, fullPath, _projectRoot!);
+        }
 
         // 文件不存在
         if (!File.Exists(fullPath))

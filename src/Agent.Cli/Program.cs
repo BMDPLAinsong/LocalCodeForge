@@ -95,8 +95,8 @@ internal class Program
         var dbPath = Path.Combine(baseDir, "workspace", "sessions.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
 
-        // ─────────── 工程感知 P0：--project 启动参数 ───────────
-        // 设置工程根 → 只读工具可感知工程文件 + 任务上下文注入工程数据块
+        // ─────────── 工程感知 P0/P1：--project 启动参数 + --write 授权 ───────────
+        // 设置工程根 → 只读工具可感知工程文件 + 任务上下文注入工程数据块；--write 开启工程可写（改前备份）
         for (var i = 0; i < args.Length - 1; i++)
         {
             if (args[i].Equals("--project", StringComparison.OrdinalIgnoreCase))
@@ -113,6 +113,11 @@ internal class Program
                 }
                 break;
             }
+        }
+        if (options.ProjectRoot is not null && args.Any(a => a.Equals("--write", StringComparison.OrdinalIgnoreCase)))
+        {
+            options.ProjectWriteEnabled = true;
+            Console.WriteLine("工程可写模式已开启（改动前自动备份，可用 rollback 恢复）。");
         }
 
         // ─────────── 构建 DI 容器 ───────────
@@ -290,18 +295,52 @@ internal class Program
                 continue;
             }
 
-            // ═══════════ use 命令（工程感知 P0） ═══════════
+            // ═══════════ use 命令（工程感知 P0/P1） ═══════════
             if (input.StartsWith("use ", StringComparison.OrdinalIgnoreCase))
             {
-                var proj = Path.GetFullPath(input.Substring(4).Trim());
+                var rest = input.Substring(4).Trim();
+                var writeFlag = rest.StartsWith("--write ", StringComparison.OrdinalIgnoreCase);
+                if (writeFlag) rest = rest.Substring(8).Trim();
+                var proj = Path.GetFullPath(rest);
                 if (!Directory.Exists(proj))
                 {
                     Console.WriteLine($"错误：目录不存在：{proj}");
                     continue;
                 }
                 options.ProjectRoot = proj;
+                options.ProjectWriteEnabled = writeFlag;
                 var scan = ProjectScanner.Scan(proj);
                 Console.WriteLine(scan.Overview);
+                if (writeFlag)
+                    Console.WriteLine("工程可写模式已开启（改动前自动备份，可用 rollback 恢复）。");
+                continue;
+            }
+
+            // ═══════════ rollback 命令（工程感知 P1） ═══════════
+            if (input.StartsWith("rollback", StringComparison.OrdinalIgnoreCase))
+            {
+                if (options.ProjectRoot is null)
+                {
+                    Console.WriteLine("当前未设置工程根（先 use <路径>）。");
+                    continue;
+                }
+                var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2)
+                {
+                    Console.WriteLine("可用备份：");
+                    var backups = BackupService.ListBackups(workspace);
+                    if (backups.Count == 0)
+                        Console.WriteLine("  (无备份)");
+                    foreach (var b in backups.Take(20))
+                        Console.WriteLine($"  [{b.Stamp}] {b.Rel}");
+                    Console.WriteLine("用法：rollback <相对路径> 恢复最近一次备份。");
+                    continue;
+                }
+                var rel = string.Join(' ', parts.Skip(1)).Trim();
+                var dest = BackupService.Rollback(workspace, rel, options.ProjectRoot);
+                Console.WriteLine(dest is null
+                    ? $"没有找到 {rel} 的备份。"
+                    : $"已回滚：{dest}");
                 continue;
             }
 
@@ -319,7 +358,7 @@ internal class Program
             // 因为工具（WriteFileTool 等）构造时绑定 workspaceRoot
             // 必须让每个任务的工具指向自己的 taskWorkspace
             var taskServices = new ServiceCollection();
-            taskServices.AddAgent(options, taskWorkspace, dbPath, options.ProjectRoot);
+            taskServices.AddAgent(options, taskWorkspace, dbPath, options.ProjectRoot, options.ProjectWriteEnabled);
             var taskProvider = taskServices.BuildServiceProvider();
 
             if (TaskClassifier.ShouldOrchestrate(input))

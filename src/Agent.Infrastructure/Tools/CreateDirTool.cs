@@ -14,11 +14,15 @@ namespace Agent.Infrastructure.Tools;
 public sealed class CreateDirTool : AgentToolBase
 {
     private readonly string _workspaceRoot;
+    private readonly string? _projectRoot;
+    private readonly bool _projectWriteEnabled;
 
     /// <summary>构造函数。</summary>
-    public CreateDirTool(string workspaceRoot)
+    public CreateDirTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
+        _projectWriteEnabled = projectWriteEnabled;
     }
 
     /// <summary>工具名。</summary>
@@ -48,10 +52,15 @@ public sealed class CreateDirTool : AgentToolBase
     {
         var relative = args.GetProperty("path").GetString()!;
 
-        var fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, relative));
+        // 解析基准：工程可写时以工程根为基准（工程感知 P1），否则任务目录
+        var baseRoot = _projectWriteEnabled && _projectRoot is not null ? _projectRoot : _workspaceRoot;
+        var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
 
-        // 越界检查
-        if (!fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase))
+        // 越界检查：任务工作区 或（工程可写时）工程根 内
+        var insideWorkspace = fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase);
+        var insideProject = _projectWriteEnabled && _projectRoot is not null
+            && fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase);
+        if (!insideWorkspace && !insideProject)
             return Task.FromResult("错误：路径越界。");
 
         // 创建（幂等）
