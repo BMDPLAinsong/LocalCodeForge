@@ -10,9 +10,6 @@
 		<!-- 启用隐式 using -->
 		<ImplicitUsings>enable</ImplicitUsings>
 	</PropertyGroup>
-	<ItemGroup>
-	  <PackageReference Include="Microsoft.SemanticKernel.Connectors.Ollama" Version="1.80.1-alpha" />
-	</ItemGroup>
 
 	<!-- 【关键】删掉所有 PackageReference。Core 层保持零依赖。 -->
 

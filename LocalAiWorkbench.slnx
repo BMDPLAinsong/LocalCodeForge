@@ -1,8 +1,8 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="tests/Agent.Infrastructure.Tests/Agent.Infrastructure.Tests.csproj" />
     <Project Path="src/Agent.Cli/Agent.Cli.csproj" />
     <Project Path="src/Agent.Core/Agent.Core.csproj" />
     <Project Path="src/Agent.Infrastructure/Agent.Infrastructure.csproj" />
   </Folder>
-  <Folder Name="/workspace/" />
 </Solution>

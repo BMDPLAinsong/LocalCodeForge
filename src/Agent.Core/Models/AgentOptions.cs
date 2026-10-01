@@ -106,13 +106,6 @@ public sealed class AgentOptions
     // ─────────── 规划 ───────────
 
     /// <summary>
-    /// 是否启用 Planner-Executor 编排。
-    /// true  = 复杂任务走三阶段（规划 → 执行 → 验证）
-    /// false = 全部走原有单模型 ReAct 循环
-    /// </summary>
-    public bool EnableOrchestration { get; set; } = true;
-
-    /// <summary>
     /// 单个文件的 Executor 最大重试次数（修复编译错误）。
     /// </summary>
     public int ExecutorMaxRetries { get; set; } = 3;
