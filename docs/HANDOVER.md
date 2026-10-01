@@ -6,6 +6,7 @@
 > **10-01 Ollama 自动启动（§14-3f）：健康检查检测到 Ollama 未启动时，自动执行 `ollama serve`（后台常驻）+ 轮询就绪（1s×15），并注入 OLLAMA_MODELS 模型库根（默认库空时回退 X:\ollama\models，实测 10 模型全恢复）；端到端实测通过**
 > **10-01 环境约束注入（§14-3g）：ExternalTaskDetector 任务类型识别（外部数据任务：天气/IP 定位/汇率等）→ 生成阶段注入环境约束数据块（免 Key + timeout=8 + 快速失败），AgentLoop / Orchestrator / ExecutorService 三路径单一来源；复测：天气任务成功（106s，模型直接采用 ip-api.com+wttr.in+timeout=8）对比此前失败（253s 挂死）**
 > **10-01 写入时 timeout 静态检查（§14-3h）：WriteFileTool 对 .py 写入强制外部 HTTP 调用补 timeout=8（无 timeout 补、已带/跨行/非 py 不动），兜底"模型漏写 timeout"形态；复测：天气任务再次成功（115s，两处 requests.get 均 timeout=8）**
+> **10-01 P0 可持续化（§14-3i）：git init 本机仓库（已有 Git 配置，基线 9affee6 + P0 9dc15b5）；ovtest 33 断言收敛为正式工程 tests/Agent.Infrastructure.Tests（入 slnx，dotnet run 一键回归）；死配置清理（RoutingRules 重名→complex_local/complex_cloud、删未接线的 EnableOrchestration、Core.csproj 残留 SK Ollama 包引用、slnx 空 folder）；冒烟质数任务路由正常**
 >
 > **18:23 完成 3 案例多文件回归（订单 / 待办 / 学生全部一次编译通过）**
 >
@@ -595,13 +596,15 @@ setx DASHSCOPE\_API\_KEY <你的key>   # 改后需重开终端
 
 3d. **【已完成】双路径统一 + 免 Key 闭环**（21:30–22:10）：JSON 错误检测、凭据检查、stderr 整块剥离同步到 Orchestrator；通用失败词替代精确词表；凭据拦截注入免 Key 参考实现并实证跑通（§11.5.7）。**可选后续**：ip-api.com 超时备选（换免费定位源或加重试）；Orchestrator 修复器"输出与原文相同即终止"的判定可考虑放宽（当前会误杀已成功程序的微调场景）。
 
-3e. **【已完成】OutputVerifier 公共检查类**（10-01）：双路径检查链收敛为单一来源，根治"只改一条路径"的双路径不一致（§12-19）。构建 0 错误、28 项确定性回归通过。**后续可选**：git init + 把 ovtest 的断言收敛为正式单元测试工程（当前在 %TEMP%\lawcheck\ovtest，临时项目）。
+3e. **【已完成】OutputVerifier 公共检查类**（10-01）：双路径检查链收敛为单一来源，根治"只改一条路径"的双路径不一致（§12-19）。构建 0 错误、28 项确定性回归通过。**后续**：ovtest 断言已收敛为正式工程 tests/Agent.Infrastructure.Tests（§14-3i，P0 完成）。
 
 3f. **【已完成】Ollama 自动启动**（10-01）：健康检查探活失败（仅连接失败，HTTP 异常不触发）→ 自动后台 `ollama serve`（CreateNoWindow，不随 CLI 退出被杀）→ 每 1s 轮询 /api/tags 最多 15 次 → 就绪继续模型检查；启动失败/15s 未就绪打印原提示。**关键补充**：自动启动注入 `OLLAMA_MODELS` 模型库根（见 §3 模型库位置）——否则 serve 读默认空目录模型全 FAIL（实测首版即踩中，注入后 10 模型全恢复）。端到端实测：kill Ollama → CLI 启动 → 「正在尝试自动启动 → [OK] Ollama 在线（10 个模型已安装）→ 3 个本地模型全部 [OK]」。Program.cs 647→849 行。
 
 3g. **【已完成】任务环境适配·阶段 1：外部数据任务环境约束注入**（10-01）：根因——天气类任务反复失败源于模型在生成层不知道环境事实（无 Key / 海外服务可达性未知 / 必须 timeout），此前免 Key 注入只在"运行快速失败"后触发，挂起形态漏过（10/01 14:22 实证 30s kill）。实施：① 新建 `Routing/ExternalTaskDetector.cs`（66 行，确定性词表：天气/气温/IP地址/根据IP/经纬度/定位/汇率/货币兑换/实时行情/股票行情，**识别任务类型有限集合，非失败形态无限集合**——与打地鼠的本质区别；命中返回环境约束数据块，非 SystemPrompt 非修复器规则）；② 三路径单一来源注入：AgentLoop 用户消息附加 / Orchestrator 传给 Planner 的 userInput 附加 + `Plan.EnvironmentConstraint`（Plan.cs 新增可变属性）/ ExecutorService GenerateFileAsync+FixFileAsync 上下文附加。**验证**：天气任务复测成功（14:48:17 agent/106s/退出码0，模型直接采用 http://ip-api.com/json/ + https://wttr.in/ + timeout=8 + 完整超时异常处理，输出广州 35°C 真实天气）；C# 多文件学生管理系统（orchestrator 路径）正常完成不受影响；fib 本地任务正常（无约束注入，不误伤）；OutputVerifier 28/28；构建 0 错误。metrics 63 条 44 成功/19 失败（69.8%，此前 67.8%）。**观察记录**：fib 输出（标题行+数据行）被既有模板检测判"疑似占位符（1/2 行）"但任务最终成功——既有边界，未动检查链。**后续阶段**：阶段 0 实测数据：ip-api.com 643-699ms / ipapi.co 751-1341ms / wttr.in 1300-4179ms 全部可达（2026-10-01），挂起为瞬时抖动，timeout 后仅秒级快速失败。
 
 3h. **【已完成】写入时 timeout 静态检查**（10-01）：`WriteFileTool`（289→335 行）PostProcess .py 分支新增 `EnsureHttpTimeout`——确定性行级改写：`requests.*(` / `urlopen(` / `HTTP(S)Connection(` 外部 HTTP 调用无 timeout → 自动补 `, timeout=8`；**已带 timeout / 跨行调用（行内无闭合括号）/ 非 .py 文件一律不动**（保守防破坏）。与 csproj net10.0 / argparse default 同构的后处理风格。**定位**：阶段 1 注入约束让模型"大概率写对"，本层是**兜底**——即使模型漏写 timeout，挂起形态（30s kill）也变成秒级快速失败，被运行输出检查链接住。**验证**：ovtest 新增 5 项确定性断言（无 timeout 补 / 已带不动 / 跨行不动 / urllib 补 / 非 py 不动），33/33 通过（28 项原有 + 5 项新）；天气任务复测成功（15:09:35 agent/115s，产物两处 requests.get 均 timeout=8，WriteFileTool 检测已带不动）；构建 0 错误。metrics 64 条 45 成功/19 失败（70.3%）。天气任务时间线：14:22 失败（253s 挂死）→ 14:48 成功（106s，阶段 1 注入）→ 15:09 成功（115s，阶段 1+2 双保障）。**后续可选**：C# HttpClient 超时兜底（当前 Python-only）；EditFileTool 同规则（当前 write_file-only）。
+
+3i. **【已完成】P0 可持续化**（10-01）：① **git init 本机仓库**（本机 Git 2.54.0，用已有全局配置 BMDPLAinsong；.gitignore 忽略 .vs/bin/obj/workspace/；基线 commit 9affee6 58 文件，P0 commit 9dc15b5）；② **测试工程收敛**：ovtest 33 断言迁入正式工程 `tests/Agent.Infrastructure.Tests/`（零依赖断言 harness，控制台工程引用 Agent.Infrastructure，入 slnx；运行 `dotnet run --project tests/Agent.Infrastructure.Tests`，退出码 0=全过；历史 ovtest 保留在 %TEMP% 可弃）；③ **死配置清理**：RoutingRules.json 重名 complex_keywords 改名 complex_local(150)/complex_cloud(85)（语义行为不变，RuleEngine 仍加载 9 条）；删除未接线的 AgentOptions.EnableOrchestration（全项目无读取）；Core.csproj 移除残留 SemanticKernel.Connectors.Ollama 包引用（保持零依赖）；slnx 移除空 /workspace/ folder。**验证**：构建 0 错误；tests 33/33；冒烟"判断质数"任务路由（force_code_simple→small）与执行正常。**保留项**：Program.cs 的 plan/orch/stats 命令虽带「临时测试」注释但用户实际使用过，未删。
 
 4. **补 Executor prompt 禁令**：「禁止 Console.ReadLine/while (true)」，让交互式任务在规划层就规避，而不是靠超时判失败。
 
