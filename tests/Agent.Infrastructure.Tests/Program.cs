@@ -646,6 +646,108 @@ Console.WriteLine("== 读任务数据闭环（small → agent_pro 升级判定�
         && r6!.Contains("偏低"));
 }
 
+// ── 工程完成门 + 编辑冲突诊断 ──
+Console.WriteLine("== TestProjectDetector（完成门） ==");
+{
+    var gateDir = Path.Combine(TestTmp, "gate_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(Path.Combine(gateDir, "src"));
+
+    // 无测试 → false
+    Check("无测试工程 → false",
+        !Agent.Infrastructure.Project.TestProjectDetector.HasTests(gateDir));
+
+    // tests 目录 → true
+    Directory.CreateDirectory(Path.Combine(gateDir, "tests"));
+    Check("tests 目录 → true",
+        Agent.Infrastructure.Project.TestProjectDetector.HasTests(gateDir));
+
+    // 测试 csproj → true（换一个空目录）
+    var gateDir2 = Path.Combine(TestTmp, "gate2_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(gateDir2);
+    File.WriteAllText(Path.Combine(gateDir2, "MyApp.Tests.csproj"), "<Project Sdk='Microsoft.NET.Sdk' />");
+    Check("*.Tests.csproj → true",
+        Agent.Infrastructure.Project.TestProjectDetector.HasTests(gateDir2));
+
+    // pytest.ini → true
+    var gateDir3 = Path.Combine(TestTmp, "gate3_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(gateDir3);
+    File.WriteAllText(Path.Combine(gateDir3, "pytest.ini"), "[pytest]");
+    Check("pytest.ini → true",
+        Agent.Infrastructure.Project.TestProjectDetector.HasTests(gateDir3));
+
+    // 空根/越界 → false
+    Check("空根 → false",
+        !Agent.Infrastructure.Project.TestProjectDetector.HasTests(""));
+
+    Directory.Delete(gateDir, true);
+    Directory.Delete(gateDir2, true);
+    Directory.Delete(gateDir3, true);
+}
+
+Console.WriteLine("== 编辑冲突诊断（EditFileTool 找不到 old_string 且备份漂移） ==");
+{
+    var proj = Path.Combine(TestTmp, "conflict_" + Guid.NewGuid().ToString("N")[..6]);
+    var work = Path.Combine(TestTmp, "conflictwork_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(proj);
+    Directory.CreateDirectory(work);
+    var file = Path.Combine(proj, "demo.cs");
+    File.WriteAllText(file, "class Demo { int a = 1; }");
+
+    // 先做一次"备份"（模拟任务内已备份）：
+    var tool = new Agent.Infrastructure.Tools.EditFileTool(work, proj, projectWriteEnabled: true);
+    var first = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"demo.cs\",\"old_string\":\"int a = 1\",\"new_string\":\"int a = 2\"}").RootElement,
+        CancellationToken.None).GetAwaiter().GetResult();
+    Check("正常编辑成功（含备份）", first.Contains("已修改"));
+
+    // 外部修改（模拟漂移：内容被外部改写，a=1 消失）
+    File.WriteAllText(file, "class Demo { int b = 9; }");
+
+    // 再 edit 旧的 old_string → 冲突诊断
+    var second = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"demo.cs\",\"old_string\":\"int a = 1\",\"new_string\":\"int a = 3\"}").RootElement,
+        CancellationToken.None).GetAwaiter().GetResult();
+    Check("漂移诊断（提及备份/变化）", second.Contains("自最近备份") && second.Contains("漂移"));
+
+    Directory.Delete(proj, true);
+    Directory.Delete(work, true);
+}
+
+// ── 工程只读提示（防幽灵文件：use 未带 --write 时写工程文件被明确拒绝） ──
+Console.WriteLine("== 工程只读模式（写工程文件被拒绝并提示） ==");
+{
+    var proj = Path.Combine(TestTmp, "ro_" + Guid.NewGuid().ToString("N")[..6]);
+    var work = Path.Combine(TestTmp, "rowork_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(proj);
+    Directory.CreateDirectory(work);
+    File.WriteAllText(Path.Combine(proj, "app.cs"), "class App { }");
+
+    // 工程模式但未授权（projectWriteEnabled=false）→ 写工程根内已存在文件 → 只读拒绝
+    var w = new Agent.Infrastructure.Tools.WriteFileTool(work, proj, projectWriteEnabled: false);
+    var wOut = w.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"app.cs\",\"content\":\"class App { int x; }\"}").RootElement,
+        CancellationToken.None).GetAwaiter().GetResult();
+    Check("write 工程文件 → 只读拒绝", wOut.Contains("工程只读模式") && wOut.Contains("--write"));
+    // 工程文件未被改动（防幽灵覆盖）
+    Check("工程文件未被写入", File.ReadAllText(Path.Combine(proj, "app.cs")).Contains("class App { }"));
+
+    var e = new Agent.Infrastructure.Tools.EditFileTool(work, proj, projectWriteEnabled: false);
+    var eOut = e.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"app.cs\",\"old_string\":\"class App\",\"new_string\":\"class App2\"}").RootElement,
+        CancellationToken.None).GetAwaiter().GetResult();
+    Check("edit 工程文件 → 只读拒绝", eOut.Contains("工程只读模式") && eOut.Contains("--write"));
+
+    // 任务目录内正常写不受影响
+    var w2 = new Agent.Infrastructure.Tools.WriteFileTool(work, proj, projectWriteEnabled: false);
+    var w2Out = w2.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"new.txt\",\"content\":\"hello\"}").RootElement,
+        CancellationToken.None).GetAwaiter().GetResult();
+    Check("任务目录写不受影响", w2Out.Contains("已写入"));
+
+    Directory.Delete(proj, true);
+    Directory.Delete(work, true);
+}
+
 // ── 记忆治理：去重合并 / forget / prune / stats ──
 Console.WriteLine("== 记忆治理（去重/过期/forget） ==");
 {

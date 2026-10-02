@@ -89,6 +89,16 @@ public sealed class EditFileTool : AgentToolBase
             BackupService.Backup(_workspaceRoot, fullPath, _projectRoot!);
         }
 
+        // 工程只读提示：工程模式未授权时，若相对路径在工程根内存在对应文件 → 拒绝并提示
+        if (!_projectWriteEnabled && _projectRoot is not null)
+        {
+            var projPath = Path.GetFullPath(Path.Combine(_projectRoot, relative));
+            if (projPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase) && File.Exists(projPath))
+            {
+                return $"错误：工程只读模式（use 未带 --write），拒绝修改工程文件 {relative}。\n如需修改工程文件，请使用 use --write 开启工程可写后重试。";
+            }
+        }
+
         // 文件不存在
         if (!File.Exists(fullPath))
             return $"错误：文件不存在：{relative}。请先用 write_file 创建。";
@@ -100,7 +110,23 @@ public sealed class EditFileTool : AgentToolBase
         var index = content.IndexOf(oldStr, StringComparison.Ordinal);
 
         if (index < 0)
+        {
+            // 编辑冲突检测：找不到 old_string 时查最近备份——
+            // 若有备份且当前内容与备份不一致，说明文件自备份后已被外部/前一任务修改（漂移）。
+            if (insideProject)
+            {
+                var relPath = Path.GetRelativePath(_projectRoot!, fullPath);
+                var backupHit = BackupService.ListBackups(_workspaceRoot)
+                    .FirstOrDefault(b => string.Equals(b.Rel, relPath, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrEmpty(backupHit.Full))
+                {
+                    return $"错误：在 {relative} 中找不到 old_string，且该文件自最近备份（{backupHit.Stamp}）后内容已变化" +
+                           "——疑似被外部/前一任务修改（漂移）。请先 read_file 查看当前内容后重试；如需放弃本次改动可 rollback 恢复。";
+                }
+            }
+
             return $"错误：在 {relative} 中找不到 old_string。请先用 read_file 查看文件当前内容。";
+        }
 
         // 检查唯一性
         var secondIndex = content.IndexOf(oldStr, index + 1, StringComparison.Ordinal);

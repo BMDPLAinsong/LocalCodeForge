@@ -118,6 +118,18 @@ public sealed class WriteFileTool : AgentToolBase
         if (!insideWorkspace && !insideProject)
             return "错误：路径越界。";
 
+        // 工程只读提示：工程模式未授权（use 未带 --write）时，
+        // 若相对路径在工程根内存在对应文件（模型意图是修改工程文件）→ 拒绝并提示，
+        // 避免模型误以为"文件不存在"而写入任务目录产生幽灵文件。
+        if (!_projectWriteEnabled && _projectRoot is not null)
+        {
+            var projPath = Path.GetFullPath(Path.Combine(_projectRoot, relative));
+            if (projPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase) && File.Exists(projPath))
+            {
+                return $"错误：工程只读模式（use 未带 --write），拒绝写入工程文件 {relative}。\n如需修改工程文件，请使用 use --write 开启工程可写后重试。";
+            }
+        }
+
         // 工程感知 P1：写工程根内已存在文件前自动备份（可 rollback 恢复）
         if (insideProject && File.Exists(fullPath))
         {
