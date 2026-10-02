@@ -56,4 +56,57 @@ public static class RoutingIntelligence
                + (current.TotalCount > 0 ? $" < large {current.AvgTotalMs / 1000:N0}s" : "（large 无历史）");
         return true;
     }
+
+    /// <summary>
+    /// 读任务数据闭环：是否建议 small 读任务升级为 agent_pro。
+    /// 保守条件，全部满足才升级（失败由升级链 agent_pro→large 兜底，不劣化）：
+    ///  1. small 样本 ≥ minSamples 且 small 成功率 < badRate —— small 读任务表现差（空响应率高）；
+    ///  2. agent_pro 样本 ≥ minSamples 且成功率 ≥ minSuccessRate —— agent_pro 能兜住；
+    ///  3. agent_pro 平均耗时 < small 平均耗时 —— 省时才有意义。
+    /// </summary>
+    public static bool TrySuggestReadTier(
+        ServiceStats pro,
+        ServiceStats small,
+        int minSamples,
+        double badRate,
+        double minSuccessRate,
+        out string? reason)
+    {
+        reason = null;
+
+        if (small.TotalCount < minSamples)
+        {
+            reason = $"small 样本不足（{small.TotalCount}/{minSamples}），保持 small";
+            return false;
+        }
+
+        var smallRate = (double)small.SuccessCount / small.TotalCount;
+        if (smallRate >= badRate)
+        {
+            reason = $"small 读成功率 {smallRate:P0} ≥ {badRate:P0}，保持 small";
+            return false;
+        }
+
+        if (pro.TotalCount < minSamples)
+        {
+            reason = $"agent_pro 样本不足（{pro.TotalCount}/{minSamples}），保持 small";
+            return false;
+        }
+
+        var proRate = (double)pro.SuccessCount / pro.TotalCount;
+        if (proRate < minSuccessRate)
+        {
+            reason = $"agent_pro 成功率 {proRate:P0} < {minSuccessRate:P0}，保持 small";
+            return false;
+        }
+
+        if (pro.AvgTotalMs >= small.AvgTotalMs)
+        {
+            reason = $"agent_pro 平均 {pro.AvgTotalMs / 1000:N0}s 不省时（small {small.AvgTotalMs / 1000:N0}s），保持 small";
+            return false;
+        }
+
+        reason = $"small 读成功率 {smallRate:P0}（{small.SuccessCount}/{small.TotalCount}）偏低，agent_pro {proRate:P0} 且省时";
+        return true;
+    }
 }

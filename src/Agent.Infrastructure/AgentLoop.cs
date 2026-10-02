@@ -180,6 +180,10 @@ public sealed class AgentLoop : IAgentLoop
         if (envConstraint is not null) userMsg += "\n\n" + envConstraint;
         if (projectBlock is not null) userMsg += "\n\n" + projectBlock;
         if (memoryBlock is not null) userMsg += "\n\n" + memoryBlock;
+        // agent_pro 工程理解专项：读/分析意图（确定性词表）→ 引导优先用符号地图，
+        // 避免模型逐行 read_file 探索两步链（4B 生成不稳的根源）。
+        if (projectBlock is not null && Agent.Infrastructure.Routing.IntentOverride.IsReadTask(request.Input))
+            userMsg += "\n\n（工程提示：理解代码结构请优先调用 analyze_code 获取类/方法/行号索引，再按需 read_file 读具体行段——符号地图比逐行探索高效。）";
         chatHistory.AddUserMessage(userMsg);
         await _store.AppendTurnAsync(request.SessionId, new ChatTurn("user", request.Input), ct);
 

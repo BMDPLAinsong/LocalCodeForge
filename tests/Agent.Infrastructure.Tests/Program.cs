@@ -608,6 +608,44 @@ Console.WriteLine("== 数据闭环 RoutingIntelligence（历史表现回流调�
         Suggest(new(4, 3, 80_000), new(0, 0, 0), out _));
 }
 
+// ── 读任务数据闭环：IsReadTask + TrySuggestReadTier ──
+Console.WriteLine("== 读任务数据闭环（small → agent_pro 升级判定） ==");
+{
+    // IsReadTask：读动词 + 代码语境
+    Check("读取文件 → 读任务", Agent.Infrastructure.Routing.IntentOverride.IsReadTask("读取 src/Order.cs 的内容"));
+    Check("分析代码 → 读任务", Agent.Infrastructure.Routing.IntentOverride.IsReadTask("分析一下这个函数的逻辑"));
+    Check("查看结构 → 读任务", Agent.Infrastructure.Routing.IntentOverride.IsReadTask("看看这个类的结构"));
+    Check("纯问答 → 非读任务", !Agent.Infrastructure.Routing.IntentOverride.IsReadTask("什么是依赖注入"));
+    Check("写任务（修改）→ 非读任务", !Agent.Infrastructure.Routing.IntentOverride.IsReadTask("修改 Order.cs 的价格属性"));
+    Check("无代码语境 → 非读任务", !Agent.Infrastructure.Routing.IntentOverride.IsReadTask("看看天气"));
+
+    bool SuggestRead(Agent.Infrastructure.Routing.ServiceStats pro,
+                     Agent.Infrastructure.Routing.ServiceStats small,
+                     out string? reason)
+        => Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestReadTier(
+            pro, small, minSamples: 3, badRate: 0.6, minSuccessRate: 0.5, out reason);
+
+    // 1) small 样本不足 → 保持 small
+    Check("small 样本不足 → 不升级",
+        !SuggestRead(new(5, 4, 80_000), new(2, 1, 300_000), out _));
+    // 2) small 成功率高（≥0.6）→ 保持 small
+    Check("small 成功率高 → 不升级",
+        !SuggestRead(new(5, 4, 80_000), new(5, 4, 300_000), out _));
+    // 3) agent_pro 样本不足 → 保持 small
+    Check("agent_pro 样本不足 → 不升级",
+        !SuggestRead(new(2, 2, 80_000), new(5, 2, 300_000), out _));
+    // 4) agent_pro 成功率低 → 保持 small
+    Check("agent_pro 成功率低 → 不升级",
+        !SuggestRead(new(4, 1, 80_000), new(5, 2, 300_000), out _));
+    // 5) agent_pro 不省时 → 保持 small
+    Check("agent_pro 不省时 → 不升级",
+        !SuggestRead(new(5, 4, 350_000), new(5, 2, 300_000), out _));
+    // 6) 全达标（small 差 + pro 足/达标/省时）→ 升级 agent_pro
+    Check("达标 → 升级 agent_pro",
+        SuggestRead(new(5, 4, 80_000), new(5, 2, 300_000), out var r6)
+        && r6!.Contains("偏低"));
+}
+
 // ── 记忆治理：去重合并 / forget / prune / stats ──
 Console.WriteLine("== 记忆治理（去重/过期/forget） ==");
 {

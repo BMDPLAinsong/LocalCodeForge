@@ -35,6 +35,13 @@ public static class IntentOverride
         "脚本", "模块", "配置", "接口", "实现"
     };
 
+    /// <summary>读/分析动词。命中表示用户要"读/理解代码"而非"问答/改"（对称写动词表）。</summary>
+    private static readonly string[] ReadVerbs =
+    {
+        "读取", "读一下", "查看", "看看", "看一下", "列出", "显示",
+        "检查", "分析", "理解", "找到", "查找", "定位", "内容", "结构"
+    };
+
     /// <summary>
     /// 覆盖意图分类结果：
     /// SimpleQA + 操作动词 + 文件/代码语境 → CodeGenerate（改代码类任务）。
@@ -58,6 +65,19 @@ public static class IntentOverride
             return false;
 
         return ContainsAny(input, OperationVerbs) && ContainsAny(input, CodeContext);
+    }
+
+    /// <summary>
+    /// 是否为读/分析任务：读动词 + 文件/代码语境同时命中。
+    /// （读任务数据闭环升级 agent_pro、analyze_code 工具引导的依据；
+    ///   与写任务互斥——含写动词时 IsWriteTask 优先，由路由顺序保证。）
+    /// </summary>
+    public static bool IsReadTask(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return false;
+
+        return ContainsAny(input, ReadVerbs) && ContainsAny(input, CodeContext);
     }
 
     private static bool ContainsAny(string input, string[] keywords)

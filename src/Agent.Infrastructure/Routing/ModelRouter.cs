@@ -104,6 +104,37 @@ public sealed class ModelRouter : IModelRouter
         var ruleHit = _rules.Evaluate(context);
         if (ruleHit is not null)
         {
+            // ── L0.5b 读任务数据闭环：small 读任务空响应率高 → 直连 agent_pro ──
+            // 读任务默认走 small（规则命中）。若历史表明 small 读任务成功率偏低
+            // （空响应重试拖慢）且 agent_pro 样本足、成功率达标、更省时，则升级 agent_pro；
+            // 失败由升级链（agent_pro→large）兜底，不劣化。查询失败/数据不足 → 保持 small。
+            if (ruleHit.ServiceId == RoutingDecision.Small && IntentOverride.IsReadTask(context.UserInput))
+            {
+                try
+                {
+                    var smallStats = await _metrics.GetServiceStatsAsync(
+                        RoutingDecision.Small, RoutingTier.Rule.ToString(), 10, ct);
+                    var proStats = await _metrics.GetServiceStatsAsync(
+                        RoutingDecision.AgentPro, RoutingTier.Rule.ToString(), 10, ct);
+
+                    if (RoutingIntelligence.TrySuggestReadTier(
+                        proStats, smallStats, minSamples: 3, badRate: 0.6, minSuccessRate: 0.5, out var readReason))
+                    {
+                        _logger.LogInformation("[数据闭环] L0.5b 读任务升级 agent_pro（{Reason}）", readReason);
+                        return new RoutingDecision(
+                            RoutingDecision.AgentPro,
+                            RoutingTier.Rule,
+                            $"读任务升级 agent_pro（{readReason}）");
+                    }
+
+                    _logger.LogDebug("读任务保持 small：{Reason}", readReason);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[数据闭环] 读任务历史查询失败，保持 small。");
+                }
+            }
+
             _logger.LogInformation(
                 "[L1-规则] {Rule} → {ServiceId}",
                 ruleHit.Reason, ruleHit.ServiceId);
