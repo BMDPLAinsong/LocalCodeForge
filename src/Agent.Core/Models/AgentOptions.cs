@@ -26,37 +26,40 @@ public sealed class AgentOptions
     };
 
     /// <summary>
-    /// 小模型端点（本地 7B）。
+    /// 小模型端点（law-small：30B Custom Model，temp 0.3，单文件/轻任务确定性优先）。
     /// 承担 SimpleQA / CodeGenerate / FileProcess 三类任务的生成。
+    /// 单模型三角色：small/large/agent_pro 共用同一底层 30B，Modelfile 各自定制，运行时任务粒度清场单驻。
     /// </summary>
     public ModelEndpoint Small { get; set; } = new()
     {
         Provider = "ollama",
-        Model = "qwen3-coder-flash-opt",//qwen3-coder-flash-custom  qwen2.5-coder:7b
+        Model = "law-small",
         Endpoint = "http://localhost:11434",
         ApiKey = "ollama"
     };
 
     /// <summary>
-    /// 大模型端点（本地 Ollama 30B-A3B；云端 DashScope 预留兜底，当前不使用云端）。
+    /// 大模型端点（law-large：30B Custom Model，temp 0.7，复杂推理/多文件/规划；
+    /// 云端 DashScope 仅预留兜底，当前不使用云端）。
     /// 承担 Search / ComplexReason / Unknown 三类任务。
     /// </summary>
     public ModelEndpoint Large { get; set; } = new()
     {
         Provider = "ollama",
-        Model = "modelscope.cn/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:UD-Q4_K_XL",
+        Model = "law-large",
         Endpoint = "http://localhost:11434",
         ApiKey = "ollama"
     };
 
     /// <summary>
-    /// Agent 专用端点（本地 Qwen3.5:4b）。
+    /// Agent 专用端点（law-agentpro：30B Custom Model，temp 0.5，工程理解中介；
+    /// 由 4B 升级，补齐工程理解能力短板）。
     /// 承担复杂 Agent 任务：多文件项目、探索性需求、需要规划的任务。
     /// </summary>
     public ModelEndpoint AgentPro { get; set; } = new()
     {
         Provider = "ollama",
-        Model = "qwen3.5:4b",
+        Model = "law-agentpro",
         Endpoint = "http://localhost:11434",
         ApiKey = "ollama"
     };

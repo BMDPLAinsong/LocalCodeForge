@@ -39,30 +39,33 @@ internal class Program
                 ApiKey = "ollama"
             },
 
-            // 小模型：本地 7B
+            // 小模型：law-small（30B Custom Model，temp 0.3，单文件/轻任务确定性优先）
+            // 单模型三角色：small/large/agent_pro 共用同一底层 30B，由 Modelfile 各自定制参数；
+            // 运行时靠任务粒度清场（OllamaStopService）保证单驻，磁盘 blob 共享不额外拉取。
             Small = new ModelEndpoint
             {
                 Provider = "ollama",
-                Model = "qwen3-coder-flash-opt",//qwen3-coder-flash-custom  qwen2.5-coder:7b
+                Model = "law-small",
                 Endpoint = "http://localhost:11434",
                 ApiKey = "ollama"
             },
 
-            // 大模型：本地 Ollama 30B-A3B（MoE 激活 3B，CPU 推理快）
+            // 大模型：law-large（30B Custom Model，temp 0.7，复杂推理/多文件/规划）
             // 云端 DashScope 仅预留兜底（未来可选），当前不使用云端。
             Large = new ModelEndpoint
             {
                 Provider = "ollama",
-                Model = "modelscope.cn/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:UD-Q4_K_XL",
+                Model = "law-large",
                 Endpoint = "http://localhost:11434",
                 ApiKey = "ollama"
             },
 
-            // AgentPro：本地 Agent 专用
+            // AgentPro：law-agentpro（30B Custom Model，temp 0.5，工程理解中介）
+            // 由 4B 升级为 30B：补齐工程理解能力短板（此前 4B 成功率 35%）
             AgentPro = new ModelEndpoint
             {
                 Provider = "ollama",
-                Model = "qwen3.5:4b",
+                Model = "law-agentpro",
                 Endpoint = "http://localhost:11434",
                 ApiKey = "ollama"
             },

@@ -13,6 +13,7 @@ using Microsoft.Extensions.Logging;
 using Agent.Core.Abstractions;
 using Agent.Core.Models;
 using Agent.Infrastructure.Memory;
+using Agent.Infrastructure.Ollama;
 using Agent.Infrastructure.Project;
 using Agent.Infrastructure.Routing;
 using Agent.Infrastructure.Quality;
@@ -31,6 +32,7 @@ public sealed class AgentLoop : IAgentLoop
     private readonly IModelRouter _router;
     private readonly ProjectContextStore _projectContextStore;   // ← P2：工程上下文缓存
     private readonly AgentMemoryStore _memoryStore;               // ← P3：模型级记忆
+    private readonly OllamaStopService _ollamaStop;               // ← 单模型三角色：任务粒度清场
     private readonly ILogger<AgentLoop> _logger;
 
     // 方案 2 循环熔断：本轮已成功执行的工具签名（工具名+首参+输出指纹）
@@ -47,6 +49,7 @@ public sealed class AgentLoop : IAgentLoop
         IModelRouter router,
         ProjectContextStore projectContextStore,   // ← P2：工程上下文缓存
         AgentMemoryStore memoryStore,              // ← P3：模型级记忆
+        OllamaStopService ollamaStop,              // ← 单模型三角色：任务粒度清场
         ILogger<AgentLoop> logger)
     {
         _kernel = kernel;
@@ -56,6 +59,7 @@ public sealed class AgentLoop : IAgentLoop
         _router = router;
         _projectContextStore = projectContextStore;
         _memoryStore = memoryStore;
+        _ollamaStop = ollamaStop;
         _logger = logger;
     }
 
@@ -120,6 +124,17 @@ public sealed class AgentLoop : IAgentLoop
         // 【关键】重置跨任务状态
         _lastStepFailed = false;
         _lastToolName = null;
+
+        // 【单模型三角色】任务粒度清场：stop 全部 law-* 30B，保证任意时刻单驻（防多 tag 内存爆）
+        try
+        {
+            await _ollamaStop.StopAllAsync(ct);
+            _logger.LogInformation("任务粒度清场：已清理 law-* 模型，保证单驻。");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("任务清场失败（容忍）: {Msg}", ex.Message);
+        }
 
         // 【新增】模糊输入检测
         var vaguePatterns = new[]
