@@ -48,13 +48,14 @@ internal class Program
                 ApiKey = "ollama"
             },
 
-            // 大模型：DashScope 云端兜底（备选）
+            // 大模型：本地 Ollama 30B-A3B（MoE 激活 3B，CPU 推理快）
+            // 云端 DashScope 仅预留兜底（未来可选），当前不使用云端。
             Large = new ModelEndpoint
             {
-                Provider = "openai",
-                Model = "qwen3.8-27b",
-                Endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                ApiKey = dashscopeKey
+                Provider = "ollama",
+                Model = "modelscope.cn/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:UD-Q4_K_XL",
+                Endpoint = "http://localhost:11434",
+                ApiKey = "ollama"
             },
 
             // AgentPro：本地 Agent 专用
@@ -71,11 +72,11 @@ internal class Program
             Temperature = 0.2
         };
 
-        // 校验大模型 Key
+        // 云端兜底预留提示（当前 large 走本地 Ollama，不依赖云端 Key）
         if (string.IsNullOrEmpty(dashscopeKey))
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine("提示：未设置 DASHSCOPE_API_KEY，路由到大模型时会失败。");
+            Console.WriteLine("提示：未设置 DASHSCOPE_API_KEY（云端兜底未启用，当前 large 走本地 Ollama）。");
             Console.ResetColor();
         }
 

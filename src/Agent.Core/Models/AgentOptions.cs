@@ -38,15 +38,15 @@ public sealed class AgentOptions
     };
 
     /// <summary>
-    /// 大模型端点（云端 OpenAI 兼容，如 DashScope）。
+    /// 大模型端点（本地 Ollama 30B-A3B；云端 DashScope 预留兜底，当前不使用云端）。
     /// 承担 Search / ComplexReason / Unknown 三类任务。
     /// </summary>
     public ModelEndpoint Large { get; set; } = new()
     {
-        Provider = "openai",
-        Model = "qwen3.8-27b",
-        Endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        ApiKey = ""
+        Provider = "ollama",
+        Model = "modelscope.cn/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:UD-Q4_K_XL",
+        Endpoint = "http://localhost:11434",
+        ApiKey = "ollama"
     };
 
     /// <summary>
