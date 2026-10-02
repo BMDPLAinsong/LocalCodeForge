@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using Agent.Core.Abstractions;
 using Agent.Core.Models;
 using Agent.Infrastructure.Quality;
+using Agent.Infrastructure.Metrics;
 using Agent.Infrastructure.Routing;
 using Microsoft.Extensions.Logging;
 
@@ -24,6 +25,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly IToolRegistry _tools;
     private readonly ILintService _lint;
     private readonly AgentOptions _options;
+    private readonly IMetricsCollector _metrics;   // ← B+：子调用指标（agent_pro/small 样本自动积累）
     private readonly ILogger<Orchestrator> _logger;
 
     public Orchestrator(
@@ -32,6 +34,7 @@ public sealed class Orchestrator : IOrchestrator
         IToolRegistry tools,
         ILintService lint,
         AgentOptions options,
+        IMetricsCollector metrics,
         ILogger<Orchestrator> logger)
     {
         _planner = planner;
@@ -39,6 +42,7 @@ public sealed class Orchestrator : IOrchestrator
         _tools = tools;
         _lint = lint;
         _options = options;
+        _metrics = metrics;
         _logger = logger;
     }
 
@@ -48,6 +52,7 @@ public sealed class Orchestrator : IOrchestrator
         // ═══════════ 阶段 1：规划 ═══════════
         Plan? plan = null;
         string? planError = null;
+        var plannerSw = System.Diagnostics.Stopwatch.StartNew();
 
         try
         {
@@ -62,6 +67,17 @@ public sealed class Orchestrator : IOrchestrator
             _logger.LogError(ex, "Planner 调用异常。");
             planError = ex.Message;
         }
+        plannerSw.Stop();
+
+        // 【B+】子调用指标：Planner（agent_pro）——orchestrator 内部真实调用可观测、样本自动积累
+        await RecordSubMetricAsync(
+            serviceId: "agent_pro",
+            routingTier: "OrchestratorPlanner",
+            userInput: userInput,
+            success: planError is null && plan is not null && plan.Files.Count > 0,
+            totalMs: plannerSw.ElapsedMilliseconds,
+            errorSummary: planError,
+            ct: ct);
 
         if (planError is not null)
         {
@@ -100,6 +116,7 @@ public sealed class Orchestrator : IOrchestrator
 
             string? content = null;
             string? execError = null;
+            var execSw = System.Diagnostics.Stopwatch.StartNew();
 
             try
             {
@@ -112,6 +129,17 @@ public sealed class Orchestrator : IOrchestrator
                 _logger.LogError(ex, "Executor 生成 {Path} 失败。", spec.Path);
                 execError = ex.Message;
             }
+            execSw.Stop();
+
+            // 【B+】子调用指标：Executor（small）——生成成功与否即该文件真实样本
+            await RecordSubMetricAsync(
+                serviceId: "small",
+                routingTier: "OrchestratorExecutor",
+                userInput: userInput,
+                success: execError is null && content is not null,
+                totalMs: execSw.ElapsedMilliseconds,
+                errorSummary: execError,
+                ct: ct);
 
             // yield 必须出 catch 块
             if (execError is not null)
@@ -769,6 +797,41 @@ public sealed class Orchestrator : IOrchestrator
     }
 
     // ─────────── 辅助 ───────────
+
+    /// <summary>
+    /// 【B+】记录 orchestrator 内部子调用指标（Planner=agent_pro / Executor=small）。
+    /// 目的：复杂任务的内部真实调用可观测、样本自动积累（此前只记顶层 orchestrator，
+    /// agent_pro 样本仅靠顶层路由产生，导致 30B Planner 能力不可见）。
+    /// 纯记录，失败不中断主流程。
+    /// </summary>
+    private async Task RecordSubMetricAsync(
+        string serviceId, string routingTier, string userInput,
+        bool success, long totalMs, string? errorSummary, CancellationToken ct)
+    {
+        try
+        {
+            var now = DateTimeOffset.Now;
+            await _metrics.RecordAsync(new TaskMetric
+            {
+                TaskId = Guid.NewGuid().ToString("N"),
+                SessionId = "",
+                UserInput = Truncate(userInput, 500),
+                Mode = "orchestrator_sub",
+                RoutingTier = routingTier,
+                ServiceId = serviceId,
+                RoutingReason = "orchestrator 内部调用（子指标）",
+                Success = success,
+                TotalMs = totalMs,
+                ErrorSummary = errorSummary is null ? "" : Truncate(errorSummary, 500),
+                StartedAt = now,
+                FinishedAt = now
+            }, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("子指标记录失败（容忍）: {Msg}", ex.Message);
+        }
+    }
 
     /// <summary>构造 write_file 事件的参数 JSON。</summary>
     private static JsonElement BuildArgsJson(string path, string content)
