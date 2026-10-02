@@ -683,5 +683,72 @@ Console.WriteLine("== 记忆治理（去重/过期/forget） ==");
     }
 }
 
+// ── agent_pro 工程理解专项：CodeAnalyzerTool 符号索引 ──
+Console.WriteLine("== CodeAnalyzerTool（确定性符号索引） ==");
+{
+    var anDir = Path.Combine(TestTmp, "analyzer_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(anDir);
+
+    // C# 样本
+    var csPath = Path.Combine(anDir, "Order.cs");
+    File.WriteAllText(csPath, """
+        using System;
+
+        public class Order
+        {
+            public int Id { get; set; }
+
+            public string Process(int amount)
+            {
+                return amount.ToString();
+            }
+        }
+        """);
+
+    var tool = new Agent.Infrastructure.Tools.CodeAnalyzerTool(anDir);
+    var csOut = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"Order.cs\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("C# 语言识别", csOut.Contains("语言: csharp"));
+    Check("C# 类定位（行号 3）", csOut.Contains("[3] class Order"));
+    Check("C# 属性定位", csOut.Contains("属性 Id"));
+    Check("C# 方法定位", csOut.Contains("方法 Process"));
+
+    // Python 样本
+    var pyPath = Path.Combine(anDir, "weather.py");
+    File.WriteAllText(pyPath, """
+        import requests
+
+        def get_weather(city):
+            return city
+
+        class WeatherService:
+            def fetch(self, ip):
+                return ip
+        """);
+    var pyOut = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"weather.py\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("Python 语言识别", pyOut.Contains("语言: python"));
+    Check("Python 函数定位", pyOut.Contains("函数 get_weather"));
+    Check("Python 类定位", pyOut.Contains("class WeatherService"));
+    Check("Python 缩进方法定位", pyOut.Contains("方法 fetch"));
+
+    // 错误路径
+    var missOut = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"no_such.cs\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("文件不存在 → 错误", missOut.Contains("文件不存在"));
+    var escOut = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"..\\\\..\\\\Windows\\\\x.txt\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("路径越界 → 拒绝", escOut.Contains("越界"));
+
+    // 非代码文件
+    var txtPath = Path.Combine(anDir, "readme.txt");
+    File.WriteAllText(txtPath, "hello");
+    var txtOut = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"readme.txt\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("非代码文件 → 无符号", txtOut.Contains("非代码文件"));
+
+    Directory.Delete(anDir, true);
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

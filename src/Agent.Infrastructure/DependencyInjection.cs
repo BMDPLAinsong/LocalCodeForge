@@ -94,6 +94,7 @@ public static class DependencyInjection
         services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot, projectRoot, projectWriteEnabled));   // ← 新增
         services.AddSingleton<IAgentTool>(_ => new RunCommandTool(workspaceRoot, projectRoot));
         services.AddSingleton<IAgentTool>(_ => new RememberTool(_.GetRequiredService<AgentMemoryStore>()));   // ← P3：模型级记忆
+        services.AddSingleton<IAgentTool>(_ => new CodeAnalyzerTool(workspaceRoot, projectRoot));            // ← 工程理解专项：符号索引
 
         // ─────────── 【关键】工具注册表（依赖上面的 IAgentTool 集合） ───────────
         services.AddSingleton<IToolRegistry>(sp =>
