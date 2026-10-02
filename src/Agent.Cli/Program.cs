@@ -295,6 +295,54 @@ internal class Program
                 continue;
             }
 
+            // ═══════════ memory 命令（记忆治理：list/stats/forget/prune/dedup） ═══════════
+            if (input.StartsWith("memory", StringComparison.OrdinalIgnoreCase))
+            {
+                var mem = provider.GetRequiredService<Agent.Infrastructure.Memory.AgentMemoryStore>();
+                var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                var sub = parts.Length > 1 ? parts[1].ToLowerInvariant() : "stats";
+
+                switch (sub)
+                {
+                    case "list":
+                    {
+                        var n2 = parts.Length > 2 && int.TryParse(parts[2], out var take2) ? take2 : 20;
+                        foreach (var m in mem.List(n2))
+                            Console.WriteLine($"  [{m.Id}] {m.Kind} | hits={m.HitCount} count={m.Count} | {m.Topic} | {m.CreatedAt}");
+                        break;
+                    }
+                    case "forget":
+                    {
+                        if (parts.Length < 3 || !long.TryParse(parts[2], out var fid))
+                        {
+                            Console.WriteLine("用法：memory forget <id>（id 见 memory list）");
+                            break;
+                        }
+                        Console.WriteLine(mem.Forget(fid) ? $"已删除记忆 {fid}。" : $"未找到记忆 {fid}。");
+                        break;
+                    }
+                    case "prune":
+                    {
+                        var days = parts.Length > 2 && int.TryParse(parts[2], out var d) ? d : 90;
+                        var minHits = parts.Length > 3 && int.TryParse(parts[3], out var mh) ? mh : 2;
+                        Console.WriteLine($"过期清理（{days} 天内未用且命中 < {minHits}）：已删除 {mem.PruneExpired(days, minHits)} 条。");
+                        break;
+                    }
+                    case "dedup":
+                        Console.WriteLine($"重复合并：已清理 {mem.Deduplicate()} 条冗余。");
+                        break;
+                    default:
+                    {
+                        var st = mem.GetStats();
+                        Console.WriteLine($"记忆统计：共 {st.Total} 条（model {st.ModelCount} / task {st.TaskCount}），总命中 {st.TotalHits} 次");
+                        foreach (var m in mem.List(10))
+                            Console.WriteLine($"  [{m.Id}] {m.Kind} | hits={m.HitCount} count={m.Count} | {m.Topic}");
+                        break;
+                    }
+                }
+                continue;
+            }
+
             // ═══════════ use 命令（工程感知 P0/P1） ═══════════
             if (input.StartsWith("use ", StringComparison.OrdinalIgnoreCase))
             {

@@ -405,7 +405,7 @@ Console.WriteLine("== 工程感知 P3 补足：失败教训注入（少走弯路
     // 两条失败 → 失败计数强化
     var failHit2 = new Agent.Infrastructure.Memory.AgentMemoryStore.MemoryHit(3, "task", "创建 hello2.txt", "任务失败（agent）：模型连续返回空答案，任务终止。", 1);
     var built2 = Agent.Infrastructure.Memory.MemoryPromptBuilder.Build(new List<Agent.Infrastructure.Memory.AgentMemoryStore.MemoryHit> { failHit, failHit2 });
-    Check("多条失败 → 计数强化", built2 is not null && built2.Contains("同类失败已记录 2 次"));
+    Check("多条失败 → 计数强化", built2 is not null && built2.Contains("同类失败累计已记录 2 次"));
 
     // 只有参考 → 无警示组
     var built3 = Agent.Infrastructure.Memory.MemoryPromptBuilder.Build(new List<Agent.Infrastructure.Memory.AgentMemoryStore.MemoryHit> { okHit });
@@ -606,6 +606,81 @@ Console.WriteLine("== 数据闭环 RoutingIntelligence（历史表现回流调�
     // 5) 达标且当前无历史 → 降级
     Check("当前无历史 + 候选达标 → 降级",
         Suggest(new(4, 3, 80_000), new(0, 0, 0), out _));
+}
+
+// ── 记忆治理：去重合并 / forget / prune / stats ──
+Console.WriteLine("== 记忆治理（去重/过期/forget） ==");
+{
+    var gov = new Agent.Infrastructure.Memory.AgentMemoryStore(
+        Path.Combine(TestTmp, "mem_gov_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db"));
+
+    // 去重合并：同 kind+topic → 一条，count 累加
+    gov.Add("task", "创建一个 hello.txt 文件", "任务失败（agent）：第一次失败", "task_1");
+    gov.Add("task", "创建一个 hello.txt 文件", "任务失败（agent）：第二次失败", "task_2");
+    var afterMerge = gov.GetStats();
+    Check("同 topic 合并为一条", afterMerge.Total == 1);
+    var mergedHit = gov.List(10).FirstOrDefault();
+    Check("合并后 count=2", mergedHit is not null && mergedHit.Count == 2);
+    Check("合并后 content 为最新", mergedHit is not null && mergedHit.Content.Contains("第二次"));
+
+    // 不同 topic → 独立
+    gov.Add("model", "ProjectRoot 属性", "ProjectRoot 为 null 时沙箱模式。", null);
+    Check("不同 topic 独立成条", gov.GetStats().Total == 2);
+
+    // Search 命中带 count
+    var s1 = gov.Search("创建一个 hello.txt 文件");
+    Check("检索命中返回 count", s1.Count == 1 && s1[0].Count == 2);
+
+    // BumpHit 刷新 last_hit_at（经 List 可见）
+    gov.Add("model", "AgentLoop 升级链", "small 空响应直达 large。", null);
+    var hitsBefore = gov.Search("AgentLoop 升级链");
+    Check("BumpHit 后 last_hit_at 非空", hitsBefore.Count == 1 && hitsBefore[0].LastHitAt.Length > 0);
+
+    // Forget
+    var target = gov.List(10).First(m => m.Topic.Contains("ProjectRoot"));
+    Check("forget 删除单条", gov.Forget(target.Id) && gov.GetStats().Total == 2);
+
+    // PruneExpired：造一条旧数据（直接 SQL 更新 created_at 为 100 天前）
+    gov.Add("task", "旧任务归档", "任务失败（agent）：很旧", "task_old");
+    {
+        using var conn = new Microsoft.Data.Sqlite.SqliteConnection(
+            "Data Source=" + Path.Combine(TestTmp, FindGovDb()));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE agent_memory SET created_at = @old, last_hit_at = @old WHERE topic = @tp;
+        """;
+        cmd.Parameters.AddWithValue("@old", DateTime.Now.AddDays(-100).ToString("yyyy-MM-dd HH:mm:ss"));
+        cmd.Parameters.AddWithValue("@tp", "旧任务归档");
+        cmd.ExecuteNonQuery();
+    }
+    var beforePrune = gov.GetStats().Total;
+    var removedPrune = gov.PruneExpired(90, 2);
+    Check("过期清理删除旧记录", removedPrune >= 1 && gov.GetStats().Total == beforePrune - 1);
+
+    // Deduplicate：SQL 直插两条同 topic（绕过 Add 合并）造存量重复
+    {
+        using var conn = new Microsoft.Data.Sqlite.SqliteConnection(
+            "Data Source=" + Path.Combine(TestTmp, FindGovDb()));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO agent_memory (kind, topic, content, created_at, count) VALUES ('task', '存量重复', '旧内容A', @at, 1);
+            INSERT INTO agent_memory (kind, topic, content, created_at, count) VALUES ('task', '存量重复', '旧内容B', @at, 2);
+        """;
+        cmd.Parameters.AddWithValue("@at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        cmd.ExecuteNonQuery();
+    }
+    var dedupRemoved = gov.Deduplicate();
+    Check("dedup 合并存量重复", dedupRemoved == 1);
+    var dedupHit = gov.List(50).FirstOrDefault(m => m.Topic == "存量重复");
+    Check("dedup 后 count=3（1+2）", dedupHit is not null && dedupHit.Count == 3);
+
+    string FindGovDb()
+    {
+        var f = System.IO.Directory.GetFiles(TestTmp, "mem_gov_*.db").OrderByDescending(x => x).First();
+        return f;
+    }
 }
 
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");

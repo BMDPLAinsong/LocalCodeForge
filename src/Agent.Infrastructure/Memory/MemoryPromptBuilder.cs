@@ -40,9 +40,13 @@ public static class MemoryPromptBuilder
             sb.AppendLine();
             sb.AppendLine("⚠ 历史失败教训（请参考并避免重蹈覆辙）:");
             foreach (var f in failures)
-                sb.AppendLine($"- [task] {f.Topic}：{f.Content}");
-            if (failures.Count >= 2)
-                sb.AppendLine($"（同类失败已记录 {failures.Count} 次）");
+            {
+                var suffix = f.Count > 1 ? $"（同类已记录 {f.Count} 次）" : "";
+                sb.AppendLine($"- [task] {f.Topic}：{f.Content}{suffix}");
+            }
+            var failureTotal = failures.Sum(f => f.Count);
+            if (failureTotal >= 2)
+                sb.AppendLine($"（同类失败累计已记录 {failureTotal} 次）");
         }
 
         if (references.Count > 0)
