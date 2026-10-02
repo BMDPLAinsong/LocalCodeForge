@@ -385,6 +385,35 @@ Console.WriteLine("== 工程感知 P3 补足：任务归档记忆（§14-3w P3�
     Check("task 记忆可检索", taskHits.Any(h => h.Kind == "task" && h.Topic.Contains("AgentOptions")));
 }
 
+Console.WriteLine("== 记忆治理收尾：自动过期清理 + 默认阈值 ==");
+{
+    // AgentOptions 默认治理阈值（任务启动时自动执行）
+    var opt = new Agent.Core.Models.AgentOptions();
+    Check("治理默认 30 天", opt.MemoryPruneDays == 30);
+    Check("治理默认 1 命中（仅 0 命中可清）", opt.MemoryPruneMinHits == 1);
+
+    // PruneExpired 确定性验证：久未使用且 0 命中 → 删除；有命中 → 保留
+    var memPPath = Path.Combine(TestTmp, "agent_memory_p_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db");
+    var memP = new Agent.Infrastructure.Memory.AgentMemoryStore(memPPath);
+    memP.Add("task", "旧任务无命中", "很久以前的失败归档。", "old_task");
+    memP.Add("model", "常用知识", "常用命中知识。", "old_model");
+    memP.Search("常用知识", limit: 1);   // 命中一次 → hit_count=1
+
+    // 模拟久未使用：把两条的 last_hit_at 都改为 35 天前（30 天阈值外）
+    using (var conn = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + memPPath))
+    {
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE agent_memory SET created_at='2026-08-20 00:00:00', last_hit_at='2026-08-20 00:00:00';";
+        cmd.ExecuteNonQuery();
+    }
+
+    var pruned = memP.PruneExpired(30, 1);   // 35 天前最后使用 且 hit_count<1 → 仅删"旧任务无命中"
+    Check("过期 0 命中清理 1 条", pruned == 1);
+    Check("常用知识（有命中）保留", memP.Search("常用知识", limit: 1).Count == 1);
+    Check("旧任务 0 命中已清", memP.Search("旧任务无命中", limit: 1).Count == 0);
+}
+
 Console.WriteLine("== 工程感知 P3 补足：失败教训注入（少走弯路） ==");
 {
     var mem3 = new Agent.Infrastructure.Memory.AgentMemoryStore(

@@ -135,6 +135,18 @@ public sealed class AgentOptions
     /// </summary>
     public int ExecutorMaxRetries { get; set; } = 3;
 
+    // ─────────── 记忆治理 ───────────
+
+    /// <summary>
+    /// 【记忆治理收尾】自动过期清理阈值：
+    /// 创建/最近命中早于 MemoryPruneDays 天且命中数 &lt; MemoryPruneMinHits 的条目，
+    /// 在每次任务启动时自动删除。minHits=1 表示"仅 0 命中的条目可被清理"。
+    /// </summary>
+    public int MemoryPruneDays { get; set; } = 30;
+
+    /// <summary>自动治理的最低命中数（命中数达到该值即使久未用也保留）。</summary>
+    public int MemoryPruneMinHits { get; set; } = 1;
+
     // ─────────── 工程感知 ───────────
 
     /// <summary>

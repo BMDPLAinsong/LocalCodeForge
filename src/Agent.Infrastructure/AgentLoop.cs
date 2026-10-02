@@ -121,6 +121,19 @@ public sealed class AgentLoop : IAgentLoop
         _lastStepFailed = false;
         _lastToolName = null;
 
+        // 【记忆治理收尾】任务启动时自动清理过期记忆（30 天未用且 0 命中自动删除）
+        try
+        {
+            var pruned = _memoryStore.PruneExpired(_options.MemoryPruneDays, _options.MemoryPruneMinHits);
+            if (pruned > 0)
+                _logger.LogInformation("[记忆治理] 过期清理 {Count} 条（{Days} 天未用且命中 < {MinHits}）。",
+                    pruned, _options.MemoryPruneDays, _options.MemoryPruneMinHits);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("记忆治理失败（容忍）: {Msg}", ex.Message);
+        }
+
         // 【新增】模糊输入检测
         var vaguePatterns = new[]
         {
