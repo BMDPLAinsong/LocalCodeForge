@@ -748,6 +748,156 @@ Console.WriteLine("== 工程只读模式（写工程文件被拒绝并提示） 
     Directory.Delete(work, true);
 }
 
+// ── 工程级测试自动执行：DetectTest 各形态 ──
+Console.WriteLine("== TestRunnerService（测试命令检测） ==");
+{
+    var trDir = Path.Combine(TestTmp, "tr_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(trDir);
+
+    // console 断言形态（无测试框架包）→ dotnet run --project
+    Directory.CreateDirectory(Path.Combine(trDir, "tests"));
+    File.WriteAllText(Path.Combine(trDir, "tests", "App.Tests.csproj"),
+        "<Project Sdk='Microsoft.NET.Sdk'><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>");
+    var d1 = Agent.Infrastructure.Project.TestRunnerService.DetectTest(trDir);
+    Check("console 断言形态 → dotnet run", d1 is not null && d1.Value.Command == "dotnet" && d1.Value.Args.Contains("run"));
+
+    // xunit 形态 → dotnet test
+    var trDir2 = Path.Combine(TestTmp, "tr2_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(trDir2);
+    File.WriteAllText(Path.Combine(trDir2, "App.Tests.csproj"),
+        "<Project Sdk='Microsoft.NET.Sdk'><ItemGroup><PackageReference Include='xunit' /></ItemGroup></Project>");
+    var d2 = Agent.Infrastructure.Project.TestRunnerService.DetectTest(trDir2);
+    Check("xunit 形态 → dotnet test", d2 is not null && d2.Value.Args.Contains("test"));
+
+    // pytest.ini → pytest
+    var trDir3 = Path.Combine(TestTmp, "tr3_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(trDir3);
+    File.WriteAllText(Path.Combine(trDir3, "pytest.ini"), "[pytest]");
+    var d3 = Agent.Infrastructure.Project.TestRunnerService.DetectTest(trDir3);
+    Check("pytest.ini → pytest", d3 is not null && d3.Value.Command == "pytest");
+
+    // 无测试 → null
+    var trDir4 = Path.Combine(TestTmp, "tr4_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(trDir4);
+    File.WriteAllText(Path.Combine(trDir4, "app.py"), "x = 1");
+    Check("无测试入口 → null", Agent.Infrastructure.Project.TestRunnerService.DetectTest(trDir4) is null);
+
+    Directory.Delete(trDir, true);
+    Directory.Delete(trDir2, true);
+    Directory.Delete(trDir3, true);
+    Directory.Delete(trDir4, true);
+}
+
+// ── 多文件修改规划：任务级回滚（RollbackTask 全量恢复） ──
+Console.WriteLine("== 任务级回滚（多文件变更单元） ==");
+{
+    var proj = Path.Combine(TestTmp, "rb_" + Guid.NewGuid().ToString("N")[..6]);
+    var work = Path.Combine(TestTmp, "rbwork_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(proj);
+    Directory.CreateDirectory(work);
+    File.WriteAllText(Path.Combine(proj, "a.cs"), "class A { }");
+    File.WriteAllText(Path.Combine(proj, "b.cs"), "class B { }");
+
+    // 模拟任务内两次修改（自动备份）
+    var tool = new Agent.Infrastructure.Tools.EditFileTool(work, proj, projectWriteEnabled: true);
+    tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"a.cs\",\"old_string\":\"class A\",\"new_string\":\"class A2\"}").RootElement,
+        CancellationToken.None).GetAwaiter().GetResult();
+    tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"b.cs\",\"old_string\":\"class B\",\"new_string\":\"class B2\"}").RootElement,
+        CancellationToken.None).GetAwaiter().GetResult();
+    Check("修改后文件已变更", File.ReadAllText(Path.Combine(proj, "a.cs")).Contains("class A2")
+          && File.ReadAllText(Path.Combine(proj, "b.cs")).Contains("class B2"));
+
+    // 任务级回滚（rollback all 语义）
+    var restored = Agent.Infrastructure.Project.BackupService.RollbackTask(work, proj);
+    Check("任务级回滚恢复 2 个文件", restored == 2);
+    Check("a.cs 已恢复", File.ReadAllText(Path.Combine(proj, "a.cs")).Contains("class A { }"));
+    Check("b.cs 已恢复", File.ReadAllText(Path.Combine(proj, "b.cs")).Contains("class B { }"));
+
+    Directory.Delete(proj, true);
+    Directory.Delete(work, true);
+}
+
+// ── 工程图谱：SymbolIndexer + find_symbol ──
+Console.WriteLine("== 工程图谱（符号索引 + find_symbol） ==");
+{
+    var proj = Path.Combine(TestTmp, "sym_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(Path.Combine(proj, "src"));
+    File.WriteAllText(Path.Combine(proj, "src", "Order.cs"), """
+        public class Order
+        {
+            public int Id { get; set; }
+            public string Process(int x) { return x.ToString(); }
+        }
+        """);
+    File.WriteAllText(Path.Combine(proj, "src", "weather.py"), """
+        def get_weather(city):
+            return city
+
+        class WeatherService:
+            def fetch(self, ip):
+                return ip
+        """);
+
+    // 多修饰符 + 控制流误判回归（真实工程形态）
+    File.WriteAllText(Path.Combine(proj, "src", "Extra.cs"), """
+        public static class Router
+        {
+            public static bool TryRoute(string x)
+            {
+                if (x.Length > 0)
+                    return true;
+                for (var i = 0; i < 3; i++) { }
+                return false;
+            }
+        }
+        public sealed record Stats(int Count, int Ok);
+        """);
+
+    var entries2 = Agent.Infrastructure.Project.SymbolIndexer.Build(proj);
+    // 探针：直接正则匹配（排除 Build 逻辑干扰）
+    var probe = System.Text.RegularExpressions.Regex.Match("public static class Router",
+        @"^\s*(?:(?:public|private|protected|internal|static|abstract|sealed|partial|readonly)\s+)*(?:class|interface|enum|record|struct)\s+([A-Za-z_]\w*)");
+    Check("探针：正则直接匹配 Router", probe.Success && probe.Groups[1].Value == "Router");
+    Check("多修饰符类（public static class）", entries2.Any(e => e.Symbol == "Router" && e.Kind == "class"));
+    Check("多修饰符 record", entries2.Any(e => e.Symbol == "Stats" && e.Kind == "record"));
+    Check("多修饰符方法", entries2.Any(e => e.Symbol == "TryRoute" && e.Kind == "method"));
+    Check("控制流 if 不误判为方法", !entries2.Any(e => e.Symbol == "if" && e.Kind == "method"));
+    Check("控制流 for 不误判为方法", !entries2.Any(e => e.Symbol == "for" && e.Kind == "method"));
+
+    var entries = Agent.Infrastructure.Project.SymbolIndexer.Build(proj);
+    Check("C# 类索引", entries.Any(e => e.Symbol == "Order" && e.Kind == "class"));
+    Check("C# 方法索引", entries.Any(e => e.Symbol == "Process" && e.Kind == "method"));
+    Check("C# 属性索引", entries.Any(e => e.Symbol == "Id" && e.Kind == "property"));
+    Check("Python 函数索引", entries.Any(e => e.Symbol == "get_weather" && e.Kind == "function"));
+    Check("Python 类索引", entries.Any(e => e.Symbol == "WeatherService" && e.Kind == "class"));
+    Check("Python 缩进方法索引", entries.Any(e => e.Symbol == "fetch" && e.Kind == "method"));
+
+    // find_symbol 端到端（惰性构建 + 查询）
+    var db = Path.Combine(TestTmp, "symdb_" + Guid.NewGuid().ToString("N")[..6] + ".db");
+    var work = Path.Combine(TestTmp, "symwork_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(work);
+    var fst = new Agent.Infrastructure.Tools.FindSymbolTool(work, proj, db);
+    var out1 = fst.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"name\":\"Order\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("find_symbol 命中 Order", out1.Contains("class Order") && out1.Contains("Order.cs"));
+    var out2 = fst.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"name\":\"get_weather\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("find_symbol 命中 Python 函数", out2.Contains("function get_weather"));
+    var out3 = fst.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"name\":\"NoSuchSymbol\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("find_symbol 未命中 → 提示", out3.Contains("未找到"));
+    // 无工程 → 拒绝
+    var fst2 = new Agent.Infrastructure.Tools.FindSymbolTool(work, null, db);
+    var out4 = fst2.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"name\":\"Order\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("无工程模式 → 拒绝", out4.Contains("工程模式"));
+
+    Directory.Delete(proj, true);
+    Directory.Delete(work, true);
+}
+
 // ── 记忆治理：去重合并 / forget / prune / stats ──
 Console.WriteLine("== 记忆治理（去重/过期/forget） ==");
 {

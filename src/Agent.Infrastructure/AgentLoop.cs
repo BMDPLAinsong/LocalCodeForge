@@ -196,6 +196,7 @@ public sealed class AgentLoop : IAgentLoop
         RoutingDecision? lastYieldedDecision = null;
         int forceContinueCount = 0;
         int emptyAnswerCount = 0;
+        bool autoTestRun = false; // 工程完成门：每任务最多自动跑一次测试
         string? _lastFailureSummary = null; // 上下文治理：最近一次失败的工具输出摘要（注入用截断版）
 
         var historyStartIndex = chatHistory.Count;
@@ -696,6 +697,42 @@ public sealed class AgentLoop : IAgentLoop
                 chatHistory.AddUserMessage(
                     "上一次 run_command 执行失败（退出码非 0）。请仔细阅读错误信息，修改代码后重新运行。**不要谎报成功。**");
                 continue;
+            }
+
+            // ═══════════ 工程完成门：改了代码 → 自动运行测试并回填 ═══════════
+            // 工程模式 + 本轮写过文件 + 工程有测试入口 + 尚未自动跑过 → TestRunnerService 确定性执行，
+            // 结果以 Tool 消息注入，模型基于真实结果收尾/修复（3 轮防死循环、每任务最多自动跑一次）。
+            if (_options.ProjectRoot is not null
+                && hasWrittenFile
+                && !autoTestRun
+                && step < _options.MaxSteps - 1)
+            {
+                var testCmd = Agent.Infrastructure.Project.TestRunnerService.DetectTest(_options.ProjectRoot);
+                if (testCmd is not null)
+                {
+                    autoTestRun = true;
+                    _logger.LogWarning("工程完成门：已修改代码，自动运行测试（{Cmd}）。", testCmd.Value.Display);
+
+                    var testResult = await Agent.Infrastructure.Project.TestRunnerService.RunAsync(
+                        _options.ProjectRoot!, timeoutMs: 150_000, ct);
+
+                    chatHistory.Add(new ChatMessageContent(
+                        AuthorRole.Tool,
+                        new ChatMessageContentItemCollection
+                        {
+                            new FunctionResultContent(
+                                new FunctionCallContent("run_test", "{}"),
+                                testResult.Summary + (testResult.TimedOut ? " [超时]" : ""))
+                        }));
+
+                    chatHistory.Add(new ChatMessageContent(AuthorRole.Assistant, text));
+                    chatHistory.AddUserMessage(
+                        "检测到本次任务修改了工程代码，已完成测试自动运行，结果：" + testResult.Summary + "。\n" +
+                        (testResult.ExitCode == 0
+                            ? "测试通过，请直接给出最终总结收尾。"
+                            : "测试未通过，请根据结果修复代码后重新验证；若确实无法通过请在最终回答中说明。"));
+                    continue;
+                }
             }
 
             // 真正交付

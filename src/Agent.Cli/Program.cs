@@ -393,7 +393,13 @@ internal class Program
                         Console.WriteLine("  (无备份)");
                     foreach (var b in backups.Take(20))
                         Console.WriteLine($"  [{b.Stamp}] {b.Rel}");
-                    Console.WriteLine("用法：rollback <相对路径> 恢复最近一次备份。");
+                    Console.WriteLine("用法：rollback 恢复本任务全部备份；rollback <相对路径> 恢复单个文件最近一次备份。");
+                    continue;
+                }
+                if (parts[1].Equals("all", StringComparison.OrdinalIgnoreCase))
+                {
+                    var n = BackupService.RollbackTask(workspace, options.ProjectRoot);
+                    Console.WriteLine($"已回滚全部：{n} 个文件恢复到最近备份。");
                     continue;
                 }
                 var rel = string.Join(' ', parts.Skip(1)).Trim();

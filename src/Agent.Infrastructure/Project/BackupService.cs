@@ -88,4 +88,41 @@ public static class BackupService
         File.Copy(latest, dest, overwrite: true);
         return dest;
     }
+
+    /// <summary>
+    /// 任务级回滚（多文件修改规划）：恢复本任务全部备份文件。
+    /// 每个文件取最近一次备份（=上次写入前状态）；返回恢复的文件数。
+    /// </summary>
+    public static int RollbackTask(string workspaceRoot, string projectRoot)
+    {
+        var runRoot = GetRunRoot(workspaceRoot);
+        var dir = Path.Combine(runRoot, ".backup");
+        if (!Directory.Exists(dir)) return 0;
+
+        // 每个相对路径取最近 stamp 的备份 → 恢复
+        var latestByRel = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var stampDir in Directory.GetDirectories(dir).OrderByDescending(d => d))
+        {
+            foreach (var f in Directory.GetFiles(stampDir, "*", SearchOption.AllDirectories))
+            {
+                var rel = Path.GetRelativePath(stampDir, f);
+                if (!latestByRel.ContainsKey(rel))
+                    latestByRel[rel] = f;
+            }
+        }
+
+        var restored = 0;
+        foreach (var (rel, backup) in latestByRel)
+        {
+            var dest = Path.Combine(projectRoot, rel);
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                File.Copy(backup, dest, overwrite: true);
+                restored++;
+            }
+            catch { }
+        }
+        return restored;
+    }
 }
