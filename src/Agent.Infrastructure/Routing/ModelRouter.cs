@@ -1,5 +1,6 @@
 ﻿// 引入日志
 using Agent.Core.Models;
+using Agent.Infrastructure.Metrics;
 using Microsoft.Extensions.Logging;
 
 // 命名空间
@@ -17,18 +18,21 @@ public sealed class ModelRouter : IModelRouter
     // 日志
     private readonly ILogger<ModelRouter> _logger;
     private readonly AgentOptions _options;   // ← 新增
+    private readonly IMetricsCollector _metrics;   // ← 数据闭环：历史表现回流
 
     /// <summary>构造函数。</summary>
     public ModelRouter(
         IRuleEngine rules,
         IIntentClassifier classifier,
         ILogger<ModelRouter> logger,
-         AgentOptions options)
+        AgentOptions options,
+        IMetricsCollector metrics)
     {
         _rules = rules;
         _classifier = classifier;
         _logger = logger;
         _options = options;
+        _metrics = metrics;
     }
 
     /// <summary>
@@ -60,6 +64,35 @@ public sealed class ModelRouter : IModelRouter
         // 一次成功率更高，总时间反而更短。读任务保持 small（已验证能完成）。
         if (IntentOverride.IsWriteTask(context.UserInput))
         {
+            // ── 数据闭环（方案 C）：历史数据回流调权 ──
+            // 写任务默认直连 large（修复 A 的确定性结论）。
+            // 但若历史表明同场景（tier=Rule）small 写任务成功率足够高且显著省时，
+            // 降级 small（省 large CPU 推理时间）；失败由升级链（small→large）兜底，不劣化。
+            // 查询失败/数据不足 → 保持 large。
+            try
+            {
+                var smallStats = await _metrics.GetServiceStatsAsync(
+                    RoutingDecision.Small, RoutingTier.Rule.ToString(), 10, ct);
+                var largeStats = await _metrics.GetServiceStatsAsync(
+                    RoutingDecision.Large, RoutingTier.Rule.ToString(), 10, ct);
+
+                if (RoutingIntelligence.TrySuggestDowngrade(
+                    smallStats, largeStats, minSamples: 3, minSuccessRate: 0.6, out var reason))
+                {
+                    _logger.LogInformation("[数据闭环] L0.5 写任务降级 small（{Reason}）", reason);
+                    return new RoutingDecision(
+                        RoutingDecision.Small,
+                        RoutingTier.Rule,
+                        $"写任务降级 small（{reason}）");
+                }
+
+                _logger.LogDebug("保持 large：{Reason}", reason);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[数据闭环] 查询历史表现失败，保持 large。");
+            }
+
             _logger.LogInformation("[L0.5-写任务] 写任务 → 直连 large");
             return new RoutingDecision(
                 RoutingDecision.Large,

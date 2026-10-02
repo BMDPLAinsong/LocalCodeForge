@@ -25,6 +25,10 @@ public interface IMetricsCollector
     Task<MetricsSummary> GetSummaryAsync(
         DateTime? since,
         CancellationToken ct);
+
+    /// <summary>数据闭环：按服务+路由层级聚合最近 N 条的表现（成功率/平均耗时）。</summary>
+    Task<Agent.Infrastructure.Routing.ServiceStats> GetServiceStatsAsync(
+        string serviceId, string routingTier, int take, CancellationToken ct);
 }
 
 /// <summary>

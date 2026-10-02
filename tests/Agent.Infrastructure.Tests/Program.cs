@@ -581,5 +581,32 @@ Console.WriteLine("== IntentOverride 写任务判定（§14-3w 直连 large） =
     Check("纯打印无语境 → 非写任务",
         !Wr("打印 hello"));
 }
+// ── 数据闭环：RoutingIntelligence 调权阈值（保守三条件）──
+Console.WriteLine("== 数据闭环 RoutingIntelligence（历史表现回流调权） ==");
+{
+    bool Suggest(Agent.Infrastructure.Routing.ServiceStats cand,
+                 Agent.Infrastructure.Routing.ServiceStats cur,
+                 out string? reason)
+        => Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDowngrade(
+            cand, cur, minSamples: 3, minSuccessRate: 0.6, out reason);
+
+    // 1) 样本不足 → 不降级
+    Check("样本不足（2 条）→ 不降级",
+        !Suggest(new(2, 2, 50_000), new(1, 1, 600_000), out _));
+    // 2) 成功率低 → 不降级
+    Check("成功率低（3 条 1 成功）→ 不降级",
+        !Suggest(new(3, 1, 50_000), new(3, 3, 600_000), out _));
+    // 3) 不省时（candidate 平均 ≥ current 平均）→ 不降级
+    Check("不省时 → 不降级",
+        !Suggest(new(4, 3, 700_000), new(4, 3, 600_000), out _));
+    // 4) 达标（样本足 + 高成功率 + 显著省时）→ 降级
+    Check("达标 → 降级",
+        Suggest(new(5, 4, 80_000), new(5, 4, 600_000), out var reason4)
+        && reason4!.Contains("成功率"));
+    // 5) 达标且当前无历史 → 降级
+    Check("当前无历史 + 候选达标 → 降级",
+        Suggest(new(4, 3, 80_000), new(0, 0, 0), out _));
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

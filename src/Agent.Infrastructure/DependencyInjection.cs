@@ -81,7 +81,8 @@ public static class DependencyInjection
             var classifier = sp.GetRequiredService<IIntentClassifier>();
             var logger = sp.GetRequiredService<ILogger<ModelRouter>>();
             var opts = sp.GetRequiredService<AgentOptions>();
-            return new ModelRouter(rules, classifier, logger, opts);
+            var metrics = sp.GetRequiredService<IMetricsCollector>();
+            return new ModelRouter(rules, classifier, logger, opts, metrics);
         });
 
         // ─────────── 【关键】工具（少了这几行就报这个错） ───────────

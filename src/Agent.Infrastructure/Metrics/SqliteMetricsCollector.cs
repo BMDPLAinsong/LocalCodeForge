@@ -203,6 +203,39 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
             AvgValidatorMs: reader.IsDBNull(7) ? 0 : reader.GetDouble(7));
     }
 
+    /// <summary>按服务+路由层级聚合最近 N 条（数据闭环输入）。</summary>
+    public async Task<Agent.Infrastructure.Routing.ServiceStats> GetServiceStatsAsync(
+        string serviceId, string routingTier, int take, CancellationToken ct)
+    {
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS ok_count,
+                   AVG(total_ms) AS avg_ms
+            FROM (
+                SELECT * FROM task_metrics
+                WHERE service_id = $service AND routing_tier = $tier
+                ORDER BY started_at DESC
+                LIMIT $take
+            );
+        """;
+        cmd.Parameters.AddWithValue("$service", serviceId);
+        cmd.Parameters.AddWithValue("$tier", routingTier);
+        cmd.Parameters.AddWithValue("$take", take);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return new Agent.Infrastructure.Routing.ServiceStats(0, 0, 0);
+
+        return new Agent.Infrastructure.Routing.ServiceStats(
+            TotalCount: reader.IsDBNull(0) ? 0 : reader.GetInt32(0),
+            SuccessCount: reader.IsDBNull(1) ? 0 : reader.GetInt32(1),
+            AvgTotalMs: reader.IsDBNull(2) ? 0 : reader.GetDouble(2));
+    }
+
     // ─────────── 辅助 ───────────
 
     private static async Task<IReadOnlyList<TaskMetric>> ReadAllAsync(SqliteCommand cmd, CancellationToken ct)
