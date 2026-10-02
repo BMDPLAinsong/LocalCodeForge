@@ -9,7 +9,6 @@ using Agent.Core.Abstractions;
 using Agent.Core.Models;
 using Agent.Infrastructure.Metrics;
 using Agent.Infrastructure.Memory;
-using Agent.Infrastructure.Ollama;
 using Agent.Infrastructure.Orchestration;
 using Agent.Infrastructure.Project;
 using Agent.Infrastructure.Quality;
@@ -158,10 +157,6 @@ public static class DependencyInjection
         });
 
         // ─────────── 主循环 ───────────
-        // 【单模型三角色】任务粒度清场：每任务开始 stop law-* 30B，保证单驻（防多 tag 内存爆）
-        services.AddSingleton<OllamaStopService>(sp =>
-            new OllamaStopService(sp.GetRequiredService<AgentOptions>(),
-                                  sp.GetRequiredService<ILogger<OllamaStopService>>()));
         // AgentLoop 用装饰器包装
         services.AddSingleton<AgentLoop>();
         services.AddSingleton<IAgentLoop>(sp =>

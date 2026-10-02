@@ -1040,5 +1040,33 @@ Console.WriteLine("== CodeAnalyzerTool（确定性符号索引） ==");
     Directory.Delete(anDir, true);
 }
 
+// ── 单模型三角色：请求级温度映射（GetEndpoint + GetEffectiveTemperature） ──
+Console.WriteLine("== 单模型三角色温度注入 ==");
+{
+    var opts = new Agent.Core.Models.AgentOptions(); // 默认：small 0.3 / large 0.7 / agent_pro 0.5 / 全局 0.2
+
+    // 端点映射
+    Check("GetEndpoint small", opts.GetEndpoint("small") == opts.Small);
+    Check("GetEndpoint large", opts.GetEndpoint("large") == opts.Large);
+    Check("GetEndpoint agent_pro", opts.GetEndpoint("agent_pro") == opts.AgentPro);
+    Check("GetEndpoint classifier", opts.GetEndpoint("classifier") == opts.Classifier);
+    Check("GetEndpoint 未知 → null", opts.GetEndpoint("unknown") is null);
+
+    // 生效温度：端点显式配置优先
+    Check("small 温度 0.3", Math.Abs(opts.GetEffectiveTemperature("small") - 0.3) < 1e-9);
+    Check("large 温度 0.7", Math.Abs(opts.GetEffectiveTemperature("large") - 0.7) < 1e-9);
+    Check("agent_pro 温度 0.5", Math.Abs(opts.GetEffectiveTemperature("agent_pro") - 0.5) < 1e-9);
+
+    // 单模型三角色核心：三角色指向同一 tag（默认配置）
+    var unified = new Agent.Core.Models.AgentOptions();
+    Check("三角色同 tag", unified.Small.Model == unified.Large.Model
+        && unified.Large.Model == unified.AgentPro.Model && unified.Small.Model == "law-unified");
+
+    // 未配置端点温度 → 回退全局
+    opts.Large = new Agent.Core.Models.ModelEndpoint { Model = "x", Temperature = null };
+    Check("端点温度 null → 全局回退", Math.Abs(opts.GetEffectiveTemperature("large") - opts.Temperature) < 1e-9);
+    Check("未知服务 → 全局回退", Math.Abs(opts.GetEffectiveTemperature("unknown") - opts.Temperature) < 1e-9);
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

@@ -26,42 +26,45 @@ public sealed class AgentOptions
     };
 
     /// <summary>
-    /// 小模型端点（law-small：30B Custom Model，temp 0.3，单文件/轻任务确定性优先）。
+    /// 小模型端点（law-unified：30B Custom Model，请求级 Temperature=0.3 确定性优先）。
     /// 承担 SimpleQA / CodeGenerate / FileProcess 三类任务的生成。
-    /// 单模型三角色：small/large/agent_pro 共用同一底层 30B，Modelfile 各自定制，运行时任务粒度清场单驻。
+    /// 单模型三角色：small/large/agent_pro 共用同一 tag，角色参数由请求级 options 注入。
     /// </summary>
     public ModelEndpoint Small { get; set; } = new()
     {
         Provider = "ollama",
-        Model = "law-small",
+        Model = "law-unified",
         Endpoint = "http://localhost:11434",
-        ApiKey = "ollama"
+        ApiKey = "ollama",
+        Temperature = 0.3
     };
 
     /// <summary>
-    /// 大模型端点（law-large：30B Custom Model，temp 0.7，复杂推理/多文件/规划；
+    /// 大模型端点（law-unified：30B Custom Model，请求级 Temperature=0.7 探索；
     /// 云端 DashScope 仅预留兜底，当前不使用云端）。
     /// 承担 Search / ComplexReason / Unknown 三类任务。
     /// </summary>
     public ModelEndpoint Large { get; set; } = new()
     {
         Provider = "ollama",
-        Model = "law-large",
+        Model = "law-unified",
         Endpoint = "http://localhost:11434",
-        ApiKey = "ollama"
+        ApiKey = "ollama",
+        Temperature = 0.7
     };
 
     /// <summary>
-    /// Agent 专用端点（law-agentpro：30B Custom Model，temp 0.5，工程理解中介；
-    /// 由 4B 升级，补齐工程理解能力短板）。
+    /// Agent 专用端点（law-unified：30B Custom Model，请求级 Temperature=0.5 居中，
+    /// 工程理解中介）。
     /// 承担复杂 Agent 任务：多文件项目、探索性需求、需要规划的任务。
     /// </summary>
     public ModelEndpoint AgentPro { get; set; } = new()
     {
         Provider = "ollama",
-        Model = "law-agentpro",
+        Model = "law-unified",
         Endpoint = "http://localhost:11434",
-        ApiKey = "ollama"
+        ApiKey = "ollama",
+        Temperature = 0.5
     };
 
     // ─────────── 路由配置 ───────────
@@ -97,6 +100,25 @@ public sealed class AgentOptions
     /// 采样温度。写代码建议低一些。
     /// </summary>
     public double Temperature { get; set; } = 0.2;
+
+    /// <summary>
+    /// 按服务角色取模型端点（small / large / agent_pro / classifier）。
+    /// 单模型三角色方案：各端点可配置不同 Temperature，请求时按当前服务注入。
+    /// </summary>
+    public ModelEndpoint? GetEndpoint(string serviceId) => serviceId switch
+    {
+        "small" => Small,
+        "large" => Large,
+        "agent_pro" => AgentPro,
+        "classifier" => Classifier,
+        _ => null
+    };
+
+    /// <summary>
+    /// 按服务角色取生效温度：端点显式配置优先，未配置回退全局 Temperature。
+    /// </summary>
+    public double GetEffectiveTemperature(string serviceId) =>
+        GetEndpoint(serviceId)?.Temperature ?? Temperature;
 
     // ─────────── Prompt ───────────
 
@@ -157,4 +179,11 @@ public sealed class ModelEndpoint
     /// API Key。仅 OpenAI 兼容模式需要。Ollama 模式填任意非空字符串。
     /// </summary>
     public string ApiKey { get; set; } = "";
+
+    /// <summary>
+    /// 请求级采样温度（单模型三角色方案的运行时注入参数）。
+    /// null = 未配置，回退 AgentOptions.Temperature 全局值；
+    /// 非 null = 请求时以 OpenAIPromptExecutionSettings.Temperature 覆盖 Modelfile 默认。
+    /// </summary>
+    public double? Temperature { get; set; }
 }

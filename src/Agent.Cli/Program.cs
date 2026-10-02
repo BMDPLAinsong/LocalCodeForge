@@ -39,35 +39,38 @@ internal class Program
                 ApiKey = "ollama"
             },
 
-            // 小模型：law-small（30B Custom Model，temp 0.3，单文件/轻任务确定性优先）
-            // 单模型三角色：small/large/agent_pro 共用同一底层 30B，由 Modelfile 各自定制参数；
-            // 运行时靠任务粒度清场（OllamaStopService）保证单驻，磁盘 blob 共享不额外拉取。
+            // 单模型三角色：small/large/agent_pro 共用一个 law-unified（30B Custom Model），
+            // 不额外拉取模型（磁盘/内存各一份常驻）；角色差异由请求级 options 运行时注入
+            // （Temperature：small 0.3 确定性 / large 0.7 探索 / agent_pro 0.5 居中）。
+            // 小模型角色：单文件/轻任务，确定性优先
             Small = new ModelEndpoint
             {
                 Provider = "ollama",
-                Model = "law-small",
+                Model = "law-unified",
                 Endpoint = "http://localhost:11434",
-                ApiKey = "ollama"
+                ApiKey = "ollama",
+                Temperature = 0.3
             },
 
-            // 大模型：law-large（30B Custom Model，temp 0.7，复杂推理/多文件/规划）
+            // 大模型角色：复杂推理/多文件/规划（温度最高，保持探索）
             // 云端 DashScope 仅预留兜底（未来可选），当前不使用云端。
             Large = new ModelEndpoint
             {
                 Provider = "ollama",
-                Model = "law-large",
+                Model = "law-unified",
                 Endpoint = "http://localhost:11434",
-                ApiKey = "ollama"
+                ApiKey = "ollama",
+                Temperature = 0.7
             },
 
-            // AgentPro：law-agentpro（30B Custom Model，temp 0.5，工程理解中介）
-            // 由 4B 升级为 30B：补齐工程理解能力短板（此前 4B 成功率 35%）
+            // AgentPro 角色：工程理解中介（温度居中）
             AgentPro = new ModelEndpoint
             {
                 Provider = "ollama",
-                Model = "law-agentpro",
+                Model = "law-unified",
                 Endpoint = "http://localhost:11434",
-                ApiKey = "ollama"
+                ApiKey = "ollama",
+                Temperature = 0.5
             },
 
             EnableRouting = true,
