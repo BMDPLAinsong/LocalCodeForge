@@ -18,13 +18,15 @@ public sealed class EditFileTool : AgentToolBase
     private readonly string _workspaceRoot;
     private readonly string? _projectRoot;
     private readonly bool _projectWriteEnabled;
+    private readonly string _taskId;
 
     /// <summary>构造函数。</summary>
-    public EditFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false)
+    public EditFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
         _projectWriteEnabled = projectWriteEnabled;
+        _taskId = string.IsNullOrWhiteSpace(taskId) ? "default" : taskId;
     }
 
     /// <summary>工具名。</summary>
@@ -83,10 +85,10 @@ public sealed class EditFileTool : AgentToolBase
         if (!insideWorkspace && !insideProject)
             return "错误：路径越界。";
 
-        // 工程感知 P1：修改工程根内文件前自动备份（可 rollback 恢复）
+        // 工程感知 P1：修改工程根内文件前自动备份（可 rollback 恢复）——P-B 按任务隔离
         if (insideProject)
         {
-            BackupService.Backup(_workspaceRoot, fullPath, _projectRoot!);
+            BackupService.Backup(_workspaceRoot, fullPath, _projectRoot!, _taskId);
         }
 
         // 工程只读提示：工程模式未授权时，若相对路径在工程根内存在对应文件 → 拒绝并提示
@@ -117,7 +119,8 @@ public sealed class EditFileTool : AgentToolBase
             {
                 var relPath = Path.GetRelativePath(_projectRoot!, fullPath);
                 var backupHit = BackupService.ListBackups(_workspaceRoot)
-                    .FirstOrDefault(b => string.Equals(b.Rel, relPath, StringComparison.OrdinalIgnoreCase));
+                    .FirstOrDefault(b => string.Equals(b.TaskId, _taskId, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(b.Rel, relPath, StringComparison.OrdinalIgnoreCase));
                 if (!string.IsNullOrEmpty(backupHit.Full))
                 {
                     return $"错误：在 {relative} 中找不到 old_string，且该文件自最近备份（{backupHit.Stamp}）后内容已变化" +

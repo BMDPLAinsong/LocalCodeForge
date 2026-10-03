@@ -102,6 +102,8 @@ internal class Program
         var workspace = Path.Combine(runsRoot, runName);
         Directory.CreateDirectory(workspace);
 
+        string? lastTaskId = null; // 手动 rollback 命令作用域：最近一次任务的 taskId（P-B）
+
         // SQLite 数据库：所有 run 共用一个
         var dbPath = Path.Combine(baseDir, "workspace", "sessions.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
@@ -398,25 +400,47 @@ internal class Program
                 var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length < 2)
                 {
-                    Console.WriteLine("可用备份：");
+                    Console.WriteLine("可用备份（taskId / 时间戳 / 文件）：");
                     var backups = BackupService.ListBackups(workspace);
                     if (backups.Count == 0)
                         Console.WriteLine("  (无备份)");
                     foreach (var b in backups.Take(20))
-                        Console.WriteLine($"  [{b.Stamp}] {b.Rel}");
-                    Console.WriteLine("用法：rollback 恢复本任务全部备份；rollback <相对路径> 恢复单个文件最近一次备份。");
+                        Console.WriteLine($"  [{b.TaskId}/{b.Stamp}] {b.Rel}");
+                    Console.WriteLine("用法：rollback all 恢复最近任务全部备份；rollback --dry-run 预览（不执行）；rollback <相对路径> 恢复最近任务该文件最近备份。");
                     continue;
                 }
-                if (parts[1].Equals("all", StringComparison.OrdinalIgnoreCase))
+                if (parts[1].Equals("all", StringComparison.OrdinalIgnoreCase) ||
+                    parts[1].Equals("--dry-run", StringComparison.OrdinalIgnoreCase))
                 {
-                    var n = BackupService.RollbackTask(workspace, options.ProjectRoot);
-                    Console.WriteLine($"已回滚全部：{n} 个文件恢复到最近备份。");
+                    var dryRun = parts[1].Equals("--dry-run", StringComparison.OrdinalIgnoreCase);
+                    if (string.IsNullOrEmpty(lastTaskId))
+                    {
+                        Console.WriteLine("本会话尚无任务（无备份作用域）。");
+                        continue;
+                    }
+                    if (dryRun)
+                    {
+                        var (restoreTargets, removeTargets) = BackupService.DryRunRollbackTask(workspace, options.ProjectRoot, lastTaskId);
+                        Console.WriteLine($"[dry-run] 将恢复 {restoreTargets.Count} 个文件（最早备份=任务前状态）：");
+                        foreach (var r in restoreTargets) Console.WriteLine($"  恢复 {r}");
+                        Console.WriteLine($"[dry-run] 将删除 {removeTargets.Count} 个新建文件：");
+                        foreach (var r in removeTargets) Console.WriteLine($"  删除 {r}");
+                        Console.WriteLine("（未执行任何改动；确认后 rollback all 生效）");
+                        continue;
+                    }
+                    var n = BackupService.RollbackTask(workspace, options.ProjectRoot, lastTaskId);
+                    Console.WriteLine($"已回滚全部：{n} 个文件恢复到最早备份（任务前状态）。");
                     continue;
                 }
                 var rel = string.Join(' ', parts.Skip(1)).Trim();
-                var dest = BackupService.Rollback(workspace, rel, options.ProjectRoot);
+                if (string.IsNullOrEmpty(lastTaskId))
+                {
+                    Console.WriteLine("本会话尚无任务（无备份作用域）。");
+                    continue;
+                }
+                var dest = BackupService.Rollback(workspace, rel, options.ProjectRoot, lastTaskId);
                 Console.WriteLine(dest is null
-                    ? $"没有找到 {rel} 的备份。"
+                    ? $"没有找到 {rel} 的备份（最近任务 {lastTaskId}）。"
                     : $"已回滚：{dest}");
                 continue;
             }
@@ -428,14 +452,15 @@ internal class Program
             // 任务目录 task_<id> 不再创建（避免空壳目录误导 list_dir），
             // taskId 仅作为记忆归档溯源（source=task_<id>）。
             var taskId = Guid.NewGuid().ToString("N")[..8];
+            lastTaskId = taskId; // 手动 rollback 命令作用域（恢复最近任务备份）
 
             Console.ForegroundColor = ConsoleColor.DarkGray;
             Console.WriteLine($"[工作目录] {Path.GetFileName(workspace)}（任务归属 task_{taskId}）");
             Console.ResetColor();
 
-            // 【关键修复】为每个任务创建独立 DI 容器（工具绑定 run 根）
+            // 【关键修复】为每个任务创建独立 DI 容器（工具绑定 run 根）——P-B 工具层注入 taskId 隔离备份
             var taskServices = new ServiceCollection();
-            taskServices.AddAgent(options, workspace, dbPath, options.ProjectRoot, options.ProjectWriteEnabled);
+            taskServices.AddAgent(options, workspace, dbPath, options.ProjectRoot, options.ProjectWriteEnabled, taskId);
             var taskProvider = taskServices.BuildServiceProvider();
 
             if (TaskClassifier.ShouldOrchestrate(input))
@@ -455,12 +480,12 @@ internal class Program
                     RenderEvent(evt);
                 }
                 ArchiveTask(taskProvider, input, taskId, "orchestrator", orchErrors, orchAnswer);
-                // 【P0-1】工程可写模式任务失败 → 自动回滚工程改动（恢复备份 + 清理新建文件）
+                // 【P0-1】工程可写模式任务失败 → 自动回滚工程改动（P-B：仅回滚本任务）
                 if (orchAnswer is null && options.ProjectRoot is not null)
-                    AutoRollbackOnFailure(workspace, options.ProjectRoot);
-                // 【H1】成功收尾清理 .new 标记：防止跨任务残留导致后续失败任务误删本任务新建文件
+                    AutoRollbackOnFailure(workspace, options.ProjectRoot, taskId);
+                // 【P-B】成功收尾清理本任务备份与 .new 标记（防跨任务残留误删）
                 else if (options.ProjectRoot is not null)
-                    BackupService.ClearNewMarkers(workspace);
+                    BackupService.ClearNewMarkers(workspace, taskId);
             }
             else
             {
@@ -477,12 +502,12 @@ internal class Program
                     RenderEvent(evt);
                 }
                 ArchiveTask(taskProvider, input, taskId, "agent", loopErrors, loopAnswer);
-                // 【P0-1】工程可写模式任务失败 → 自动回滚工程改动
+                // 【P0-1】工程可写模式任务失败 → 自动回滚工程改动（P-B：仅回滚本任务）
                 if (loopAnswer is null && options.ProjectRoot is not null)
-                    AutoRollbackOnFailure(workspace, options.ProjectRoot);
-                // 【H1】成功收尾清理 .new 标记（防跨任务误删）
+                    AutoRollbackOnFailure(workspace, options.ProjectRoot, taskId);
+                // 【P-B】成功收尾清理本任务备份与 .new 标记（防跨任务残留误删）
                 else if (options.ProjectRoot is not null)
-                    BackupService.ClearNewMarkers(workspace);
+                    BackupService.ClearNewMarkers(workspace, taskId);
             }
         }
     }
@@ -511,14 +536,14 @@ internal class Program
 
     /// <summary>
     /// 【P0-1】工程可写模式任务失败后的自动回滚：
-    /// 恢复备份的已存在文件 + 删除本任务新建的工程文件（.backup/.new 标记追踪）。
+    /// 恢复备份的已存在文件 + 删除本任务新建的工程文件（P-B：仅回滚本 taskId 作用域）。
     /// 纯确定性文件操作，无模型调用；失败不抛（回滚尽力而为）。
     /// </summary>
-    static void AutoRollbackOnFailure(string workspace, string projectRoot)
+    static void AutoRollbackOnFailure(string workspace, string projectRoot, string taskId)
     {
         try
         {
-            var (restored, removed) = BackupService.RollbackTaskFull(workspace, projectRoot);
+            var (restored, removed) = BackupService.RollbackTaskFull(workspace, projectRoot, taskId);
             if (restored > 0 || removed > 0)
             {
                 Console.ForegroundColor = ConsoleColor.Yellow;

@@ -11,18 +11,20 @@ using Agent.Infrastructure.Project;
 /// </summary>
 public sealed class WriteFileTool : AgentToolBase
 {
-    // 工作区根目录 + 工程根（可选）+ 工程可写授权（P1）
+    // 工作区根目录 + 工程根（可选）+ 工程可写授权（P1）+ 任务归属（P-B 备份/标记隔离）
     private readonly string _workspaceRoot;
     private readonly string? _projectRoot;
     private readonly bool _projectWriteEnabled;
+    private readonly string _taskId;
 
     /// <summary>构造函数。</summary>
-    public WriteFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false)
+    public WriteFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null)
     {
         // 规范化
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
         _projectWriteEnabled = projectWriteEnabled;
+        _taskId = string.IsNullOrWhiteSpace(taskId) ? "default" : taskId;
     }
 
     /// <summary>工具名。</summary>
@@ -130,16 +132,16 @@ public sealed class WriteFileTool : AgentToolBase
             }
         }
 
-        // 工程感知 P1：写工程根内已存在文件前自动备份（可 rollback 恢复）
+        // 工程感知 P1：写工程根内已存在文件前自动备份（可 rollback 恢复）——P-B 按任务隔离
         if (insideProject && File.Exists(fullPath))
         {
-            BackupService.Backup(_workspaceRoot, fullPath, _projectRoot!);
+            BackupService.Backup(_workspaceRoot, fullPath, _projectRoot!, _taskId);
         }
-        // 【P0-1】工程可写模式写【新建】工程文件 → 标记 .backup/.new/<rel>，
+        // 【P0-1】工程可写模式写【新建】工程文件 → 标记 .backup/<taskId>/.new/<rel>，
         // 任务失败自动回滚时删除这些新文件（备份只覆盖已存在文件，新文件需单独追踪）。
         else if (insideProject && _projectRoot is not null)
         {
-            BackupService.MarkNewFile(_workspaceRoot, fullPath, _projectRoot);
+            BackupService.MarkNewFile(_workspaceRoot, fullPath, _projectRoot, _taskId);
         }
 
         // 确保父目录存在

@@ -5,24 +5,30 @@ using System.Text;
 namespace Agent.Infrastructure.Project;
 
 /// <summary>
-/// 工程文件备份服务（工程感知 P1）：
-/// 写工具在工程根内修改已存在文件前自动备份（runs/&lt;run&gt;/.backup/&lt;HHmmss&gt;/相对路径），
-/// CLI rollback 命令可恢复最近一次备份。确定性文件操作，无模型调用。
+/// 工程文件备份服务（工程感知 P1 + P-B 任务隔离）：
+/// 写工具在工程根内修改已存在文件前自动备份（runs/&lt;run&gt;/.backup/&lt;taskId&gt;/&lt;stamp&gt;/相对路径），
+/// CLI rollback 命令可恢复备份。确定性文件操作，无模型调用。
+///
+/// 【P-B】taskId 隔离：备份与新文件标记全部按任务归属（.backup/&lt;taskId&gt;/），
+/// 回滚只恢复/清理本任务的文件——跨任务互不干扰（A 成功改动不会被 B 失败回滚误伤）。
+/// 【P-A】回滚取【最早】备份：任务多次写入时最近备份=任务自身中间状态（方向性 bug），
+/// 最早备份=任务第一次写入前=任务前干净状态。
+/// 【P-C】stamp 毫秒粒度（HHmmssfff）：防同秒多次写入覆盖备份。
 /// </summary>
 public static class BackupService
 {
     /// <summary>
-    /// 备份已存在的文件。返回备份路径；文件不存在或失败返回 null。
+    /// 备份已存在的文件：.backup/&lt;taskId&gt;/&lt;stamp&gt;/&lt;rel&gt;。返回备份路径；文件不存在或失败返回 null。
     /// </summary>
-    public static string? Backup(string workspaceRoot, string fullPath, string projectRoot)
+    public static string? Backup(string workspaceRoot, string fullPath, string projectRoot, string taskId)
     {
         if (!File.Exists(fullPath)) return null;
         try
         {
             var rel = Path.GetRelativePath(projectRoot, fullPath);
             var runRoot = GetRunRoot(workspaceRoot); // runs/<run>（任务目录→其父）
-            var stamp = DateTime.Now.ToString("HHmmss");
-            var dest = Path.Combine(runRoot, ".backup", stamp, rel);
+            var stamp = DateTime.Now.ToString("HHmmssfff"); // 【P-C】毫秒防同秒覆盖
+            var dest = Path.Combine(runRoot, ".backup", taskId, stamp, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             File.Copy(fullPath, dest, overwrite: true);
             return dest;
@@ -33,110 +39,82 @@ public static class BackupService
         }
     }
 
-    /// <summary>列出全部备份（按时间倒序）。</summary>
-    public static List<(string Stamp, string Rel, string Full)> ListBackups(string workspaceRoot)
+    /// <summary>列出全部备份（新结构 &lt;taskId&gt;/&lt;stamp&gt;/&lt;rel&gt;，taskId 倒序展示）。返回 (TaskId, Stamp, Rel, Full)。</summary>
+    public static List<(string TaskId, string Stamp, string Rel, string Full)> ListBackups(string workspaceRoot)
     {
-        var result = new List<(string, string, string)>();
+        var result = new List<(string, string, string, string)>();
         var runRoot = GetRunRoot(workspaceRoot);
         var dir = Path.Combine(runRoot, ".backup");
         if (!Directory.Exists(dir)) return result;
 
-        foreach (var stampDir in Directory.GetDirectories(dir)
+        foreach (var taskDir in Directory.GetDirectories(dir)
             .Where(d => !Path.GetFileName(d).Equals(".new", StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(d => d))
         {
-            foreach (var f in Directory.GetFiles(stampDir, "*", SearchOption.AllDirectories))
+            var taskId = Path.GetFileName(taskDir);
+            foreach (var stampDir in Directory.GetDirectories(taskDir).OrderByDescending(d => d))
             {
-                var rel = Path.GetRelativePath(stampDir, f);
-                result.Add((Path.GetFileName(stampDir), rel, f));
+                foreach (var f in Directory.GetFiles(stampDir, "*", SearchOption.AllDirectories))
+                {
+                    var rel = Path.GetRelativePath(stampDir, f);
+                    result.Add((taskId, Path.GetFileName(stampDir), rel, f));
+                }
             }
         }
         return result;
     }
 
     /// <summary>
-    /// 回滚：将相对路径（相对工程根）的最近一次备份恢复到工程根。返回恢复路径；无备份返回 null。
+    /// 任务级回滚：恢复本任务每文件【最早】备份（= 任务第一次写入前 = 任务前干净状态）。
+    /// 【P-A】取最早而非最近：任务多次写入时，最近备份=任务自身中间坏状态（复测实证：
+    /// OrderService.cs 回滚后仍是含重复 Order 类的内容）——回滚必须恢复到任务前。
+    /// 返回恢复的文件数。
     /// </summary>
-    /// <summary>
-    /// 归一化备份根：写工具传入任务目录（runs/&lt;run&gt;/task_xxx），CLI rollback 传入 run 目录（runs/&lt;run&gt;），
-    /// 两者差一层。统一取 run 目录：workspaceRoot 名以 task_ 开头取父目录，否则视为 run 目录本身。
-    /// （§14-3w P1 端到端修复：此前备份落 runs/&lt;run&gt;/.backup，rollback 却找 runs/.backup，差一层找不到。）
-    /// </summary>
-    private static string GetRunRoot(string workspaceRoot)
-    {
-        var name = Path.GetFileName(workspaceRoot);
-        return name.StartsWith("task_", StringComparison.OrdinalIgnoreCase)
-            ? Path.GetDirectoryName(workspaceRoot)!
-            : workspaceRoot;
-    }
-
-    public static string? Rollback(string workspaceRoot, string rel, string projectRoot)
+    public static int RollbackTask(string workspaceRoot, string projectRoot, string taskId)
     {
         var runRoot = GetRunRoot(workspaceRoot);
-        var dir = Path.Combine(runRoot, ".backup");
-        if (!Directory.Exists(dir)) return null;
+        var dir = Path.Combine(runRoot, ".backup", taskId);
+        if (!Directory.Exists(dir)) return 0;
 
-        var candidates = new List<string>();
+        // 每个相对路径取最早 stamp 的备份（升序第一个）→ 恢复（排除 .new 标记目录）
+        var earliestByRel = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var stampDir in Directory.GetDirectories(dir)
             .Where(d => !Path.GetFileName(d).Equals(".new", StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(d => d))
+            .OrderBy(d => d))
         {
-            var f = Path.Combine(stampDir, rel);
-            if (File.Exists(f)) candidates.Add(f);
+            foreach (var f in Directory.GetFiles(stampDir, "*", SearchOption.AllDirectories))
+            {
+                var rel = Path.GetRelativePath(stampDir, f);
+                if (!earliestByRel.ContainsKey(rel))
+                    earliestByRel[rel] = f;
+            }
         }
-        if (candidates.Count == 0) return null;
 
-        var latest = candidates[0];
-        var dest = Path.Combine(projectRoot, rel);
-        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-        File.Copy(latest, dest, overwrite: true);
-        return dest;
+        var restored = 0;
+        foreach (var (rel, backup) in earliestByRel)
+        {
+            var dest = Path.Combine(projectRoot, rel);
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                File.Copy(backup, dest, overwrite: true);
+                restored++;
+            }
+            catch { }
+        }
+        return restored;
     }
 
     /// <summary>
-    /// 【H1】成功收尾清理新建文件标记：任务成功后其改动是预期保留的，.new 标记失去意义。
-    /// 删除整个 .backup/.new 目录——防止跨任务残留：同会话任务 A 成功建文件（标记残留）
-    /// 被任务 B 失败回滚误删（RollbackTaskFull 无任务隔离，遍历全部标记）。
+    /// 任务级完整回滚：恢复本任务最早备份（已存在文件任务前状态）
+    /// + 删除本任务新建的工程文件（.backup/&lt;taskId&gt;/.new 标记）。返回 (恢复数, 清理新文件数)。
     /// </summary>
-    public static void ClearNewMarkers(string workspaceRoot)
+    public static (int Restored, int RemovedNew) RollbackTaskFull(string workspaceRoot, string projectRoot, string taskId)
     {
-        try
-        {
-            var runRoot = GetRunRoot(workspaceRoot);
-            var newDir = Path.Combine(runRoot, ".backup", ".new");
-            if (Directory.Exists(newDir))
-                Directory.Delete(newDir, true);
-        }
-        catch { }
-    }
-
-    /// <summary>
-    /// 【P0-1】标记工程可写模式下新建的工程文件：runs/&lt;run&gt;/.backup/.new/&lt;rel&gt;（空文件）。
-    /// 任务失败自动回滚时删除这些新文件（备份仅覆盖已存在文件，新建文件需单独追踪）。
-    /// </summary>
-    public static void MarkNewFile(string workspaceRoot, string fullPath, string projectRoot)
-    {
-        try
-        {
-            var rel = Path.GetRelativePath(projectRoot, fullPath);
-            var runRoot = GetRunRoot(workspaceRoot);
-            var dest = Path.Combine(runRoot, ".backup", ".new", rel);
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            File.WriteAllText(dest, "");
-        }
-        catch { }
-    }
-
-    /// <summary>
-    /// 【P0-1】任务级完整回滚：恢复本任务全部备份文件（已存在文件上次写入前状态）
-    /// + 删除本任务新建的工程文件（.backup/.new 标记）。返回 (恢复数, 清理新文件数)。
-    /// </summary>
-    public static (int Restored, int RemovedNew) RollbackTaskFull(string workspaceRoot, string projectRoot)
-    {
-        var restored = RollbackTask(workspaceRoot, projectRoot);
+        var restored = RollbackTask(workspaceRoot, projectRoot, taskId);
         var removed = 0;
         var runRoot = GetRunRoot(workspaceRoot);
-        var newDir = Path.Combine(runRoot, ".backup", ".new");
+        var newDir = Path.Combine(runRoot, ".backup", taskId, ".new");
         if (!Directory.Exists(newDir)) return (restored, 0);
 
         foreach (var marker in Directory.GetFiles(newDir, "*", SearchOption.AllDirectories))
@@ -145,7 +123,7 @@ public static class BackupService
             var target = Path.Combine(projectRoot, rel);
             try
             {
-                // 仅删除"本任务新建"的文件：标记存在 + 目标存在且仍未被后续修改（内容为空标记）
+                // 仅删除"本任务新建"的文件：标记存在 + 目标存在
                 if (File.Exists(target))
                 {
                     File.Delete(target);
@@ -161,41 +139,111 @@ public static class BackupService
     }
 
     /// <summary>
-    /// 任务级回滚（多文件修改规划）：恢复本任务全部备份文件。
-    /// 每个文件取最近一次备份（=上次写入前状态）；返回恢复的文件数。
+    /// 【P-B】成功收尾清理：任务成功后其改动是预期保留的，备份与 .new 标记失去意义。
+    /// 删除该任务整个 .backup/&lt;taskId&gt; 目录——跨任务彻底隔离（任务 B 失败回滚只碰 B 自己的目录）。
     /// </summary>
-    public static int RollbackTask(string workspaceRoot, string projectRoot)
+    public static void ClearNewMarkers(string workspaceRoot, string taskId)
+    {
+        try
+        {
+            var runRoot = GetRunRoot(workspaceRoot);
+            var taskDir = Path.Combine(runRoot, ".backup", taskId);
+            if (Directory.Exists(taskDir))
+                Directory.Delete(taskDir, true);
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// 标记工程可写模式下新建的工程文件：.backup/&lt;taskId&gt;/.new/&lt;rel&gt;（空文件）。
+    /// 任务失败自动回滚时删除这些新文件（备份仅覆盖已存在文件，新建文件需单独追踪）。
+    /// </summary>
+    public static void MarkNewFile(string workspaceRoot, string fullPath, string projectRoot, string taskId)
+    {
+        try
+        {
+            var rel = Path.GetRelativePath(projectRoot, fullPath);
+            var runRoot = GetRunRoot(workspaceRoot);
+            var dest = Path.Combine(runRoot, ".backup", taskId, ".new", rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.WriteAllText(dest, "");
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// 【dry-run】预览任务回滚：返回将恢复的文件相对路径列表 + 将删除的新文件相对路径列表（不执行）。
+    /// 供 rollback --dry-run 在回滚前向用户展示影响面。
+    /// </summary>
+    public static (List<string> RestoreTargets, List<string> RemoveTargets) DryRunRollbackTask(
+        string workspaceRoot, string projectRoot, string taskId)
+    {
+        var restoreTargets = new List<string>();
+        var runRoot = GetRunRoot(workspaceRoot);
+        var dir = Path.Combine(runRoot, ".backup", taskId);
+        if (Directory.Exists(dir))
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var stampDir in Directory.GetDirectories(dir)
+                .Where(d => !Path.GetFileName(d).Equals(".new", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(d => d))
+            {
+                foreach (var f in Directory.GetFiles(stampDir, "*", SearchOption.AllDirectories))
+                {
+                    var rel = Path.GetRelativePath(stampDir, f);
+                    if (seen.Add(rel))
+                        restoreTargets.Add(rel);
+                }
+            }
+        }
+
+        var removeTargets = new List<string>();
+        var newDir = Path.Combine(runRoot, ".backup", taskId, ".new");
+        if (Directory.Exists(newDir))
+        {
+            foreach (var marker in Directory.GetFiles(newDir, "*", SearchOption.AllDirectories))
+                removeTargets.Add(Path.GetRelativePath(newDir, marker));
+        }
+        return (restoreTargets, removeTargets);
+    }
+
+    /// <summary>
+    /// 单文件手动回滚（rollback &lt;rel&gt;）：在指定任务作用域内恢复该 rel 的【最近一次】备份
+    /// （撤销最近修改——手动语义，与任务级自动回滚"恢复到任务前"不同）。
+    /// 返回恢复路径；无备份返回 null。
+    /// </summary>
+    public static string? Rollback(string workspaceRoot, string rel, string projectRoot, string taskId)
     {
         var runRoot = GetRunRoot(workspaceRoot);
-        var dir = Path.Combine(runRoot, ".backup");
-        if (!Directory.Exists(dir)) return 0;
+        var dir = Path.Combine(runRoot, ".backup", taskId);
+        if (!Directory.Exists(dir)) return null;
 
-        // 每个相对路径取最近 stamp 的备份 → 恢复
-        var latestByRel = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var stampDir in Directory.GetDirectories(dir)
             .Where(d => !Path.GetFileName(d).Equals(".new", StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(d => d))
         {
-            foreach (var f in Directory.GetFiles(stampDir, "*", SearchOption.AllDirectories))
+            var f = Path.Combine(stampDir, rel);
+            if (File.Exists(f))
             {
-                var rel = Path.GetRelativePath(stampDir, f);
-                if (!latestByRel.ContainsKey(rel))
-                    latestByRel[rel] = f;
-            }
-        }
-
-        var restored = 0;
-        foreach (var (rel, backup) in latestByRel)
-        {
-            var dest = Path.Combine(projectRoot, rel);
-            try
-            {
+                var dest = Path.Combine(projectRoot, rel);
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                File.Copy(backup, dest, overwrite: true);
-                restored++;
+                File.Copy(f, dest, overwrite: true);
+                return dest;
             }
-            catch { }
         }
-        return restored;
+        return null;
+    }
+
+    /// <summary>
+    /// 归一化备份根：写工具传入任务目录（runs/&lt;run&gt;/task_xxx），CLI rollback 传入 run 目录（runs/&lt;run&gt;），
+    /// 两者差一层。统一取 run 目录：workspaceRoot 名以 task_ 开头取父目录，否则视为 run 目录本身。
+    /// （§14-3w P1 端到端修复：此前备份落 runs/&lt;run&gt;/.backup，rollback 却找 runs/.backup，差一层找不到。）
+    /// </summary>
+    private static string GetRunRoot(string workspaceRoot)
+    {
+        var name = Path.GetFileName(workspaceRoot);
+        return name.StartsWith("task_", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetDirectoryName(workspaceRoot)!
+            : workspaceRoot;
     }
 }

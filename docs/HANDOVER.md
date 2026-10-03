@@ -1,6 +1,7 @@
 # LocalAiWorkbench 项目交接文档
 
 > 撰写日期：2026-09-22（基于源码通读 + 真实构建验证 + workspace 运行数据核对）
+> **10-03 回滚安全批次（P-A/P-B/P-C/P-E + 跨任务测试 + dry-run + §12 审计表，用户确认方案后实施）：** **复测发现 5 问题**：P-A🔴 RollbackTask 取"最近备份"→ 任务多次写入时回滚到任务自身中间坏状态（实证 OrderService.cs 回滚后仍含重复 Order 类）；P-B🔴 备份/新文件标记无 taskId 隔离（A 成功改动会被 B 失败回滚误伤）；P-C🟡 stamp 秒级粒度同秒覆盖备份；P-D🟡 30B 增量修改纪律弱（全量重写多类进单文件）；P-E🟡 demo 工程被任务污染（残留 OrderSystem.csproj + 重复类 + 编译失败）。**修复**：BackupService 全面改造——备份/标记/回滚/清理/列出全链按 taskId 隔离（`.backup/<taskId>/<stamp>/<rel>` + `.backup/<taskId>/.new/<rel>`），RollbackTask 取**最早**备份（P-A）、stamp 毫秒粒度（P-C）、ClearNewMarkers 成功收尾清本任务目录、新增 `DryRunRollbackTask`（rollback --dry-run 预览不执行）；WriteFileTool/EditFileTool 构造注入 taskId（每任务 DI 容器）、CLI 回滚命令按最近任务 taskId 作用域 + rollback all/--dry-run。**P-E**：demo 恢复干净（删 OrderSystem.csproj、重写污染的 OrderService.cs、编译运行通过）。**验证**：tests 258→**267/267**（+H1 三断言 + P-A 最早备份 + 跨任务三场景 + dry-run 三断言）；端到端：工程模式失败任务真实回滚 `[回滚] 2 文件恢复、1 新建清理` + 回滚后 demo 编译 0 错误 + `rollback --dry-run` 展示影响面正常。§12 已落"回滚安全交互矩阵（已审计）"。
 > **10-03 隐患批次：H1 回滚跨任务误删修复 + H2 弱验证防护 + H3 工程模式默认严格校验（全面复盘后用户确认）：** **H1（数据丢失级）**：P0-1 的 `.new` 标记无任务隔离/无成功清理——同会话任务 A 成功新建文件（标记残留）会被后续任务 B 失败回滚**误删**。修复：`BackupService.ClearNewMarkers`（删整个 .backup/.new 目录）+ CLI 收尾成功分支调用（成功=改动保留、标记失去意义；失败路径 RollbackTaskFull 本就删标记）。**实证**：H1 跨任务测试 3 条（A 文件保留 / B 文件清理 / 标记清空）。**H2（弱验证）**：循环熔断收尾"工具已验证（read_file）"——写任务在验证未通过时也可能被判完成（P01 实证：模型写完 run_command 失败 → read_file 重复熔断判完成）。修复：AgentLoop 新增 `_everWroteFile`（write/edit/append 成功）+ `_lastRunCommandOk`（run_command 结果）——熔断时若"写过文件且最近 run_command 未成功"→ **判失败**（防假成功）而非假完成；纯读/分析任务（未写文件）维持原熔断收尾。**H3（工程模式默认严格）**：expected 严格校验默认仅在显式开关下生效——工程模式（ProjectRoot 非空）改动验证要求逐项兑现。修复：Orchestrator 严格判定条件 = `StrictOutputVerification || ProjectRoot is not null`（普通生成保持宽松；只读工程任务无 run_command 不触发）。**验证**：构建 0 错误、tests 255→**258/258**（+3 H1 跨任务）；端到端：工程模式失败任务真实触发自动回滚（"[回滚] 3 个文件恢复备份、1 个新建文件已清理"——P0-1 链路实证），回滚后 demo 恢复到含此前成功改动的状态（备份语义正确）；H3 判定由编译 + P0-2 严格单元覆盖（本任务失败为模型修复能力边界：编译错误理解不足致修复输出相同，非本轮回归）。
 > **10-03 复盘改进批次：P0-1 工程失败自动回滚 + P1-1 符号索引增量失效 + P0-2 expected 严格校验开关（用户确认方案后实施）：** **P0-1 工程模式失败自动回滚（数据安全闭环）**：此前 `BackupService.RollbackTask` 仅 CLI 手动 `rollback` 命令，use --write 任务失败后工程改动不还原。新增：`BackupService.MarkNewFile`（工程可写模式写**新建**工程文件 → 标记 `.backup/.new/<rel>`，备份仅覆盖已存在文件、新文件需单独追踪）+ `RollbackTaskFull`（恢复全部备份 + 删除 .new 标记新文件，返回 (Restored, RemovedNew)；stamp 遍历排除 `.new` 防把空标记当备份恢复）；`WriteFileTool` 工程可写分支接 MarkNewFile；CLI 收尾（orchestrator/agent 双路径）任务失败（无 FinalAnswer）且工程可写 → `AutoRollbackOnFailure`（恢复+清理，纯确定性无模型，失败尽力而为不抛）。**实证**：成功任务改动保留不回滚（OrderService.CalculateTotal2 端到端保留）；回滚单元覆盖（恢复备份/清理新文件/.new 不残留）。**P1-1 符号索引增量失效（mtime）**：此前 symbol_index.db 惰性全量重建、文件变更后索引过期。新增：`SymbolIndexer.EnumerateFiles`（抽公共文件枚举，含 8MB/300 上限）+ `BuildFile`（单文件扫描，Build 复用）；表加 `file_mtime` 列（Initialize 迁移 ALTER ADD，旧库兼容）；`BuildAndSave` 全量构建也存真实 mtime（增量对比基准——否则旧行 mtime=0 导致增量全重扫，首版测试实证 2 文件全重扫后修复）；`BuildAndSaveIncremental`（磁盘 mtime vs DB 对比，仅重扫变更/新增文件 + 删除磁盘已消失文件记录，返回 (Total, Rescanned)）；analyze_deps 已有索引时切增量重建。**实证**：改 A.cs 增量仅重扫 1 文件、新符号可见、未变文件保留、删文件记录清除（6 条测试）。**P0-2 expected_output 严格校验开关**：此前宽松校验（任一 stdout 行被 expected 包含即通过）→ "假通过"（预期缺失仍判成功）。新增 `OutputVerifier.IsTaskExpectedOutputStrict`（expected 每一非空行须在 stdout 行集归一化后整行精确匹配，顺序无关）+ `AgentOptions.StrictOutputVerification`（默认 false 保持现状）+ Orchestrator 验证阶段 strict 分支（模板豁免后独立判定）。**实证**：宽松/严格差异（缺行宽松过、严格拒）、空 expected 不适用、顺序无关（4 条测试）。**验证**：构建 0 错误、tests 242→**255/255**（+13：P0-1 回滚 3 + P1-1 增量 6 + P0-2 严格 4）；端到端：工程模式成功任务正常完成且改动保留（P0-1 不误伤）、demo 连续任务索引增量无碍。**P2-1（失败教训自动入库）核查后确认已存在**（CLI `ArchiveTask` + `TaskMemoryExtractor` 任务完成/失败自动写 kind=task 记忆）——本轮无新增。
 > **10-03 复盘执行：① 补 agent_pro 30B 样本 + ② 工程图谱端到端验证（发现并修复 2 个真实缺陷）：** **① 样本补足**：2 个 orchestrator 任务（库存/客户管理系统，各 4 文件 + dotnet run 验证）全过，**30B Planner 累计 5/5 稳定**，agent_pro 30B 时代样本 2→**4**。**② 工程图谱端到端验证（X:\lawcheck_demo 测试工程，use --write 可写模式）**：任务"新增 DiscountService/TaxService 接入 OrderService + 编译运行验证"。**三轮暴露 3 个问题、修复 2 个真实缺陷**：(a) **use 语法**：`use --write <path>`（--write 在前），`use <path> --write` 会被当路径——文档补记；(b) **图谱块缺"已有文件清单"** → Planner 无视工程已有文件、全量重建 5 文件（Order.cs/Program.cs 被重写、Program 逻辑跑偏）→ 编译失败——**修复**：BuildEngineeringGraphBlock 增加"已有文件清单"（EnumerateExistingFiles：工程根递归代码/工程文件、过滤 .git/bin/obj/node_modules/workspace/.vs，前 40 个），提示"已存在勿整体重写、修改用 edit_file 增量"——**修复后实证**：Planner 增量规划生效（graph4 规划仅 2 文件：TaxService.cs 新增 + OrderService.cs 修改）；(c) **RunCommandTool 工程模式 cwd 错误**：工程模式下文件写入工程根但 run_command 仍在 run 目录执行 → `dotnet run` 找不到项目（"找不到要运行的项目"）→ 验证必败——**修复**：RunCommandTool.WorkingDirectory = `_projectRoot ?? _workspaceRoot`（工程模式 cwd 用工程根，dotnet run 自然找到工程 csproj；非工程模式保持沙箱）——**一处修复 AgentLoop + Orchestrator 双路径受益**——**修复后实证**：graph5"OrderService 新增 CalculateTotal（调用 TaxService.CalculateTax + DiscountService.CalculateDiscount）"工程模式任务 **验证通过：dotnet run**，模型正确理解工程已有类型并增量修改（OrderService 注入两个服务字段 + 构造函数 + 方法）。**验证**：构建 0 错误、tests 242/242（图谱块增强无测试变更——已有文件清单为端到端行为）；demo 工程保留为工程模式活样本（含 Order/TaxService/DiscountService/OrderService/Program + csproj）。
@@ -663,6 +664,25 @@ setx DASHSCOPE\_API\_KEY <你的key>   # 改后需重开终端
 6. `git init`**&#x20;纳入版本控制**；为 TaskClassifier / RuleEngine / TryParseToolCallsFromText 补单元测试。
 
 7. **远期**：CLI 之外的前端（AgentEvent 事件流已为 UI 预留；Routing 事件、指标统计都已齐备）。
+
+### §12 附：回滚安全交互矩阵（已审计 · 2026-10-03 P-A/P-B/P-C 批次）
+
+> 工程可写模式（use --write）下，备份/新文件标记按 `taskId` 隔离（`.backup/<taskId>/<stamp>/<rel>` + `.backup/<taskId>/.new/<rel>`），
+> 回滚取【最早】备份（任务前干净状态），成功任务收尾清空本任务备份与标记。
+> 本矩阵覆盖全部跨任务交互场景，均已在 tests 267 项中固化（场景 1/2/3 + P-A + dry-run）。
+
+| # | 任务序列 | 备份/标记行为 | 失败回滚结果 | 测试断言 |
+|---|---|---|---|---|
+| 1 | A 成功新建文件 → B 失败 | A：MarkNewFile(taskA)→成功收尾清 taskA；B：MarkNewFile(taskB) | 只回滚 taskB：B 新建文件删除 | ✅ 场景1（A 文件保留、B 清理） |
+| 2 | A 成功改文件 → A 再改同文件 → B 失败改同文件 | A 备份(taskA) + 成功清 taskA；A 再改新备份(taskA)；B 备份(taskB=含 A 二次改动) | 只回滚 taskB：恢复 taskB 备份=**A 第二次改动保留**（B 不碰 A 的备份） | ✅ 场景2（v2 保留） |
+| 3 | A 失败建 X.cs → B 成功建同名 → C 失败 | A：标记+回滚（删 X.cs 清 taskA）；B：标记+成功清 taskB；C：失败 | 只回滚 taskC：**B 的 X.cs 保留**（C 不误删） | ✅ 场景3（class X2 保留） |
+| 4 | 任务内多次写入同一文件（初写+修复重写） | 每次写入前备份（毫秒 stamp 区分） | RollbackTask 取**最早备份**=任务前干净状态（**P-A 修复**：旧实现取最近备份=任务中间坏状态） | ✅ P-A（恢复 v0 非 v1） |
+| 5 | 同秒多次写入 | stamp=HHmmssfff（毫秒） | 备份不覆盖（**P-C 修复**） | 代码级（毫秒粒度） |
+| 6 | rollback --dry-run | 预览恢复/删除列表不执行 | 展示影响面后人工确认 rollback all | ✅ dry-run（不执行任何改动） |
+
+**已审计结论**：回滚数据安全闭环——任务隔离（P-B）、方向正确（P-A 最早备份）、时间粒度（P-C 毫秒）、跨任务互不误伤（H1/P-B）、预览确认（dry-run）、成功后清理（成功收尾）。
+**已知边界（P-D）**：30B 模型增量修改纪律弱（偶发把多类塞进单文件全量重写）——依赖编译验证拦截 + 回滚兜底，非提示词解决（用户铁律）。
+**端到端实证（10-03）**：工程模式失败任务真实触发 `[回滚] 2 个文件恢复备份、1 个新建文件已清理`，回滚后 demo 编译 0 错误（恢复到任务前干净状态）；`rollback --dry-run` 正确展示恢复/删除列表。
 
 
 

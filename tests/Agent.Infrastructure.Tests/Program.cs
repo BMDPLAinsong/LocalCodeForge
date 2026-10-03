@@ -242,7 +242,7 @@ Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
             .Any(b => b.Rel.Replace('\\', '/').EndsWith("src/A.cs")));
 
     // 6) rollback → 恢复最近一次备份（v3 改前备份了 v2）
-    var restored = Agent.Infrastructure.Project.BackupService.Rollback(ws, "src/A.cs", proj);
+    var restored = Agent.Infrastructure.Project.BackupService.Rollback(ws, "src/A.cs", proj, "default");
     var contentAfterRollback = File.ReadAllText(Path.Combine(proj, "src", "A.cs"));
     Check("rollback 恢复 → 返回恢复路径", restored is not null);
     Check("rollback 恢复 → 内容回到修改前",
@@ -266,7 +266,7 @@ Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
     var backupsRun = Agent.Infrastructure.Project.BackupService.ListBackups(ws2);
     Check("任务目录备份 → run 目录能列出（备份根归一化）",
         backupsRun.Any(b => b.Rel.Replace('\\', '/').EndsWith("src/B.cs")));
-    var restoredB = Agent.Infrastructure.Project.BackupService.Rollback(ws2, "src/B.cs", proj);
+    var restoredB = Agent.Infrastructure.Project.BackupService.Rollback(ws2, "src/B.cs", proj, "default");
     Check("run 目录 rollback → 恢复任务目录产生的备份",
         restoredB is not null && File.ReadAllText(Path.Combine(proj, "src", "B.cs")).Contains("v1"));
 }
@@ -838,8 +838,8 @@ Console.WriteLine("== 任务级回滚（多文件变更单元） ==");
     Check("修改后文件已变更", File.ReadAllText(Path.Combine(proj, "a.cs")).Contains("class A2")
           && File.ReadAllText(Path.Combine(proj, "b.cs")).Contains("class B2"));
 
-    // 任务级回滚（rollback all 语义）
-    var restored = Agent.Infrastructure.Project.BackupService.RollbackTask(work, proj);
+    // 任务级回滚（rollback all 语义）——P-A：取最早备份=任务前状态
+    var restored = Agent.Infrastructure.Project.BackupService.RollbackTask(work, proj, "default");
     Check("任务级回滚恢复 2 个文件", restored == 2);
     Check("a.cs 已恢复", File.ReadAllText(Path.Combine(proj, "a.cs")).Contains("class A { }"));
     Check("b.cs 已恢复", File.ReadAllText(Path.Combine(proj, "b.cs")).Contains("class B { }"));
@@ -1169,15 +1169,15 @@ Console.WriteLine("== P0-1 工程失败自动回滚（RollbackTaskFull） ==");
     File.WriteAllText(orderCs, "class Order { public int Id { get; set; } }");
     var oldContent = File.ReadAllText(orderCs);
 
-    // 模拟：改已存在文件前备份 + 写入
-    Agent.Infrastructure.Project.BackupService.Backup(ws, orderCs, proj);
+    // 模拟：改已存在文件前备份 + 写入（P-B：任务隔离 taskA）
+    Agent.Infrastructure.Project.BackupService.Backup(ws, orderCs, proj, "taskA");
     File.WriteAllText(orderCs, "class Order { public int Id { get; set; } public double Amount { get; set; } }");
     // 模拟：新建工程文件（标记 .new）
     var taxCs = Path.Combine(proj, "TaxService.cs");
     File.WriteAllText(taxCs, "class TaxService { }");
-    Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, taxCs, proj);
+    Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, taxCs, proj, "taskA");
 
-    var (restored, removed) = Agent.Infrastructure.Project.BackupService.RollbackTaskFull(ws, proj);
+    var (restored, removed) = Agent.Infrastructure.Project.BackupService.RollbackTaskFull(ws, proj, "taskA");
     Check("P0-1 恢复已存在文件备份", restored == 1 && File.ReadAllText(orderCs) == oldContent);
     Check("P0-1 清理新建文件", removed == 1 && !File.Exists(taxCs));
     // .new 目录不作为 stamp 目录（ListBackups/RollbackTask 遍历排除）
@@ -1236,7 +1236,7 @@ Console.WriteLine("== P0-2 expected_output 严格校验（IsTaskExpectedOutputSt
     Check("P0-2 宽松/严格差异（宽松通过、严格拒绝）", loose && !strict);
 }
 
-Console.WriteLine("== H1 跨任务误删防护（ClearNewMarkers） ==");
+Console.WriteLine("== H1 跨任务误删防护（ClearNewMarkers，P-B taskId 隔离） ==");
 {
     var baseTmp = Path.Combine(TestTmp, "tests_h1");
     if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
@@ -1245,20 +1245,144 @@ Console.WriteLine("== H1 跨任务误删防护（ClearNewMarkers） ==");
     Directory.CreateDirectory(ws);
     Directory.CreateDirectory(proj);
 
-    // 任务 A 成功：新建 TaxService.cs + 标记 → 成功收尾 ClearNewMarkers（模拟 CLI 成功分支）
+    // 任务 A 成功：新建 TaxService.cs + 标记 → 成功收尾 ClearNewMarkers（模拟 CLI 成功分支，P-B 只清 taskA）
     var taxCs = Path.Combine(proj, "TaxService.cs");
     File.WriteAllText(taxCs, "class TaxService { }");
-    Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, taxCs, proj);
-    Agent.Infrastructure.Project.BackupService.ClearNewMarkers(ws);
+    Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, taxCs, proj, "taskA");
+    Agent.Infrastructure.Project.BackupService.ClearNewMarkers(ws, "taskA");
 
-    // 任务 B（同会话）失败：新建 Broken.cs + 标记 → 回滚
+    // 任务 B（同会话）失败：新建 Broken.cs + 标记 → 回滚（P-B 只回滚 taskB）
     var brokenCs = Path.Combine(proj, "Broken.cs");
     File.WriteAllText(brokenCs, "class Broken { }");
-    Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, brokenCs, proj);
-    var (restored, removed) = Agent.Infrastructure.Project.BackupService.RollbackTaskFull(ws, proj);
+    Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, brokenCs, proj, "taskB");
+    var (restored, removed) = Agent.Infrastructure.Project.BackupService.RollbackTaskFull(ws, proj, "taskB");
     Check("H1 任务 A 成功建的文件保留（不被 B 失败回滚误删）", File.Exists(taxCs));
     Check("H1 任务 B 新建文件被清理", removed == 1 && !File.Exists(brokenCs));
-    Check("H1 回滚后标记清空", !Directory.Exists(Path.Combine(ws, ".backup", ".new")));
+    Check("H1 回滚后 A 的备份目录不残留", !Directory.Exists(Path.Combine(ws, ".backup", "taskA")));
+}
+
+// ── P-A：回滚取最早备份（任务多次写入时最近备份=任务自身中间状态，最早=任务前干净状态） ──
+Console.WriteLine("== P-A 回滚取最早备份（防恢复到任务中间状态） ==");
+{
+    var baseTmp = Path.Combine(TestTmp, "tests_pa");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    var ws = Path.Combine(baseTmp, "run_taskA");
+    var proj = Path.Combine(baseTmp, "proj");
+    Directory.CreateDirectory(ws);
+    Directory.CreateDirectory(proj);
+    var orderCs = Path.Combine(proj, "OrderService.cs");
+    File.WriteAllText(orderCs, "// 任务前：干净内容 v0");
+
+    // 任务内两次写入：初写（备份干净 v0）→ 写入坏内容 v1 → 修复重写（备份坏 v1）→ 写入 v2
+    Agent.Infrastructure.Project.BackupService.Backup(ws, orderCs, proj, "taskX");
+    File.WriteAllText(orderCs, "// 第一次写入（坏中间状态）v1");
+    Agent.Infrastructure.Project.BackupService.Backup(ws, orderCs, proj, "taskX");
+    File.WriteAllText(orderCs, "// 第二次写入（最终坏状态）v2");
+
+    var restored = Agent.Infrastructure.Project.BackupService.RollbackTask(ws, proj, "taskX");
+    Check("P-A 回滚取最早备份（恢复任务前干净状态，非中间状态）",
+        restored == 1 && File.ReadAllText(orderCs).Contains("v0") && !File.ReadAllText(orderCs).Contains("v1"));
+}
+
+// ── 跨任务端到端（P-B 方案 A 三场景）：A 成功改动不被 B 失败回滚误伤 ──
+Console.WriteLine("== 跨任务端到端（taskId 隔离三场景） ==");
+{
+    // 场景 1：A 成功新建 → B 失败 → A 的新文件还在
+    {
+        var baseTmp = Path.Combine(TestTmp, "ts1");
+        if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+        var ws = Path.Combine(baseTmp, "run");
+        var proj = Path.Combine(baseTmp, "proj");
+        Directory.CreateDirectory(ws); Directory.CreateDirectory(proj);
+
+        // A 成功：新建 AFile.cs + 成功收尾清 taskA
+        var aFile = Path.Combine(proj, "AFile.cs");
+        File.WriteAllText(aFile, "class AFile { }");
+        Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, aFile, proj, "taskA");
+        Agent.Infrastructure.Project.BackupService.ClearNewMarkers(ws, "taskA");
+
+        // B 失败：新建 BFile.cs → 回滚 taskB
+        var bFile = Path.Combine(proj, "BFile.cs");
+        File.WriteAllText(bFile, "class BFile { }");
+        Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, bFile, proj, "taskB");
+        var (_, removed) = Agent.Infrastructure.Project.BackupService.RollbackTaskFull(ws, proj, "taskB");
+        Check("场景1 A 新文件保留", File.Exists(aFile));
+        Check("场景1 B 新文件清理", removed == 1 && !File.Exists(bFile));
+    }
+
+    // 场景 2：A 成功 → A 再改同文件 → B 失败 → A 的第二次改动还在
+    {
+        var baseTmp = Path.Combine(TestTmp, "ts2");
+        if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+        var ws = Path.Combine(baseTmp, "run");
+        var proj = Path.Combine(baseTmp, "proj");
+        Directory.CreateDirectory(ws); Directory.CreateDirectory(proj);
+        var file = Path.Combine(proj, "OrderService.cs");
+        File.WriteAllText(file, "// 初始状态 v0");
+
+        // A 成功：第一次改动 v1 → 成功收尾清 taskA（备份随任务成功清除）
+        Agent.Infrastructure.Project.BackupService.Backup(ws, file, proj, "taskA");
+        File.WriteAllText(file, "// A 第一次改动 v1");
+        Agent.Infrastructure.Project.BackupService.ClearNewMarkers(ws, "taskA");
+        // A 再改同文件（第二次改动 v2，同任务 taskA 新备份）
+        Agent.Infrastructure.Project.BackupService.Backup(ws, file, proj, "taskA");
+        File.WriteAllText(file, "// A 第二次改动 v2");
+
+        // B 失败：改同文件（备份=含 v2 的任务前）→ 回滚 taskB（只恢复 B 的备份=v2）
+        Agent.Infrastructure.Project.BackupService.Backup(ws, file, proj, "taskB");
+        File.WriteAllText(file, "// B 的改动（坏）v3");
+        Agent.Infrastructure.Project.BackupService.RollbackTaskFull(ws, proj, "taskB");
+        Check("场景2 A 第二次改动保留（B 回滚不碰 A 的备份）",
+            File.ReadAllText(file).Contains("v2") && !File.ReadAllText(file).Contains("v3"));
+    }
+
+    // 场景 3：A 失败清空 → B 成功新建同名 → C 失败 → B 的文件还在
+    {
+        var baseTmp = Path.Combine(TestTmp, "ts3");
+        if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+        var ws = Path.Combine(baseTmp, "run");
+        var proj = Path.Combine(baseTmp, "proj");
+        Directory.CreateDirectory(ws); Directory.CreateDirectory(proj);
+
+        // A 失败：新建 X.cs + 回滚 taskA（清理 A 的 X.cs 与标记）
+        var xFile = Path.Combine(proj, "X.cs");
+        File.WriteAllText(xFile, "class X { }");
+        Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, xFile, proj, "taskA");
+        Agent.Infrastructure.Project.BackupService.RollbackTaskFull(ws, proj, "taskA");
+        Check("场景3 A 失败回滚删除其 X.cs", !File.Exists(xFile));
+
+        // B 成功：新建同名 X.cs + 成功收尾清 taskB
+        File.WriteAllText(xFile, "class X2 { }");
+        Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, xFile, proj, "taskB");
+        Agent.Infrastructure.Project.BackupService.ClearNewMarkers(ws, "taskB");
+
+        // C 失败：回滚 taskC（不碰 B 的 X.cs）
+        Agent.Infrastructure.Project.BackupService.RollbackTaskFull(ws, proj, "taskC");
+        Check("场景3 B 新建同名文件保留（C 回滚不误删）",
+            File.Exists(xFile) && File.ReadAllText(xFile).Contains("class X2"));
+    }
+}
+
+// ── dry-run：预览回滚（不执行） ──
+Console.WriteLine("== rollback --dry-run 预览（不执行） ==");
+{
+    var baseTmp = Path.Combine(TestTmp, "tsdry");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    var ws = Path.Combine(baseTmp, "run");
+    var proj = Path.Combine(baseTmp, "proj");
+    Directory.CreateDirectory(ws); Directory.CreateDirectory(proj);
+    var file = Path.Combine(proj, "Order.cs");
+    File.WriteAllText(file, "v0");
+    Agent.Infrastructure.Project.BackupService.Backup(ws, file, proj, "taskD");
+    File.WriteAllText(file, "v1");
+    var newFile = Path.Combine(proj, "New.cs");
+    File.WriteAllText(newFile, "class New { }");
+    Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, newFile, proj, "taskD");
+
+    var (restoreTargets, removeTargets) = Agent.Infrastructure.Project.BackupService.DryRunRollbackTask(ws, proj, "taskD");
+    Check("dry-run 列出将恢复的文件", restoreTargets.Count == 1 && restoreTargets[0].Replace('\\', '/').EndsWith("Order.cs"));
+    Check("dry-run 列出将删除的新文件", removeTargets.Count == 1 && removeTargets[0].Replace('\\', '/').EndsWith("New.cs"));
+    Check("dry-run 不执行任何改动", File.ReadAllText(file).Contains("v1") && File.Exists(newFile));
 }
 
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
