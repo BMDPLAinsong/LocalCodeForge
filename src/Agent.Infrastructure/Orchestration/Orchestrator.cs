@@ -107,6 +107,32 @@ public sealed class Orchestrator : IOrchestrator
             yield break;
         }
 
+        // 【任务1 工程增量计划校验】ProjectIncremental 特征任务：Plan 中"已有文件"≥2 判定为
+        // 整体重写倾向（实测：模型把 Order.cs/OrderService.cs/Program.cs 全列入计划再整体重写 →
+        // 写前才被 P-D 拦截，白白跑一轮 Executor）。此处早拦截，走规划失败升级链重新规划；
+        // 合法形态（新增 1 文件 + 至多 1 处接入修改）已有文件数 ≤1，放行。确定性集合运算，非提示词。
+        if (plan is not null && _options.ProjectRoot is not null &&
+            Directory.Exists(_options.ProjectRoot))
+        {
+            var feature = Routing.TaskFeatureClassifier.Classify(userInput);
+            if (feature == Routing.TaskFeatureClassifier.Feature.ProjectIncremental)
+            {
+                var existingSet = EnumerateExistingFiles(_options.ProjectRoot);
+                var planExisting = CheckIncrementalPlanConflicts(
+                    plan.Files.Select(f => f.Path), existingSet);
+                if (planExisting.Count >= 2)
+                {
+                    _logger.LogWarning(
+                        "[工程增量计划校验] 计划含已有文件 {Count} 个（{Files}），判定整体重写倾向，拒绝计划。",
+                        planExisting.Count, string.Join(", ", planExisting.Take(5)));
+                    yield return new AgentEvent.Error(
+                        $"规划失败：工程增量任务不应修改多个已有文件。计划包含已有文件：{string.Join(", ", planExisting.Take(6))}。"
+                        + "本任务应只新增文件（如 ShippingService.cs），已有文件最多允许 1 处接入修改，禁止整体重写。");
+                    yield break;
+                }
+            }
+        }
+
         // 发出规划事件
         yield return new AgentEvent.PlanGenerated(
             plan.Summary,
@@ -904,9 +930,22 @@ public sealed class Orchestrator : IOrchestrator
         }
     }
 
-    /// <summary>工程模式下列举工程代码/配置文件（供规划提示的"已有文件清单"）。</summary>
-    private static IEnumerable<string> EnumerateExistingFiles(string projectRoot)
+    /// <summary>
+    /// 【任务1 工程增量计划校验】判定 Plan 与工程已有文件的冲突（确定性集合运算，非提示词）。
+    /// 返回 Plan 中引用已有文件的路径列表（归一化 / 分隔、大小写不敏感）。
+    /// </summary>
+    public static List<string> CheckIncrementalPlanConflicts(
+        IEnumerable<string> planPaths, IEnumerable<string> existingFiles)
     {
+        var existingSet = existingFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return planPaths
+            .Select(p => p.Replace('\\', '/'))
+            .Where(p => existingSet.Contains(p))
+            .ToList();
+    }
+
+    /// <summary>工程模式下列举工程代码/配置文件（供规划提示的"已有文件清单"）。</summary>
+    private static IEnumerable<string> EnumerateExistingFiles(string projectRoot)    {
         var exts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             ".cs", ".py", ".js", ".ts", ".java", ".go", ".csproj", ".sln", ".slnx", ".fsproj", ".vbproj"

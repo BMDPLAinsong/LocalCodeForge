@@ -821,6 +821,31 @@ Console.WriteLine("== D2 TaskFeatureClassifier + TaskMetricsAggregator ==");
         otherStats is null);
 }
 
+// ── 任务1：工程增量计划校验（Plan vs 已有文件冲突） ──
+Console.WriteLine("== 工程增量计划校验（CheckIncrementalPlanConflicts） ==");
+{
+    var existing = new[] { "Order.cs", "OrderService.cs", "Program.cs", "TaxService.cs", "DiscountService.cs" };
+    // ShippingService 复测典型：Plan 把 3 个已有文件列入 → 冲突 ≥2
+    var conflicts = Agent.Infrastructure.Orchestration.Orchestrator.CheckIncrementalPlanConflicts(
+        new[] { "Order.cs", "OrderService.cs", "Program.cs", "ShippingService.cs" }, existing);
+    Check("计划含 3 个已有文件 → 冲突 3",
+        conflicts.Count == 3 && conflicts.Contains("Order.cs") && conflicts.Contains("ShippingService.cs") == false);
+    // 合法形态：新增 1 + 接入 1
+    var ok = Agent.Infrastructure.Orchestration.Orchestrator.CheckIncrementalPlanConflicts(
+        new[] { "ShippingService.cs", "OrderService.cs" }, existing);
+    Check("新增 1 + 接入 1 → 冲突 1（放行）",
+        ok.Count == 1 && ok[0] == "OrderService.cs");
+    // 全新增
+    var none = Agent.Infrastructure.Orchestration.Orchestrator.CheckIncrementalPlanConflicts(
+        new[] { "ShippingService.cs" }, existing);
+    Check("全新增 → 冲突 0（放行）", none.Count == 0);
+    // 路径大小写/分隔符归一化
+    var caseIns = Agent.Infrastructure.Orchestration.Orchestrator.CheckIncrementalPlanConflicts(
+        new[] { "order.cs", "src\\order.cs" }, existing);
+    Check("大小写/分隔符归一化（order.cs → 冲突）",
+        caseIns.Count == 1 && caseIns[0] == "order.cs");
+}
+
 // ── 工程完成门 + 编辑冲突诊断 ──
 Console.WriteLine("== TestProjectDetector（完成门） ==");
 {
