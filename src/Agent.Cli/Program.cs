@@ -75,7 +75,11 @@ internal class Program
 
             EnableRouting = true,
             MaxSteps = 20,
-            Temperature = 0.2
+            Temperature = 0.2,
+            // 【时代隔离】law-unified 30B 落地时刻（本地）：stats 面板按此拆分 agent_pro 等服务的
+            // 当前时代（30B）与历史时代（4B）成功率，如实反映模型切换后的能力。
+            // 边界实证：5d829c5（三 tag 落地）2026-10-02 22:58 / c1f4069（单 tag）23:12 → 取 23:00。
+            LawUnifiedEpoch = new DateTimeOffset(2026, 10, 2, 23, 0, 0, TimeSpan.FromHours(8))
         };
 
         // 云端兜底预留提示（当前 large 走本地 Ollama，不依赖云端 Key）
@@ -295,7 +299,7 @@ internal class Program
                 else
                 {
                     // 默认：显示汇总 + 最近 5 条
-                    await PrintSummaryAsync(metrics);
+                    await PrintSummaryAsync(metrics, options.LawUnifiedEpoch);
                     await PrintRecentAsync(metrics, 5);
                 }
 
@@ -889,8 +893,7 @@ internal class Program
     }
 
     /// <summary>打印指标汇总。</summary>
-    /// <summary>打印指标汇总。</summary>
-    static async Task PrintSummaryAsync(IMetricsCollector metrics)
+    static async Task PrintSummaryAsync(IMetricsCollector metrics, DateTimeOffset? lawUnifiedEpoch)
     {
         var summary = await metrics.GetSummaryAsync(null, CancellationToken.None);
 
@@ -941,6 +944,23 @@ internal class Program
 
         Console.WriteLine($"  平均修复:  {summary.AvgRetryCount:F2} 次");
         Console.WriteLine($"  平均总耗时: {summary.AvgTotalMs:F0} ms");
+
+        // 【时代隔离】agent_pro：当前时代（30B law-unified）vs 历史时代（4B），如实反映模型能力
+        if (lawUnifiedEpoch is not null)
+        {
+            var (cur, legacy) = await metrics.GetEpochBreakdownAsync("agent_pro", lawUnifiedEpoch.Value, CancellationToken.None);
+            if (cur.TotalCount > 0 || legacy.TotalCount > 0)
+            {
+                var curRate = cur.TotalCount > 0 ? (double)cur.SuccessCount / cur.TotalCount : 0;
+                var legacyRate = legacy.TotalCount > 0 ? (double)legacy.SuccessCount / legacy.TotalCount : 0;
+                Console.Write("  agent_pro 时代隔离: ");
+                Console.ForegroundColor = cur.TotalCount > 0 && curRate >= 0.6 ? ConsoleColor.Green : ConsoleColor.Yellow;
+                Console.Write($"30B 时代 {cur.TotalCount} 条 / {curRate:P0}");
+                Console.ResetColor();
+                Console.Write($"   |   4B 历史 {legacy.TotalCount} 条 / {legacyRate:P0}");
+                Console.WriteLine();
+            }
+        }
 
         if (summary.AvgPlannerMs > 0 || summary.AvgExecutorMs > 0 || summary.AvgValidatorMs > 0)
         {

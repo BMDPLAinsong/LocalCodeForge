@@ -236,6 +236,40 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
             AvgTotalMs: reader.IsDBNull(2) ? 0 : reader.GetDouble(2));
     }
 
+    /// <summary>【时代隔离】按时代边界拆分某服务的表现（当前时代 ≥ epoch vs 历史时代 < epoch）。</summary>
+    public async Task<(Agent.Infrastructure.Routing.ServiceStats Current, Agent.Infrastructure.Routing.ServiceStats Legacy)> GetEpochBreakdownAsync(
+        string serviceId, DateTimeOffset epoch, CancellationToken ct)
+    {
+        var epochUnix = epoch.ToUnixTimeSeconds();
+
+        async Task<Agent.Infrastructure.Routing.ServiceStats> QueryAsync(string cmp)
+        {
+            await using var conn = new SqliteConnection(_connectionString);
+            await conn.OpenAsync(ct);
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS ok_count,
+                       AVG(total_ms) AS avg_ms
+                FROM task_metrics
+                WHERE service_id = $service AND started_at {cmp} $epoch;
+            """;
+            cmd.Parameters.AddWithValue("$service", serviceId);
+            cmd.Parameters.AddWithValue("$epoch", epochUnix);
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+                return new Agent.Infrastructure.Routing.ServiceStats(0, 0, 0);
+            return new Agent.Infrastructure.Routing.ServiceStats(
+                TotalCount: reader.IsDBNull(0) ? 0 : reader.GetInt32(0),
+                SuccessCount: reader.IsDBNull(1) ? 0 : reader.GetInt32(1),
+                AvgTotalMs: reader.IsDBNull(2) ? 0 : reader.GetDouble(2));
+        }
+
+        var current = await QueryAsync(">=");
+        var legacy = await QueryAsync("<");
+        return (current, legacy);
+    }
+
     // ─────────── 辅助 ───────────
 
     private static async Task<IReadOnlyList<TaskMetric>> ReadAllAsync(SqliteCommand cmd, CancellationToken ct)

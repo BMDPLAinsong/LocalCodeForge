@@ -4,12 +4,14 @@
 // ============================================================
 
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Agent.Core.Abstractions;
 using Agent.Core.Models;
 using Agent.Infrastructure.Quality;
 using Agent.Infrastructure.Metrics;
+using Agent.Infrastructure.Project;
 using Agent.Infrastructure.Routing;
 using Microsoft.Extensions.Logging;
 
@@ -58,9 +60,14 @@ public sealed class Orchestrator : IOrchestrator
         {
             // 外部数据任务：附加环境约束后交给 Planner（模型在规划阶段即知环境事实）
             var envConstraint = ExternalTaskDetector.Detect(userInput);
-            plan = await _planner.GeneratePlanAsync(
-                envConstraint is null ? userInput : userInput + "\n\n" + envConstraint,
-                workspaceRoot, ct);
+            var planInput = envConstraint is null ? userInput : userInput + "\n\n" + envConstraint;
+
+            // 【工程图谱增强】工程模式下附加图谱块：类型分布 + 提及文件的改动影响面（多文件规划）
+            var graphBlock = BuildEngineeringGraphBlock(userInput);
+            if (graphBlock is not null)
+                planInput += "\n\n" + graphBlock;
+
+            plan = await _planner.GeneratePlanAsync(planInput, workspaceRoot, ct);
         }
         catch (Exception ex)
         {
@@ -797,6 +804,61 @@ public sealed class Orchestrator : IOrchestrator
     }
 
     // ─────────── 辅助 ───────────
+
+    /// <summary>
+    /// 【工程图谱增强】构建规划提示附加块：类型分布摘要 + 用户输入提及文件的改动影响面（反向依赖）。
+    /// 让 Planner 在多文件修改时知道工程全貌（符号在哪、改谁波及谁），产出跨文件一致的规划。
+    /// 纯确定性（符号索引 + 依赖分析），失败降级为 null 不影响主流程。
+    /// </summary>
+    private string? BuildEngineeringGraphBlock(string userInput)
+    {
+        if (_options.ProjectRoot is null || !Directory.Exists(_options.ProjectRoot))
+            return null;
+        try
+        {
+            var symbols = SymbolIndexer.Build(_options.ProjectRoot);
+            if (symbols.Count == 0)
+                return null;
+
+            var edges = DependencyAnalyzer.Build(_options.ProjectRoot, symbols);
+            var sb = new StringBuilder();
+            sb.AppendLine("【工程图谱（规划参考）】");
+
+            // 类型分布摘要：文件 → 类型符号（前 30 文件，每文件前 6 个）
+            var typesByFile = symbols
+                .Where(s => s.Kind is "class" or "interface" or "enum" or "record" or "struct")
+                .GroupBy(s => s.File)
+                .OrderByDescending(g => g.Count())
+                .Take(30);
+            foreach (var g in typesByFile)
+            {
+                var names = string.Join(", ", g.Select(s => s.Symbol).Distinct().Take(6));
+                sb.AppendLine($"  {g.Key}：{names}");
+            }
+
+            // 用户输入提及的文件 → 改动影响面（反向依赖）
+            var mentioned = Regex.Matches(userInput, @"[\w./\\\-]+\.(?:cs|py|js|ts|java|go)", RegexOptions.IgnoreCase)
+                .Select(m => m.Value.Replace('\\', '/'))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (mentioned.Count > 0)
+            {
+                sb.AppendLine("改动影响面（用户提及文件的反向依赖）：");
+                foreach (var f in mentioned)
+                {
+                    var reverse = DependencyAnalyzer.GetReverseDependencies(f, edges);
+                    if (reverse.Count > 0)
+                        sb.AppendLine($"  {f} 被引用 ← {string.Join(", ", reverse.Take(8))}");
+                }
+            }
+
+            return sb.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// 【B+】记录 orchestrator 内部子调用指标（Planner=agent_pro / Executor=small）。

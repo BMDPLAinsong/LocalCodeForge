@@ -1097,5 +1097,64 @@ Console.WriteLine("== 单模型三角色温度注入 ==");
     Check("未知服务 → 全局回退", Math.Abs(opts.GetEffectiveTemperature("unknown") - opts.Temperature) < 1e-9);
 }
 
+// ── 时代隔离：GetEpochBreakdownAsync（agent_pro 30B vs 4B 如实拆分） ──
+Console.WriteLine("== 时代隔离：GetEpochBreakdownAsync ==");
+{
+    var mdb = Path.Combine(TestTmp, "metrics_epoch_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db");
+    var mc = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(mdb);
+    var epoch = new DateTimeOffset(2026, 10, 2, 15, 30, 0, TimeSpan.FromHours(8));
+    var legacyAt = new DateTimeOffset(2026, 10, 1, 10, 0, 0, TimeSpan.FromHours(8));
+    var currentAt = new DateTimeOffset(2026, 10, 3, 10, 0, 0, TimeSpan.FromHours(8));
+
+    Agent.Core.Models.TaskMetric Msg(string id, bool ok, DateTimeOffset at) => new()
+    {
+        TaskId = id, SessionId = "s", UserInput = "时代测试", Mode = "agent",
+        RoutingTier = "Rule", ServiceId = "agent_pro", RoutingReason = "test",
+        Success = ok, TotalMs = 1000, StartedAt = at, FinishedAt = at
+    };
+    mc.RecordAsync(Msg("t1", true, legacyAt), CancellationToken.None).GetAwaiter().GetResult();
+    mc.RecordAsync(Msg("t2", false, legacyAt), CancellationToken.None).GetAwaiter().GetResult();
+    mc.RecordAsync(Msg("t3", false, legacyAt), CancellationToken.None).GetAwaiter().GetResult();
+    mc.RecordAsync(Msg("t4", true, currentAt), CancellationToken.None).GetAwaiter().GetResult();
+    mc.RecordAsync(Msg("t5", true, currentAt), CancellationToken.None).GetAwaiter().GetResult();
+
+    var (cur, leg) = mc.GetEpochBreakdownAsync("agent_pro", epoch, CancellationToken.None).GetAwaiter().GetResult();
+    Check("30B 时代 2 条", cur.TotalCount == 2);
+    Check("30B 时代全成功", cur.SuccessCount == 2);
+    Check("4B 历史 3 条", leg.TotalCount == 3);
+    Check("4B 历史 1 成功", leg.SuccessCount == 1);
+}
+
+// ── 工程图谱增强：依赖分析（符号引用 → 文件依赖边） ──
+Console.WriteLine("== 工程图谱增强：依赖分析 ==");
+{
+    var proj = Path.Combine(TestTmp, "deps_proj_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(proj);
+    File.WriteAllText(Path.Combine(proj, "Order.cs"),
+        "namespace Demo;\npublic class Order { public int Id { get; set; } }\n");
+    File.WriteAllText(Path.Combine(proj, "OrderService.cs"),
+        "namespace Demo;\npublic class OrderService { public void Process(Order o) { } }\n");
+    File.WriteAllText(Path.Combine(proj, "Program.cs"),
+        "namespace Demo;\nclass Program { static void Main() { var s = new OrderService(); } }\n");
+
+    var symbols = Agent.Infrastructure.Project.SymbolIndexer.Build(proj);
+    Check("符号索引含 Order/OrderService", symbols.Any(s => s.Symbol == "Order") && symbols.Any(s => s.Symbol == "OrderService"));
+    var edges = Agent.Infrastructure.Project.DependencyAnalyzer.Build(proj, symbols);
+    Check("依赖边 OrderService→Order", edges.Any(e => e.File == "OrderService.cs" && e.DependsOnFile == "Order.cs"));
+    Check("依赖边 Program→OrderService", edges.Any(e => e.File == "Program.cs" && e.DependsOnFile == "OrderService.cs"));
+    Check("反向依赖 Order.cs ← OrderService.cs",
+        Agent.Infrastructure.Project.DependencyAnalyzer.GetReverseDependencies("Order.cs", edges).Contains("OrderService.cs"));
+
+    // analyze_deps 工具端到端（惰性建索引）
+    var tool = new Agent.Infrastructure.Tools.DependencyAnalyzerTool(proj, proj,
+        Path.Combine(TestTmp, "sym_epoch_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db"));
+    var json = System.Text.Json.JsonDocument.Parse("{\"path\":\"Order.cs\"}").RootElement;
+    var outText = tool.InvokeAsync(json, CancellationToken.None).GetAwaiter().GetResult();
+    Check("analyze_deps 输出反向依赖", outText.Contains("反向依赖") && outText.Contains("OrderService.cs"));
+    Check("analyze_deps 非工程模式报错",
+        new Agent.Infrastructure.Tools.DependencyAnalyzerTool(proj, null, Path.Combine(TestTmp, "x.db"))
+            .InvokeAsync(json, CancellationToken.None).GetAwaiter().GetResult().Contains("工程模式"));
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

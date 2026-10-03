@@ -97,6 +97,8 @@ public static class DependencyInjection
         services.AddSingleton<IAgentTool>(_ => new CodeAnalyzerTool(workspaceRoot, projectRoot));            // ← 工程理解专项：符号索引
         services.AddSingleton<IAgentTool>(_ => new FindSymbolTool(workspaceRoot, projectRoot,                 // ← 工程图谱：跨文件定位
             Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db")));
+        services.AddSingleton<IAgentTool>(_ => new DependencyAnalyzerTool(workspaceRoot, projectRoot,        // ← 工程图谱增强：依赖分析
+            Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db")));
 
         // ─────────── 【关键】工具注册表（依赖上面的 IAgentTool 集合） ───────────
         services.AddSingleton<IToolRegistry>(sp =>

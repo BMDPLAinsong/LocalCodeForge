@@ -147,6 +147,13 @@ public sealed class AgentOptions
     /// <summary>自动治理的最低命中数（命中数达到该值即使久未用也保留）。</summary>
     public int MemoryPruneMinHits { get; set; } = 1;
 
+    /// <summary>
+    /// 【时代隔离】模型时代切换点（law-unified 30B 落地时刻，本地时间）。
+    /// stats 面板按此拆分 agent_pro 等服务的成功率（当前时代 vs 历史时代）。
+    /// null = 不启用时代拆分。
+    /// </summary>
+    public DateTimeOffset? LawUnifiedEpoch { get; set; }
+
     // ─────────── 工程感知 ───────────
 
     /// <summary>

@@ -263,4 +263,31 @@ public sealed class SymbolIndexStore
         catch { }
         return result;
     }
+
+    /// <summary>读取某工程的全部索引符号（供依赖分析等跨文件计算）。无索引返回空。</summary>
+    public List<SymbolEntry> GetAll(string projectRoot)
+    {
+        var key = Path.GetFullPath(projectRoot);
+        var result = new List<SymbolEntry>();
+        try
+        {
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT symbol, file, line, kind FROM symbol_index
+                WHERE project_root = $k
+                ORDER BY file, line;
+            """;
+            cmd.Parameters.AddWithValue("$k", key);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new SymbolEntry(
+                    reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3)));
+            }
+        }
+        catch { }
+        return result;
+    }
 }
