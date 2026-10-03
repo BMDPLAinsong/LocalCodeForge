@@ -583,6 +583,18 @@ Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==
         !Rc(proj, "python main.py").Contains("越界"));
     Check("沙箱模式：不启用边界检查（现状保持）",
         !Rc(null, "dir C:\\Windows").Contains("越界"));
+
+    // 【D1 衍生】项目名幻觉校验：命令引用的 .csproj 必须存在于工程根
+    File.WriteAllText(Path.Combine(proj, "lawcheck_demo.csproj"), "<Project></Project>");
+    Check("工程模式：dotnet run 无 --project → 放行（项目名校验不误伤）",
+        !Rc(proj, "dotnet run").Contains("不存在于工程根"));
+    Check("工程模式：幻觉项目名（OrderSystem.csproj）→ 拒绝+提示正确项目名",
+        Rc(proj, "dotnet run --project OrderSystem.csproj").Contains("不存在于工程根")
+        && Rc(proj, "dotnet run --project OrderSystem.csproj").Contains("lawcheck_demo.csproj"));
+    Check("工程模式：真实项目名 → 放行",
+        !Rc(proj, "dotnet run --project lawcheck_demo.csproj").Contains("不存在于工程根"));
+    Check("沙箱模式：项目名校验不启用（现状保持）",
+        !Rc(null, "dotnet run --project Whatever.csproj").Contains("不存在于工程根"));
 }
 
 Console.WriteLine("== TaskClassifier 编排判定（§14-3w） ==");

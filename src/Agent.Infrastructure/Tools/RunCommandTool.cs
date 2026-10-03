@@ -73,6 +73,15 @@ public sealed class RunCommandTool : AgentToolBase
             {
                 return boundaryError;
             }
+
+            // 【D1 衍生】项目名幻觉校验：命令中的 .csproj 名必须存在于工程根。
+            // 实测失败：模型乱写 `dotnet run --project OrderSystem.csproj`（工程实际是
+            // lawcheck_demo.csproj）→ "提供的文件路径不存在"。工程化拦截，直击工程增量任务失败。
+            var projError = CheckProjectName(command, _projectRoot);
+            if (projError is not null)
+            {
+                return projError;
+            }
         }
 
         // 提取第一个 token 作为命令名
@@ -275,6 +284,39 @@ public sealed class RunCommandTool : AgentToolBase
             }
         }
 
+        return null;
+    }
+
+    /// <summary>
+    /// 【D1 衍生】项目名幻觉校验：工程模式下，命令中引用的 .csproj 文件名
+    /// 必须存在于工程根。模型常幻觉项目名（如乱写 OrderSystem.csproj），
+    /// 导致 `dotnet run --project Xxx.csproj` 失败——确定性拦截 + 提示正确项目名。
+    /// </summary>
+    private static string? CheckProjectName(string command, string projectRoot)
+    {
+        var projMatches = System.Text.RegularExpressions.Regex.Matches(
+            command, @"[A-Za-z0-9_.\-]+\.csproj", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (projMatches.Count == 0) return null;
+
+        // 工程根实际 csproj 清单（仅顶层，工程结构惯例）
+        var actualNames = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(projectRoot, "*.csproj", SearchOption.TopDirectoryOnly))
+                actualNames.Add(Path.GetFileName(f));
+        }
+        catch { }
+
+        foreach (System.Text.RegularExpressions.Match m in projMatches)
+        {
+            var name = Path.GetFileName(m.Value);
+            if (!actualNames.Contains(name))
+            {
+                var hint = actualNames.Count > 0 ? string.Join(" / ", actualNames) : "(工程根未找到 .csproj)";
+                return $"错误：项目 {name} 不存在于工程根。工程实际项目：{hint}。\n" +
+                       "请使用正确的项目名，或直接运行 dotnet run（不带 --project，由工程根自动定位）。\n退出码：126";
+            }
+        }
         return null;
     }
 
