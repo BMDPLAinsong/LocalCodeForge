@@ -120,6 +120,19 @@ public sealed class WriteFileTool : AgentToolBase
         if (!insideWorkspace && !insideProject)
             return "错误：路径越界。";
 
+        // 【P-D】写前类型冲突检测：工程可写时，新内容定义了工程【其他文件】已有类型 → 拒绝写入。
+        // ShippingService 类任务 3/3 失败根因：模型把已有 class Order 重复定义进 OrderService.cs（CS0101）。
+        // 确定性拦截（正则扫工程已有类型），让模型第 1 次修复即知不该重复定义；非提示词手段。
+        if (insideProject && _projectRoot is not null)
+        {
+            var conflicts = TypeConflictDetector.DetectDuplicateTypes(_projectRoot, fullPath, content);
+            if (conflicts.Count > 0)
+            {
+                return $"错误：检测到类型重复定义：{string.Join("；", conflicts)}。\n" +
+                       $"请勿在 {relative} 中重复定义工程已有类型；如需修改已有类型，请用 edit_file 局部编辑，不要整体重写文件。";
+            }
+        }
+
         // 工程只读提示：工程模式未授权（use 未带 --write）时，
         // 若相对路径在工程根内存在对应文件（模型意图是修改工程文件）→ 拒绝并提示，
         // 避免模型误以为"文件不存在"而写入任务目录产生幽灵文件。

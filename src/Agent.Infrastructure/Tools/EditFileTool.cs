@@ -85,6 +85,18 @@ public sealed class EditFileTool : AgentToolBase
         if (!insideWorkspace && !insideProject)
             return "错误：路径越界。";
 
+        // 【P-D】编辑引入类型定义冲突检测：工程可写时，new_string 定义了工程【其他文件】已有类型 → 拒绝。
+        // 与 write_file 同理（模型可能用 edit_file 引入重复类型定义）；局部编辑本身少见，成本毫秒级。
+        if (insideProject && _projectRoot is not null)
+        {
+            var conflicts = TypeConflictDetector.DetectDuplicateTypes(_projectRoot, fullPath, newStr);
+            if (conflicts.Count > 0)
+            {
+                return $"错误：编辑内容检测到类型重复定义：{string.Join("；", conflicts)}。\n" +
+                       $"请勿在 {relative} 中重复定义工程已有类型；如需修改已有类型，请替换类型内部实现而不是重新定义。";
+            }
+        }
+
         // 工程感知 P1：修改工程根内文件前自动备份（可 rollback 恢复）——P-B 按任务隔离
         if (insideProject)
         {

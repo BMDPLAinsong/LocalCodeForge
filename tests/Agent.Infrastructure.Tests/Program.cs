@@ -266,6 +266,54 @@ Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
     var backupsRun = Agent.Infrastructure.Project.BackupService.ListBackups(ws2);
     Check("任务目录备份 → run 目录能列出（备份根归一化）",
         backupsRun.Any(b => b.Rel.Replace('\\', '/').EndsWith("src/B.cs")));
+
+    // 9) 【P-D】写前类型冲突检测：工程可写时，新内容定义工程其他文件已有类型 → 拒绝写入
+    //    先给工程种下已有类型：Order.cs 定义 class Order（ShippingService 任务失败根因场景）
+    Directory.CreateDirectory(Path.Combine(proj, "src"));
+    File.WriteAllText(Path.Combine(proj, "src", "Order.cs"),
+        "using System;\nclass Order\n{\n    public int Id { get; set; }\n}\n");
+    // 9a) write_file 覆盖已存在文件但新内容重复定义已有类型 → 拒绝（文件不变）
+    var beforeOrderSvc = File.Exists(Path.Combine(proj, "src", "OrderService.cs"))
+        ? File.ReadAllText(Path.Combine(proj, "src", "OrderService.cs")) : null;
+    var pdWrite = W(wRw, "src/OrderService.cs",
+        "using System;\nclass Order\n{\n    public int Id { get; set; }\n}\nclass OrderService\n{\n}\n");
+    Check("P-D write_file 重复定义已有类型 → 拒绝",
+        pdWrite.Contains("类型重复定义") && pdWrite.Contains("Order"));
+    Check("P-D write_file 拒绝 → 目标文件未被写入",
+        beforeOrderSvc == null
+            ? !File.Exists(Path.Combine(proj, "src", "OrderService.cs"))
+            : File.ReadAllText(Path.Combine(proj, "src", "OrderService.cs")) == beforeOrderSvc);
+    // 9b) write_file 新建文件也检测（模型可能新建同名类型文件）→ 拒绝
+    var pdNew = W(wRw, "src/OrderDup.cs",
+        "using System;\nclass Order\n{\n    public int Id { get; set; }\n}\n");
+    Check("P-D write_file 新建文件含已有类型 → 拒绝",
+        pdNew.Contains("类型重复定义"));
+    Check("P-D 新建文件拒绝 → 文件未创建",
+        !File.Exists(Path.Combine(proj, "src", "OrderDup.cs")));
+    // 9c) 目标文件自身已有该类型（partial 场景）→ 不算冲突（扫描排除目标文件）
+    var pdSelf = W(wRw, "src/Order.cs",
+        "using System;\nclass Order\n{\n    public int Id { get; set; }\n    public string? Status { get; set; }\n}\n");
+    Check("P-D 目标文件自身含该类型 → 放行（partial 语义）",
+        pdSelf.Contains("已写入"));
+    // 9d) 无冲突正常写入 → 放行
+    var pdOk = W(wRw, "src/NewService.cs",
+        "using System;\nclass NewService\n{\n    public int Run() => 1;\n}\n");
+    Check("P-D 无冲突写入 → 成功",
+        pdOk.Contains("已写入") && File.Exists(Path.Combine(proj, "src", "NewService.cs")));
+    // 9e) edit_file 引入已有类型定义 → 拒绝
+    var pdEdit = E(eRw, "src/NewService.cs",
+        "class NewService", "class Order\n{\n}\nclass NewService");
+    Check("P-D edit_file 引入已有类型 → 拒绝",
+        pdEdit.Contains("类型重复定义") && pdEdit.Contains("Order"));
+    Check("P-D edit_file 拒绝 → 文件未变",
+        File.ReadAllText(Path.Combine(proj, "src", "NewService.cs")).Contains("Run"));
+    // 9f) TypeConflictDetector 单元：ExtractTypeNames 覆盖五种类型关键字 + 注释/字符串不误报
+    var pdTypes = Agent.Infrastructure.Project.TypeConflictDetector.ExtractTypeNames(
+        "using System;\n// class Fake\nclass Real { }\ninterface IThing { }\nenum Color { Red }\nstruct Point { }\nrecord Person(string Name);\nstring s = \"class InString\";");
+    Check("P-D ExtractTypeNames → 提取 5 类 + 排除注释/字符串",
+        pdTypes.Contains("Real") && pdTypes.Contains("IThing") && pdTypes.Contains("Color")
+        && pdTypes.Contains("Point") && pdTypes.Contains("Person")
+        && !pdTypes.Contains("Fake") && !pdTypes.Contains("InString"));
     var restoredB = Agent.Infrastructure.Project.BackupService.Rollback(ws2, "src/B.cs", proj, "default");
     Check("run 目录 rollback → 恢复任务目录产生的备份",
         restoredB is not null && File.ReadAllText(Path.Combine(proj, "src", "B.cs")).Contains("v1"));

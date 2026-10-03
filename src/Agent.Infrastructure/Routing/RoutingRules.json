@@ -51,23 +51,6 @@
       "priority": 95
     },
     {
-      "name": "complex_cloud",
-      "description": "出现架构等词，走云端",
-      "type": "keyword_any",
-      "keywords": [
-        "架构",
-        "系统设计",
-        "技术选型",
-        "微服务",
-        "分布式",
-        "高并发",
-        "完整项目",
-        "整个项目"
-      ],
-      "target": "large",
-      "priority": 85
-    },
-    {
       "name": "search_keywords",
       "description": "联网搜索类，走云端",
       "type": "keyword_any",
