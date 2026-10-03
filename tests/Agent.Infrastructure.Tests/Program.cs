@@ -737,6 +737,90 @@ Console.WriteLine("== 读任务数据闭环（small → agent_pro 升级判定�
         && r6!.Contains("偏低"));
 }
 
+// ── D2：任务特征分类 + 历史聚合（路由数据校准） ──
+Console.WriteLine("== D2 TaskFeatureClassifier + TaskMetricsAggregator ==");
+{
+    // 分类（确定性关键词）
+    Check("工程增量：在工程中新增类 → ProjectIncremental",
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("在工程中新增一个 ShippingService 类") ==
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ProjectIncremental);
+    Check("工程增量：修改已有文件加方法 → ProjectIncremental",
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("在 OrderService.cs 中新增一个方法") ==
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ProjectIncremental);
+    Check("外部凭据：查天气 → ExternalCredential",
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("写一个获取天气的方法") ==
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ExternalCredential);
+    Check("外部凭据：查 IP 天气 → ExternalCredential",
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("根据IP地址获取天气信息") ==
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ExternalCredential);
+    Check("读/查：读取工程文件 → ReadQuery",
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("读取 Order.cs 的内容") ==
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ReadQuery);
+    Check("多文件：分模型服务入口 → MultiFile",
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("做一个学生管理系统，分模型、服务、入口，多文件组织") ==
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.MultiFile);
+    Check("单文件：写一个 C# 函数 → SingleFile",
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("用 C# 写一个判断奇数偶数的函数") ==
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.SingleFile);
+    Check("其他：纯闲聊 → Other",
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("你好") ==
+        Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.Other);
+
+    // 聚合器：临时 sqlite 造 metrics → 成功率/失败主因
+    var aggDir = Path.Combine(TestTmp, "d2agg_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(aggDir);
+    var aggDb = Path.Combine(aggDir, "metrics.db");
+    using (var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={aggDb}"))
+    {
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            CREATE TABLE task_metrics(
+                task_id TEXT, session_id TEXT, user_input TEXT, mode TEXT, routing_tier TEXT,
+                service_id TEXT, routing_reason TEXT, success INTEGER, is_suspicious INTEGER,
+                retry_count INTEGER, total_ms INTEGER, planner_ms INTEGER, executor_ms INTEGER,
+                validator_ms INTEGER, lint_blocking_errors INTEGER, lint_warning_errors INTEGER,
+                error_summary TEXT, started_at REAL, finished_at REAL)";
+        cmd.ExecuteNonQuery();
+        var ins = conn.CreateCommand();
+        ins.CommandText = @"INSERT INTO task_metrics
+            (user_input, success, total_ms, error_summary) VALUES (@i, @s, @t, @e)";
+        foreach (var (input, ok, ms, err) in new[]
+        {
+            ("在工程中新增一个 ShippingService 类", 0, 120_000, "error CS0101: 重复定义"),
+            ("在工程中修改 OrderService.cs", 0, 150_000, "error CS0101: 重复定义"),
+            ("在工程中新增 TaxService", 0, 90_000, "提供的文件路径不存在"),
+            ("写一个获取天气的方法", 1, 60_000, ""),
+            ("写一个获取天气的方法", 1, 55_000, ""),
+            ("用 C# 写一个判断奇偶的函数", 1, 30_000, ""),
+        })
+        {
+            ins.Parameters.Clear();
+            ins.Parameters.AddWithValue("@i", input);
+            ins.Parameters.AddWithValue("@s", ok);
+            ins.Parameters.AddWithValue("@t", ms);
+            ins.Parameters.AddWithValue("@e", err);
+            ins.ExecuteNonQuery();
+        }
+    }
+    var agg = new Agent.Infrastructure.Routing.TaskMetricsAggregator(aggDb);
+    agg.Load();
+    var projStats = agg.Get(Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ProjectIncremental);
+    Check("聚合：工程增量 3 条 0 成功",
+        projStats is { TotalCount: 3, SuccessCount: 0 });
+    Check("聚合：工程增量失败主因=编译/类型冲突",
+        projStats!.TopFailureCause == "编译/类型冲突");
+    var extStats = agg.Get(Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ExternalCredential);
+    Check("聚合：外部凭据 2 条 2 成功",
+        extStats is { TotalCount: 2, SuccessCount: 2 });
+    var singleStats = agg.Get(Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.SingleFile);
+    Check("聚合：单文件 1 条 1 成功",
+        singleStats is { TotalCount: 1, SuccessCount: 1 });
+    var otherStats = agg.Get(Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.Other);
+    Check("聚合：无其他类样本 → null",
+        otherStats is null);
+}
+
 // ── 工程完成门 + 编辑冲突诊断 ──
 Console.WriteLine("== TestProjectDetector（完成门） ==");
 {

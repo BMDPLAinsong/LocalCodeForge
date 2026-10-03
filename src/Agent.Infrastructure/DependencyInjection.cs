@@ -122,6 +122,16 @@ public static class DependencyInjection
             return new SqliteMetricsCollector(metricsDbPath);
         });
 
+        // ─────────── D2：任务特征类历史表现聚合器（路由数据校准） ───────────
+        // 启动时由 CLI 显式 Load() 一次，供 Orchestrator 重试上限校准 + stats 归因。
+        services.AddSingleton<Routing.TaskMetricsAggregator>(_ =>
+        {
+            var metricsDbPath = Path.Combine(
+                Path.GetDirectoryName(dbPath) ?? ".",
+                "metrics.db");
+            return new Routing.TaskMetricsAggregator(metricsDbPath);
+        });
+
         // ─────────── 工程上下文缓存（工程感知 P2） ───────────
         services.AddSingleton<ProjectContextStore>(_ =>
         {

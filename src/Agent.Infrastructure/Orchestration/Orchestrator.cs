@@ -29,6 +29,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly AgentOptions _options;
     private readonly IMetricsCollector _metrics;   // ← B+：子调用指标（agent_pro/small 样本自动积累）
     private readonly ILogger<Orchestrator> _logger;
+    private readonly Routing.TaskMetricsAggregator? _featureAggregator; // ← D2：特征类历史表现（重试上限校准）
 
     public Orchestrator(
         IPlannerService planner,
@@ -37,7 +38,8 @@ public sealed class Orchestrator : IOrchestrator
         ILintService lint,
         AgentOptions options,
         IMetricsCollector metrics,
-        ILogger<Orchestrator> logger)
+        ILogger<Orchestrator> logger,
+        Routing.TaskMetricsAggregator? featureAggregator = null)
     {
         _planner = planner;
         _executor = executor;
@@ -46,6 +48,7 @@ public sealed class Orchestrator : IOrchestrator
         _options = options;
         _metrics = metrics;
         _logger = logger;
+        _featureAggregator = featureAggregator;
     }
 
     /// <summary>执行一次编排任务。</summary>
@@ -186,7 +189,28 @@ public sealed class Orchestrator : IOrchestrator
         string lastError = "";
         bool success = false;
 
-        while (retries <= _options.ExecutorMaxRetries)
+        // 【D2】重试上限数据校准：特征类历史成功率低（样本 ≥3 且 <50%）→ 收紧到 1 次修复。
+        // 数据依据（D1 归因）：工程增量类任务历史 0 成功（30B 能力边界），3 次重试纯浪费 CPU 推理
+        // （约 9 分钟/任务）；收紧后失败即回滚，不再空转。成功率高/样本不足的特征类保持配置值。
+        var maxRetries = _options.ExecutorMaxRetries;
+        if (_featureAggregator is not null)
+        {
+            var feature = Routing.TaskFeatureClassifier.Classify(userInput);
+            var stats = _featureAggregator.Get(feature);
+            if (stats is not null && stats.TotalCount >= 3 &&
+                (double)stats.SuccessCount / stats.TotalCount < 0.5)
+            {
+                maxRetries = 1;
+                _logger.LogInformation(
+                    "[D2] 特征类 {Feature} 历史成功率 {Rate:P0}（{Ok}/{Total}），重试上限校准 {Default} → {Calibrated}",
+                    Routing.TaskFeatureClassifier.FeatureName(feature),
+                    (double)stats.SuccessCount / stats.TotalCount,
+                    stats.SuccessCount, stats.TotalCount,
+                    _options.ExecutorMaxRetries, maxRetries);
+            }
+        }
+
+        while (retries <= maxRetries)
         {
             ct.ThrowIfCancellationRequested();
 
@@ -245,7 +269,7 @@ public sealed class Orchestrator : IOrchestrator
                         e.FilePath, e.Line, e.Column, e.RuleId, e.Message);
                 }
 
-                if (retries >= _options.ExecutorMaxRetries)
+                if (retries >= maxRetries)
                     break;
 
                 // ═══════════ 按文件分组，逐个修复 ═══════════
@@ -396,7 +420,7 @@ public sealed class Orchestrator : IOrchestrator
 
             lastError = runOutput;
 
-            if (retries >= _options.ExecutorMaxRetries)
+            if (retries >= maxRetries)
                 break;
 
             // 定位出错的文件

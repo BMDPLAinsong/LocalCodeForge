@@ -13,6 +13,7 @@ namespace Agent.Cli;
 using Agent.Infrastructure.Metrics;
 using Agent.Infrastructure.Orchestration;
 using Agent.Infrastructure.Project;
+using Agent.Infrastructure.Routing;
 
 /// <summary>
 /// Local AI Workbench 的控制台入口。
@@ -140,6 +141,10 @@ internal class Program
         // 【关键】启动时显式解析 IMetricsCollector，触发 SQLite 建表
         // 否则 Singleton 工厂不会被调用，metrics.db 不会创建
         _ = provider.GetRequiredService<IMetricsCollector>();
+
+        // 【D2】启动时加载任务特征类历史聚合（路由数据校准 + stats 归因）
+        var featureAggregator = provider.GetRequiredService<Agent.Infrastructure.Routing.TaskMetricsAggregator>();
+        featureAggregator.Load();
 
         // 取出 Agent 主循环
         var loop = provider.GetRequiredService<IAgentLoop>();
@@ -301,7 +306,7 @@ internal class Program
                 else
                 {
                     // 默认：显示汇总 + 最近 5 条
-                    await PrintSummaryAsync(metrics, options.LawUnifiedEpoch);
+                    await PrintSummaryAsync(metrics, options.LawUnifiedEpoch, featureAggregator);
                     await PrintRecentAsync(metrics, 5);
                 }
 
@@ -953,7 +958,7 @@ internal class Program
     }
 
     /// <summary>打印指标汇总。</summary>
-    static async Task PrintSummaryAsync(IMetricsCollector metrics, DateTimeOffset? lawUnifiedEpoch)
+    static async Task PrintSummaryAsync(IMetricsCollector metrics, DateTimeOffset? lawUnifiedEpoch, Agent.Infrastructure.Routing.TaskMetricsAggregator? featureAggregator = null)
     {
         var summary = await metrics.GetSummaryAsync(null, CancellationToken.None);
 
@@ -1027,6 +1032,35 @@ internal class Program
             Console.WriteLine($"    - Planner:   {summary.AvgPlannerMs:F0} ms");
             Console.WriteLine($"    - Executor:  {summary.AvgExecutorMs:F0} ms");
             Console.WriteLine($"    - Validator: {summary.AvgValidatorMs:F0} ms");
+        }
+
+        // 【D2】特征类归因：按任务特征类展示历史成功率 + 失败主因（D1 报表系统化）
+        if (featureAggregator is not null)
+        {
+            var features = new[]
+            {
+                Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ProjectIncremental,
+                Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ExternalCredential,
+                Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.MultiFile,
+                Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.SingleFile,
+                Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ReadQuery,
+                Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.Other,
+            };
+            var hasData = false;
+            foreach (var f in features)
+            {
+                var s = featureAggregator.Get(f);
+                if (s is null || s.TotalCount == 0) continue;
+                hasData = true;
+                var featureRate = (double)s.SuccessCount / s.TotalCount;
+                var featureRateColor = featureRate >= 0.8 ? ConsoleColor.Green : (featureRate >= 0.5 ? ConsoleColor.Yellow : ConsoleColor.Red);
+                Console.Write($"  {Agent.Infrastructure.Routing.TaskFeatureClassifier.FeatureName(f),6}: ");
+                Console.ForegroundColor = featureRateColor;
+                Console.Write($"{featureRate:P0}");
+                Console.ResetColor();
+                Console.WriteLine($"  ({s.SuccessCount}/{s.TotalCount})  avg {s.AvgTotalMs / 1000:N0}s  失败主因: {s.TopFailureCause}");
+            }
+            if (hasData) Console.WriteLine("  （特征类归因 · D2 路由数据校准）");
         }
 
         Console.WriteLine();
