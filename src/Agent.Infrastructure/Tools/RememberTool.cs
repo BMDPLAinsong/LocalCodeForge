@@ -59,7 +59,10 @@ public sealed class RememberTool : AgentToolBase
         if (string.IsNullOrWhiteSpace(topic) || string.IsNullOrWhiteSpace(content))
             return Task.FromResult("错误：topic 和 content 都不能为空。");
 
-        _store.Add("model", topic, content);
+        // 【任务5】决策记忆按主题打特征类标签（跨类注入时降权保留）
+        _store.Add("model", topic, content,
+            feature: Agent.Infrastructure.Routing.TaskFeatureClassifier
+                .Classify(topic ?? "").ToString());
         return Task.FromResult($"已记住：{topic.Trim()}");
     }
 }

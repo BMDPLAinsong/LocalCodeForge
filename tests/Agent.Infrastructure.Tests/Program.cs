@@ -267,6 +267,25 @@ Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
     Check("任务目录备份 → run 目录能列出（备份根归一化）",
         backupsRun.Any(b => b.Rel.Replace('\\', '/').EndsWith("src/B.cs")));
 
+    // 9.5) 【任务4 备份生命周期】PruneBackups：构造 5 个任务备份目录 → 保留最近 2，删更早 3
+    var pruneWs = Path.Combine(TestTmp, "run_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(pruneWs);
+    for (var i = 1; i <= 5; i++)
+    {
+        var stampDir = Path.Combine(pruneWs, ".backup", "task_" + i, "000000000");
+        Directory.CreateDirectory(stampDir);
+        File.WriteAllText(Path.Combine(stampDir, "A.cs"), "// t" + i);
+    }
+    var pruned = Agent.Infrastructure.Project.BackupService.PruneBackups(pruneWs, 2);
+    var remainTasks = Directory.GetDirectories(Path.Combine(pruneWs, ".backup"))
+        .Select(Path.GetFileName).OrderByDescending(x => x).ToList();
+    Check("PruneBackups 保留最近 2 个（删除 3 个）",
+        pruned == 3 && remainTasks.Count == 2
+        && remainTasks[0] == "task_5" && remainTasks[1] == "task_4");
+    Check("PruneBackups keepLastN=0 → 全清",
+        Agent.Infrastructure.Project.BackupService.PruneBackups(pruneWs, 0) == 2
+        && !Directory.Exists(Path.Combine(pruneWs, ".backup", "task_5")));
+
     // 9) 【P-D】写前类型冲突检测：工程可写时，新内容定义工程其他文件已有类型 → 拒绝写入
     //    先给工程种下已有类型：Order.cs 定义 class Order（ShippingService 任务失败根因场景）
     Directory.CreateDirectory(Path.Combine(proj, "src"));
@@ -377,6 +396,22 @@ Console.WriteLine("== 工程感知 P3：模型级记忆（§14-3w P3） ==");
     // 命中计数
     var h1 = hits.FirstOrDefault(h => h.Topic.Contains("ProjectRoot"));
     Check("命中计数 > 0", h1 is not null && h1.HitCount >= 1);
+
+    // 【任务5】记忆注入特征过滤：kind=task 跨特征类剔除；kind=model 跨类降权保留
+    var memF = Path.Combine(TestTmp, "agent_memory_f_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db");
+    var mf = new Agent.Infrastructure.Memory.AgentMemoryStore(memF);
+    mf.Add("task", "天气任务归档", "wttr.in 天气获取成功。", "task_1", "ExternalCredential");
+    mf.Add("model", "天气 API 决策", "wttr.in 无需 Key 可用。", null, "ExternalCredential");
+    mf.Add("task", "学生系统任务归档", "C# 学生系统 4 文件构建通过。", "task_2", "MultiFile");
+    // 特征类=MultiFile 检索"学生系统"：同类的 task 归档命中；跨类的 task 归档剔除（model 决策关键词不命中本就不返回）
+    var fh = mf.Search("学生系统", limit: 10, feature: "MultiFile");
+    Check("同特征类 task 记忆命中", fh.Any(h => h.Topic.Contains("学生系统")));
+    Check("跨特征类 task 记忆剔除", fh.All(h => !h.Topic.Contains("天气任务归档")));
+    Check("关键词不命中则 model 决策不注入", fh.All(h => !h.Topic.Contains("天气 API 决策")));
+    // 降权验证：检索"天气" + feature=MultiFile——跨类 task 剔除；跨类 model 决策 topic 命中（score2→1）仍保留
+    var fh2 = mf.Search("天气", limit: 10, feature: "MultiFile");
+    Check("跨类检索：model 决策降权保留 + task 归档剔除",
+        fh2.Any(h => h.Topic.Contains("天气 API 决策")) && !fh2.Any(h => h.Topic.Contains("天气任务归档")));
 
     // 二次检索命中数递增
     mem.Search("ProjectRoot 属性的含义", limit: 2);

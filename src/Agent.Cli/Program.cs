@@ -514,6 +514,9 @@ internal class Program
                 else if (options.ProjectRoot is not null)
                     BackupService.ClearNewMarkers(workspace, taskId);
             }
+            // 【任务4 备份生命周期】每任务结束后保留最近 8 个任务备份，清理更早的（防 .backup 增长）
+            if (options.ProjectRoot is not null)
+                BackupService.PruneBackups(workspace, 8);
         }
     }
 
@@ -531,7 +534,9 @@ internal class Program
             var (topic, content) = Agent.Infrastructure.Memory.TaskMemoryExtractor.Extract(
                 input, success, errors, mode, finalAnswer);
             var store = taskProvider.GetRequiredService<Agent.Infrastructure.Memory.AgentMemoryStore>();
-            store.Add("task", topic, content, $"task_{taskId}");
+            // 【任务5】任务归档记忆打特征类标签（跨类注入时被过滤）
+            store.Add("task", topic, content, $"task_{taskId}",
+                Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify(input).ToString());
         }
         catch
         {

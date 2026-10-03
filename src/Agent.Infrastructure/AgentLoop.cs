@@ -103,11 +103,14 @@ public sealed class AgentLoop : IAgentLoop
     {
         try
         {
-            var hits = _memoryStore.Search(input, limit: 3);
+            // 【任务5】按输入特征类过滤记忆注入：任务归档记忆只注入同类任务，决策记忆降权保留
+            var feature = Agent.Infrastructure.Routing.TaskFeatureClassifier
+                .Classify(input).ToString();
+            var hits = _memoryStore.Search(input, limit: 3, feature: feature);
             if (hits.Count == 0)
                 return null;
 
-            _logger.LogInformation("[记忆] 历史记忆命中 {Count} 条，已注入上下文。", hits.Count);
+            _logger.LogInformation("[记忆] 历史记忆命中 {Count} 条（特征类 {Feature}），已注入上下文。", hits.Count, feature);
             return Agent.Infrastructure.Memory.MemoryPromptBuilder.Build(hits);
         }
         catch (Exception ex)

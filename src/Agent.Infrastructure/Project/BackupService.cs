@@ -155,6 +155,33 @@ public static class BackupService
     }
 
     /// <summary>
+    /// 【任务4 备份生命周期】按 taskId 目录名降序（最近优先）保留最近 keepLastN 个任务的备份目录
+    /// （含 .new 标记），删除更早的——防 .backup 无限增长；手动 rollback 仍可覆盖最近 N 个任务。
+    /// 返回清理的目录数。
+    /// </summary>
+    public static int PruneBackups(string workspaceRoot, int keepLastN = 8)
+    {
+        var removed = 0;
+        try
+        {
+            var runRoot = GetRunRoot(workspaceRoot);
+            var dir = Path.Combine(runRoot, ".backup");
+            if (!Directory.Exists(dir)) return 0;
+
+            var taskDirs = Directory.GetDirectories(dir)
+                .Where(d => !Path.GetFileName(d).Equals(".new", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            foreach (var stale in taskDirs.Skip(keepLastN))
+            {
+                try { Directory.Delete(stale, true); removed++; } catch { }
+            }
+        }
+        catch { }
+        return removed;
+    }
+
+    /// <summary>
     /// 标记工程可写模式下新建的工程文件：.backup/&lt;taskId&gt;/.new/&lt;rel&gt;（空文件）。
     /// 任务失败自动回滚时删除这些新文件（备份仅覆盖已存在文件，新建文件需单独追踪）。
     /// </summary>

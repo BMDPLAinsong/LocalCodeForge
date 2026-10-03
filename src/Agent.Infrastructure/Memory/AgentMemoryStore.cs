@@ -21,7 +21,7 @@ public sealed class AgentMemoryStore
     /// <summary>记忆命中记录。Count=同类 topic 归档次数（去重合并），时间用于过期判定。</summary>
     public sealed record MemoryHit(
         long Id, string Kind, string Topic, string Content, int HitCount,
-        int Count = 1, string CreatedAt = "", string LastHitAt = "");
+        int Count = 1, string CreatedAt = "", string LastHitAt = "", string Feature = "");
 
     /// <summary>构造函数，接收数据库文件路径。</summary>
     public AgentMemoryStore(string dbPath)
@@ -49,13 +49,14 @@ public sealed class AgentMemoryStore
                 created_at  TEXT NOT NULL,
                 hit_count   INTEGER NOT NULL DEFAULT 0,
                 last_hit_at TEXT,
-                count       INTEGER NOT NULL DEFAULT 1
+                count       INTEGER NOT NULL DEFAULT 1,
+                feature     TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_memory_topic ON agent_memory(topic);
         """;
         cmd.ExecuteNonQuery();
 
-        // 兼容旧库：补 last_hit_at / count 列（PRAGMA 检测 → ALTER）
+        // 兼容旧库：补 last_hit_at / count / feature 列（PRAGMA 检测 → ALTER）
         using (var pragma = conn.CreateCommand())
         {
             pragma.CommandText = "PRAGMA table_info(agent_memory);";
@@ -75,6 +76,12 @@ public sealed class AgentMemoryStore
                 a2.CommandText = "ALTER TABLE agent_memory ADD COLUMN count INTEGER NOT NULL DEFAULT 1;";
                 a2.ExecuteNonQuery();
             }
+            if (!cols.Contains("feature"))
+            {
+                using var a3 = conn.CreateCommand();
+                a3.CommandText = "ALTER TABLE agent_memory ADD COLUMN feature TEXT;";
+                a3.ExecuteNonQuery();
+            }
         }
     }
 
@@ -83,7 +90,7 @@ public sealed class AgentMemoryStore
     /// （content 取最新、count+1、last_hit_at 刷新），否则插入新行。
     /// 任务归档同类失败自动合并为一条，count 承载真实次数——记忆不膨胀。
     /// </summary>
-    public void Add(string kind, string topic, string content, string? sourceTask = null)
+    public void Add(string kind, string topic, string content, string? sourceTask = null, string? feature = null)
     {
         if (string.IsNullOrWhiteSpace(topic) || string.IsNullOrWhiteSpace(content))
             return;
@@ -108,11 +115,13 @@ public sealed class AgentMemoryStore
                     using var upd = conn.CreateCommand();
                     upd.CommandText = """
                         UPDATE agent_memory
-                        SET content = @content, count = count + 1, last_hit_at = @at
+                        SET content = @content, count = count + 1, last_hit_at = @at,
+                            feature = COALESCE(@feature, feature)
                         WHERE id = @id;
                     """;
                     upd.Parameters.AddWithValue("@content", contentTrim);
                     upd.Parameters.AddWithValue("@at", now);
+                    upd.Parameters.AddWithValue("@feature", (object?)feature ?? DBNull.Value);
                     upd.Parameters.AddWithValue("@id", Convert.ToInt64(existId));
                     upd.ExecuteNonQuery();
                     return;
@@ -121,14 +130,15 @@ public sealed class AgentMemoryStore
 
             using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO agent_memory (kind, topic, content, source_task, created_at, last_hit_at, count)
-                VALUES (@kind, @topic, @content, @task, @at, @at, 1);
+                INSERT INTO agent_memory (kind, topic, content, source_task, created_at, last_hit_at, count, feature)
+                VALUES (@kind, @topic, @content, @task, @at, @at, 1, @feature);
             """;
             cmd.Parameters.AddWithValue("@kind", kind);
             cmd.Parameters.AddWithValue("@topic", topicTrim);
             cmd.Parameters.AddWithValue("@content", contentTrim);
             cmd.Parameters.AddWithValue("@task", sourceTask ?? (object)DBNull.Value);
             cmd.Parameters.AddWithValue("@at", now);
+            cmd.Parameters.AddWithValue("@feature", (object?)feature ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         }
         catch (SqliteException)
@@ -139,9 +149,12 @@ public sealed class AgentMemoryStore
 
     /// <summary>
     /// 按输入检索相关记忆（关键词命中计分，top limit，命中数递增）。
+    /// 【任务5 记忆注入过滤】feature（TaskFeatureClassifier 特征类）非空时：
+    ///   kind=task 的任务归档记忆若 feature 不匹配 → 剔除（强特征相关，避免跨类污染）；
+    ///   其余（kind=model 决策/经验）不匹配 → 降权（score-1），仍可注入（决策可能跨任务复用）。
     /// 关键词：中文连续串（≥2 字）、英文/数字标识符（≥3 字符）、文件路径 token。
     /// </summary>
-    public List<MemoryHit> Search(string input, int limit = 3)
+    public List<MemoryHit> Search(string input, int limit = 3, string? feature = null)
     {
         var keywords = Tokenize(input);
         if (keywords.Count == 0)
@@ -154,7 +167,7 @@ public sealed class AgentMemoryStore
             conn.Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                SELECT id, kind, topic, content, hit_count, count, created_at, COALESCE(last_hit_at, '')
+                SELECT id, kind, topic, content, hit_count, count, created_at, COALESCE(last_hit_at, ''), COALESCE(feature, '')
                 FROM agent_memory;
             """;
             using var reader = cmd.ExecuteReader();
@@ -170,10 +183,21 @@ public sealed class AgentMemoryStore
                 }
                 if (score > 0)
                 {
+                    // 【任务5】特征过滤：任务归档记忆跨特征类剔除；决策记忆跨类降权
+                    var memFeature = reader.IsDBNull(8) ? "" : reader.GetString(8);
+                    var kind = reader.GetString(1);
+                    if (!string.IsNullOrEmpty(feature) && !string.IsNullOrEmpty(memFeature)
+                        && !memFeature.Equals(feature, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (kind.Equals("task", StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        score -= 1;
+                        if (score <= 0) continue;
+                    }
                     hits.Add((
-                        new MemoryHit(reader.GetInt64(0), reader.GetString(1), topic, content,
+                        new MemoryHit(reader.GetInt64(0), kind, topic, content,
                             reader.GetInt32(4), reader.IsDBNull(5) ? 1 : reader.GetInt32(5),
-                            reader.GetString(6), reader.GetString(7)),
+                            reader.GetString(6), reader.GetString(7), memFeature),
                         score));
                 }
             }
