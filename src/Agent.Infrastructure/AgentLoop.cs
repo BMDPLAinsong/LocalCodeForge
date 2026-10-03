@@ -39,6 +39,11 @@ public sealed class AgentLoop : IAgentLoop
     private string? _lastToolName;
     private bool _lastStepFailed;
 
+    // 【H2】弱验证防护：任务是否写过文件 + 最近一次 run_command 是否成功。
+    // 熔断收尾时若"写过文件但最近验证未通过"→ 判失败而非假成功（read_file 等只读工具不算验证证据）。
+    private bool _everWroteFile;
+    private bool _lastRunCommandOk;
+
     public AgentLoop(
         Kernel kernel,
         IToolRegistry tools,
@@ -120,6 +125,8 @@ public sealed class AgentLoop : IAgentLoop
         // 【关键】重置跨任务状态
         _lastStepFailed = false;
         _lastToolName = null;
+        _everWroteFile = false;
+        _lastRunCommandOk = false;
 
         // 【记忆治理收尾】任务启动时自动清理过期记忆（30 天未用且 0 命中自动删除）
         try
@@ -349,6 +356,12 @@ public sealed class AgentLoop : IAgentLoop
                     _lastToolName = cleanName;
                     _lastStepFailed = !ok && !output.StartsWith("错误：工具");
 
+                    // 【H2】写/改文件成功 → 记录；run_command 结果 → 记录最近验证状态
+                    if (ok && (cleanName is "write_file" or "edit_file" or "append_file"))
+                        _everWroteFile = true;
+                    if (cleanName == "run_command")
+                        _lastRunCommandOk = ok;
+
                     // 上下文治理：仅 run_command 截断（大段 stdout/stderr 膨胀源）；
                     // read_file 保留完整——edit_file 精确匹配依赖完整文件内容，截断会破坏修复
                     var condensed = cleanName == "run_command" ? SummarizeOutput(output) : output;
@@ -362,6 +375,14 @@ public sealed class AgentLoop : IAgentLoop
                         var sig = BuildCycleSignature(cleanName, argsJson, condensed);
                         if (!_toolSignatures.Add(sig))
                         {
+                            // 【H2】熔断收尾的证据门槛：写过文件但最近一次 run_command 未通过
+                            // （如 read_file 重复导致的熔断）→ 验证不足，判失败而非假成功。
+                            if (_everWroteFile && !_lastRunCommandOk)
+                            {
+                                _logger.LogWarning("[熔断] 已写文件但验证未通过（最近 run_command 失败/缺失），判失败防假成功。");
+                                yield return new AgentEvent.Error("任务写入文件但验证未通过（run_command 未成功），熔断终止，防假成功。");
+                                yield break;
+                            }
                             _logger.LogWarning("[熔断] 工具序列重复无进展（{Sig}），以工具验证结果收尾。", sig);
                             var closeText = $"任务完成：工具已验证（{cleanName}）。最后验证：{TruncateForAnswer(condensed)}";
                             await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", closeText), ct);

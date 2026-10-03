@@ -458,6 +458,9 @@ internal class Program
                 // 【P0-1】工程可写模式任务失败 → 自动回滚工程改动（恢复备份 + 清理新建文件）
                 if (orchAnswer is null && options.ProjectRoot is not null)
                     AutoRollbackOnFailure(workspace, options.ProjectRoot);
+                // 【H1】成功收尾清理 .new 标记：防止跨任务残留导致后续失败任务误删本任务新建文件
+                else if (options.ProjectRoot is not null)
+                    BackupService.ClearNewMarkers(workspace);
             }
             else
             {
@@ -477,6 +480,9 @@ internal class Program
                 // 【P0-1】工程可写模式任务失败 → 自动回滚工程改动
                 if (loopAnswer is null && options.ProjectRoot is not null)
                     AutoRollbackOnFailure(workspace, options.ProjectRoot);
+                // 【H1】成功收尾清理 .new 标记（防跨任务误删）
+                else if (options.ProjectRoot is not null)
+                    BackupService.ClearNewMarkers(workspace);
             }
         }
     }

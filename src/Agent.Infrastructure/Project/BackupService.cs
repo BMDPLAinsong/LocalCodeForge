@@ -94,6 +94,23 @@ public static class BackupService
     }
 
     /// <summary>
+    /// 【H1】成功收尾清理新建文件标记：任务成功后其改动是预期保留的，.new 标记失去意义。
+    /// 删除整个 .backup/.new 目录——防止跨任务残留：同会话任务 A 成功建文件（标记残留）
+    /// 被任务 B 失败回滚误删（RollbackTaskFull 无任务隔离，遍历全部标记）。
+    /// </summary>
+    public static void ClearNewMarkers(string workspaceRoot)
+    {
+        try
+        {
+            var runRoot = GetRunRoot(workspaceRoot);
+            var newDir = Path.Combine(runRoot, ".backup", ".new");
+            if (Directory.Exists(newDir))
+                Directory.Delete(newDir, true);
+        }
+        catch { }
+    }
+
+    /// <summary>
     /// 【P0-1】标记工程可写模式下新建的工程文件：runs/&lt;run&gt;/.backup/.new/&lt;rel&gt;（空文件）。
     /// 任务失败自动回滚时删除这些新文件（备份仅覆盖已存在文件，新建文件需单独追踪）。
     /// </summary>

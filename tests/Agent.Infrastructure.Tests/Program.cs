@@ -1236,5 +1236,30 @@ Console.WriteLine("== P0-2 expected_output 严格校验（IsTaskExpectedOutputSt
     Check("P0-2 宽松/严格差异（宽松通过、严格拒绝）", loose && !strict);
 }
 
+Console.WriteLine("== H1 跨任务误删防护（ClearNewMarkers） ==");
+{
+    var baseTmp = Path.Combine(TestTmp, "tests_h1");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    var ws = Path.Combine(baseTmp, "run_taskA");
+    var proj = Path.Combine(baseTmp, "proj");
+    Directory.CreateDirectory(ws);
+    Directory.CreateDirectory(proj);
+
+    // 任务 A 成功：新建 TaxService.cs + 标记 → 成功收尾 ClearNewMarkers（模拟 CLI 成功分支）
+    var taxCs = Path.Combine(proj, "TaxService.cs");
+    File.WriteAllText(taxCs, "class TaxService { }");
+    Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, taxCs, proj);
+    Agent.Infrastructure.Project.BackupService.ClearNewMarkers(ws);
+
+    // 任务 B（同会话）失败：新建 Broken.cs + 标记 → 回滚
+    var brokenCs = Path.Combine(proj, "Broken.cs");
+    File.WriteAllText(brokenCs, "class Broken { }");
+    Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, brokenCs, proj);
+    var (restored, removed) = Agent.Infrastructure.Project.BackupService.RollbackTaskFull(ws, proj);
+    Check("H1 任务 A 成功建的文件保留（不被 B 失败回滚误删）", File.Exists(taxCs));
+    Check("H1 任务 B 新建文件被清理", removed == 1 && !File.Exists(brokenCs));
+    Check("H1 回滚后标记清空", !Directory.Exists(Path.Combine(ws, ".backup", ".new")));
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

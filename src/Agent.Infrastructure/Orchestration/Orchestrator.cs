@@ -678,7 +678,10 @@ public sealed class Orchestrator : IOrchestrator
                 }
 
                 // 【P0-2】严格校验开关：expected 每一非空行须在 stdout 精确出现
-                if (_options.StrictOutputVerification &&
+                // 【H3】工程模式（ProjectRoot 非空）默认开严格——工程改动验证要求逐项兑现；
+                // 普通生成任务保持宽松（StrictOutputVerification 默认 false）。
+                var strictActive = _options.StrictOutputVerification || _options.ProjectRoot is not null;
+                if (strictActive &&
                     !string.IsNullOrWhiteSpace(expectedOutput) &&
                     !OutputVerifier.IsTaskExpectedOutputStrict(expectedOutput, stdoutLines))
                 {
