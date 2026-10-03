@@ -107,7 +107,10 @@ public sealed class RunCommandTool : AgentToolBase
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = _workspaceRoot,
+            // 【工程模式】cwd 用工程根：工程模式下 run_command 在工程根执行，
+            // `dotnet run` 自然找到工程 csproj（工程文件已写入工程根，run 目录无项目）。
+            // 非工程模式（projectRoot=null）保持沙箱 run 目录。
+            WorkingDirectory = _projectRoot ?? _workspaceRoot,
             // 明确指定 UTF-8 编码
             StandardOutputEncoding = System.Text.Encoding.UTF8,
             StandardErrorEncoding = System.Text.Encoding.UTF8

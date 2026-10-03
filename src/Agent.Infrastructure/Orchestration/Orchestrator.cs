@@ -824,6 +824,15 @@ public sealed class Orchestrator : IOrchestrator
             var sb = new StringBuilder();
             sb.AppendLine("【工程图谱（规划参考）】");
 
+            // 已有文件清单（前 40 个）：工程模式下的真实文件（含 csproj/sln），
+            // 提示 Planner：这些文件已存在，涉及它们时优先增量修改（edit_file），不要整体重写。
+            var existingFiles = EnumerateExistingFiles(_options.ProjectRoot).Take(40).ToList();
+            if (existingFiles.Count > 0)
+            {
+                sb.AppendLine("已有文件清单（已存在，勿整体重写；修改用 edit_file 增量）：");
+                sb.AppendLine("  " + string.Join(", ", existingFiles));
+            }
+
             // 类型分布摘要：文件 → 类型符号（前 30 文件，每文件前 6 个）
             var typesByFile = symbols
                 .Where(s => s.Kind is "class" or "interface" or "enum" or "record" or "struct")
@@ -858,6 +867,34 @@ public sealed class Orchestrator : IOrchestrator
         {
             return null;
         }
+    }
+
+    /// <summary>工程模式下列举工程代码/配置文件（供规划提示的"已有文件清单"）。</summary>
+    private static IEnumerable<string> EnumerateExistingFiles(string projectRoot)
+    {
+        var exts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".cs", ".py", ".js", ".ts", ".java", ".go", ".csproj", ".sln", ".slnx", ".fsproj", ".vbproj"
+        };
+        var list = new List<string>();
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(projectRoot, "*.*", SearchOption.AllDirectories))
+            {
+                var rel = Path.GetRelativePath(projectRoot, f).Replace('\\', '/');
+                if (rel.Contains(".git", StringComparison.OrdinalIgnoreCase)
+                    || rel.StartsWith("bin", StringComparison.OrdinalIgnoreCase)
+                    || rel.StartsWith("obj", StringComparison.OrdinalIgnoreCase)
+                    || rel.StartsWith("node_modules", StringComparison.OrdinalIgnoreCase)
+                    || rel.StartsWith("workspace", StringComparison.OrdinalIgnoreCase)
+                    || rel.StartsWith(".vs", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (exts.Contains(Path.GetExtension(f)))
+                    list.Add(rel);
+            }
+        }
+        catch { }
+        return list;
     }
 
     /// <summary>
