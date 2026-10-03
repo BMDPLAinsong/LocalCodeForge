@@ -52,8 +52,23 @@ public static class TypeConflictDetector
         var newTypes = ExtractTypeNames(newContent);
         if (newTypes.Count == 0) return conflicts;
 
-        // 工程其他 .cs 文件的类型名 → 所在文件（首个命中即可）
+        var existingByType = GetExistingTypes(projectRoot, targetFile);
+        foreach (var t in newTypes)
+        {
+            if (existingByType.TryGetValue(t, out var file))
+                conflicts.Add($"{t}（已存在于 {file}）");
+        }
+        return conflicts;
+    }
+
+    /// <summary>
+    /// 工程【其他文件】（排除 targetFile）已有类型名 → 所在相对文件路径。
+    /// 供拦截错误信息拼接"已有类型清单"，让模型被拒后立刻知道能/不能定义什么。
+    /// </summary>
+    public static Dictionary<string, string> GetExistingTypes(string projectRoot, string targetFile)
+    {
         var existingByType = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(projectRoot) || string.IsNullOrWhiteSpace(targetFile)) return existingByType;
         try
         {
             var targetFull = Path.GetFullPath(targetFile);
@@ -72,12 +87,25 @@ public static class TypeConflictDetector
             }
         }
         catch { }
+        return existingByType;
+    }
 
-        foreach (var t in newTypes)
-        {
-            if (existingByType.TryGetValue(t, out var file))
-                conflicts.Add($"{t}（已存在于 {file}）");
-        }
-        return conflicts;
+    /// <summary>
+    /// 生成"已有类型清单"文案（数据驱动引导）：
+    /// "工程已有类型：Order(Order.cs), OrderService(OrderService.cs), …（共 N 个）。请勿重复定义以上类型；本文件只应定义新类型。"
+    /// 超长工程最多列前 30 个 + "等 N 个"。
+    /// </summary>
+    public static string BuildExistingTypesHint(Dictionary<string, string> existingByType)
+    {
+        if (existingByType.Count == 0) return "";
+        var items = existingByType
+            .OrderBy(kv => kv.Value, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(kv => $"{kv.Key}({kv.Value})")
+            .ToList();
+        const int maxShown = 30;
+        var shown = items.Count > maxShown ? items.Take(maxShown).ToList() : items;
+        var suffix = items.Count > maxShown ? $" 等共 {items.Count} 个" : $"（共 {items.Count} 个）";
+        return $"工程已有类型：{string.Join(", ", shown)}{suffix}。请勿重复定义以上类型；本文件只应定义清单之外的新类型（不要整体重写已有文件，如需修改请用 edit_file 局部编辑）。";
     }
 }

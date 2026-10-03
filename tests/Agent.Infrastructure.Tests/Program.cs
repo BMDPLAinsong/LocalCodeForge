@@ -279,6 +279,8 @@ Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
         "using System;\nclass Order\n{\n    public int Id { get; set; }\n}\nclass OrderService\n{\n}\n");
     Check("P-D write_file 重复定义已有类型 → 拒绝",
         pdWrite.Contains("类型重复定义") && pdWrite.Contains("Order"));
+    Check("P-D 拒绝消息 → 附工程已有类型清单（引导能/不能定义什么）",
+        pdWrite.Contains("工程已有类型") && pdWrite.Contains("Order(src/Order.cs)") && pdWrite.Contains("请勿重复定义以上类型"));
     Check("P-D write_file 拒绝 → 目标文件未被写入",
         beforeOrderSvc == null
             ? !File.Exists(Path.Combine(proj, "src", "OrderService.cs"))

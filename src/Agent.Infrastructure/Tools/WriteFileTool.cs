@@ -122,13 +122,16 @@ public sealed class WriteFileTool : AgentToolBase
 
         // 【P-D】写前类型冲突检测：工程可写时，新内容定义了工程【其他文件】已有类型 → 拒绝写入。
         // ShippingService 类任务 3/3 失败根因：模型把已有 class Order 重复定义进 OrderService.cs（CS0101）。
-        // 确定性拦截（正则扫工程已有类型），让模型第 1 次修复即知不该重复定义；非提示词手段。
+        // 确定性拦截（正则扫工程已有类型）+ 附"已有类型清单"引导（数据驱动，非提示词）。
         if (insideProject && _projectRoot is not null)
         {
             var conflicts = TypeConflictDetector.DetectDuplicateTypes(_projectRoot, fullPath, content);
             if (conflicts.Count > 0)
             {
+                var hint = TypeConflictDetector.BuildExistingTypesHint(
+                    TypeConflictDetector.GetExistingTypes(_projectRoot, fullPath));
                 return $"错误：检测到类型重复定义：{string.Join("；", conflicts)}。\n" +
+                       $"{hint}\n" +
                        $"请勿在 {relative} 中重复定义工程已有类型；如需修改已有类型，请用 edit_file 局部编辑，不要整体重写文件。";
             }
         }
