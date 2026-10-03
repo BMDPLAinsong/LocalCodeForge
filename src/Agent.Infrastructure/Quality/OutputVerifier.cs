@@ -318,4 +318,31 @@ public static class OutputVerifier
         }
         return sb.ToString().Trim();
     }
+
+    /// <summary>
+    /// 【P0-2】严格模式：expected 的每一非空行（归一化后）都必须在 stdout 行集（归一化）中
+    /// 精确匹配（整行相等）。与宽松模式（任一 stdout 行被 expected 包含）互补：
+    /// 严格模式用于要求全部预期输出逐项出现的场景（工程改动验证等），消除"预期缺失仍判成功"。
+    /// 空 expected 返回 false（无预期文本不适用严格判定）。
+    /// </summary>
+    public static bool IsTaskExpectedOutputStrict(string expectedText, IReadOnlyList<string> stdoutLines)
+    {
+        if (string.IsNullOrWhiteSpace(expectedText))
+            return false;
+
+        var stdoutNorm = stdoutLines
+            .Select(NormalizeForMatch)
+            .Where(s => s.Length > 0)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var rawLine in expectedText.Split('\n'))
+        {
+            var lineNorm = NormalizeForMatch(rawLine);
+            if (lineNorm.Length == 0)
+                continue;
+            if (!stdoutNorm.Contains(lineNorm))
+                return false;
+        }
+        return true;
+    }
 }

@@ -66,6 +66,11 @@ public sealed class DependencyAnalyzerTool : AgentToolBase
             if (built == 0)
                 return Task.FromResult("未在工程中发现可索引的代码符号（工程过大或无代码定义）。");
         }
+        else
+        {
+            // 【P1-1】已有索引 → 增量重建：仅重扫 mtime 变更/新增文件，保持索引与磁盘一致
+            _store.BuildAndSaveIncremental(_projectRoot);
+        }
 
         var symbols = _store.GetAll(_projectRoot);
         if (symbols.Count == 0)

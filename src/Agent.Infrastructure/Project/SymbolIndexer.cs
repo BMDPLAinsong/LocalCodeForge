@@ -51,20 +51,22 @@ public static class SymbolIndexer
     /// <summary>
     /// 扫描工程根，返回符号条目列表。
     /// </summary>
-    public static List<SymbolEntry> Build(string projectRoot)
+    /// <summary>
+    /// 【P1-1】枚举工程代码文件（与 Build 同过滤规则：排除 .git/bin/obj/node_modules/workspace/.vs，
+    /// 8MB 总量上限 + 300 文件上限）。返回全路径 + 相对路径 + mtime（增量索引对比用）。
+    /// </summary>
+    public static List<(string Full, string Rel, string Ext, long LastWriteTicks)> EnumerateFiles(string projectRoot)
     {
-        var result = new List<SymbolEntry>();
+        var files = new List<(string, string, string, long)>();
         if (string.IsNullOrWhiteSpace(projectRoot) || !Directory.Exists(projectRoot))
-            return result;
+            return files;
 
-        var codeFiles = new List<string>();
         long totalBytes = 0;
         try
         {
             foreach (var f in Directory.EnumerateFiles(projectRoot, "*.*", SearchOption.AllDirectories))
             {
                 var rel = Path.GetRelativePath(projectRoot, f);
-                // 排除生成/依赖目录
                 if (rel.Contains(".git", StringComparison.OrdinalIgnoreCase)
                     || rel.StartsWith("bin", StringComparison.OrdinalIgnoreCase)
                     || rel.StartsWith("obj", StringComparison.OrdinalIgnoreCase)
@@ -79,70 +81,83 @@ public static class SymbolIndexer
 
                 try
                 {
-                    totalBytes += new FileInfo(f).Length;
+                    var fi = new FileInfo(f);
+                    totalBytes += fi.Length;
                     if (totalBytes > 8 * 1024 * 1024)
-                        return result;
-                    codeFiles.Add(f);
+                        return files;
+                    files.Add((f, rel, ext, fi.LastWriteTimeUtc.Ticks));
                 }
                 catch { }
             }
         }
         catch { }
 
-        if (codeFiles.Count > 300)
-            return result;
+        if (files.Count > 300)
+            return new List<(string, string, string, long)>();
+        return files;
+    }
 
-        foreach (var f in codeFiles)
+    /// <summary>扫描单个代码文件（供增量重建复用）。rel 为相对工程根路径（/ 分隔）。</summary>
+    public static List<SymbolEntry> BuildFile(string fullPath, string rel)
+    {
+        var result = new List<SymbolEntry>();
+        var style = CodeExts.GetValueOrDefault(Path.GetExtension(fullPath).ToLowerInvariant());
+        if (style is null) return result;
+        try
         {
-            var rel = Path.GetRelativePath(projectRoot, f).Replace('\\', '/');
-            var style = CodeExts[Path.GetExtension(f).ToLowerInvariant()];
-            try
+            var lines = File.ReadAllText(fullPath).Split('\n');
+            for (var i = 0; i < lines.Length; i++)
             {
-                var lines = File.ReadAllText(f).Split('\n');
-                for (var i = 0; i < lines.Length; i++)
+                var line = lines[i].TrimEnd('\r');
+                if (style == "python")
                 {
-                    var line = lines[i].TrimEnd('\r');
-                    if (style == "python")
+                    var m = PyClassRe.Match(line);
+                    if (m.Success)
                     {
-                        var m = PyClassRe.Match(line);
-                        if (m.Success)
-                        {
-                            result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "class"));
-                            continue;
-                        }
-                        m = PyDefRe.Match(line);
-                        if (m.Success)
-                        {
-                            var indent = line.Length - line.TrimStart().Length;
-                            result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1,
-                                indent > 0 ? "method" : "function"));
-                        }
+                        result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "class"));
+                        continue;
                     }
-                    else
+                    m = PyDefRe.Match(line);
+                    if (m.Success)
                     {
-                        var m = CSharpTypeRe.Match(line);
-                        if (m.Success)
-                        {
-                            result.Add(new SymbolEntry(m.Groups[2].Value, rel, i + 1, m.Groups[1].Value));
-                            continue;
-                        }
-                        m = CSharpPropRe.Match(line);
-                        if (m.Success)
-                        {
-                            result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "property"));
-                            continue;
-                        }
-                        m = CSharpMethodRe.Match(line);
-                        if (m.Success && !NonMethodKeywords.Contains(m.Groups[1].Value))
-                        {
-                            result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "method"));
-                        }
+                        var indent = line.Length - line.TrimStart().Length;
+                        result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1,
+                            indent > 0 ? "method" : "function"));
+                    }
+                }
+                else
+                {
+                    var m = CSharpTypeRe.Match(line);
+                    if (m.Success)
+                    {
+                        result.Add(new SymbolEntry(m.Groups[2].Value, rel, i + 1, m.Groups[1].Value));
+                        continue;
+                    }
+                    m = CSharpPropRe.Match(line);
+                    if (m.Success)
+                    {
+                        result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "property"));
+                        continue;
+                    }
+                    m = CSharpMethodRe.Match(line);
+                    if (m.Success && !NonMethodKeywords.Contains(m.Groups[1].Value))
+                    {
+                        result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "method"));
                     }
                 }
             }
-            catch { }
         }
+        catch { }
+        return result;
+    }
 
+    public static List<SymbolEntry> Build(string projectRoot)
+    {
+        var result = new List<SymbolEntry>();
+        foreach (var (full, rel, _, _) in EnumerateFiles(projectRoot))
+        {
+            result.AddRange(BuildFile(full, rel.Replace('\\', '/')));
+        }
         return result;
     }
 }
@@ -175,11 +190,21 @@ public sealed class SymbolIndexStore
                 file         TEXT NOT NULL,
                 line         INTEGER NOT NULL,
                 kind         TEXT NOT NULL,
+                file_mtime   INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (project_root, symbol, file, line)
             );
             CREATE INDEX IF NOT EXISTS idx_symbol ON symbol_index (project_root, symbol);
         """;
         cmd.ExecuteNonQuery();
+        // 【P1-1】旧库迁移：补充 file_mtime 列（不存在则 ALTER ADD）。
+        using var migrate = conn.CreateCommand();
+        migrate.CommandText = "SELECT COUNT(*) FROM pragma_table_info('symbol_index') WHERE name='file_mtime';";
+        if (Convert.ToInt64(migrate.ExecuteScalar()) == 0)
+        {
+            using var alter = conn.CreateCommand();
+            alter.CommandText = "ALTER TABLE symbol_index ADD COLUMN file_mtime INTEGER NOT NULL DEFAULT 0;";
+            alter.ExecuteNonQuery();
+        }
     }
 
     /// <summary>是否已有该工程的索引。</summary>
@@ -198,11 +223,18 @@ public sealed class SymbolIndexStore
         catch { return false; }
     }
 
-    /// <summary>重建索引（先清后插）。返回符号数。</summary>
+    /// <summary>重建索引（先清后插）。返回符号数。全量构建也存文件 mtime（增量对比基准）。</summary>
     public int BuildAndSave(string projectRoot)
     {
         var key = Path.GetFullPath(projectRoot);
-        var entries = SymbolIndexer.Build(projectRoot);
+        // 逐文件扫描（带 mtime）：保证全量与增量使用同一 mtime 基准
+        var fileEntries = new List<(SymbolEntry E, long Mtime)>();
+        foreach (var (full, rel, _, mtime) in SymbolIndexer.EnumerateFiles(projectRoot))
+        {
+            var relPath = rel.Replace('\\', '/');
+            foreach (var e in SymbolIndexer.BuildFile(full, relPath))
+                fileEntries.Add((e, mtime));
+        }
 
         using var conn = new SqliteConnection(_connectionString);
         conn.Open();
@@ -214,26 +246,141 @@ public sealed class SymbolIndexStore
         using var tx = conn.BeginTransaction();
         using var ins = conn.CreateCommand();
         ins.CommandText = """
-            INSERT INTO symbol_index (project_root, symbol, file, line, kind)
-            VALUES ($k, $s, $f, $l, $k2);
+            INSERT INTO symbol_index (project_root, symbol, file, line, kind, file_mtime)
+            VALUES ($k, $s, $f, $l, $k2, $m);
         """;
         var pk = ins.Parameters.Add("$k", SqliteType.Text);
         var ps = ins.Parameters.Add("$s", SqliteType.Text);
         var pf = ins.Parameters.Add("$f", SqliteType.Text);
         var pl = ins.Parameters.Add("$l", SqliteType.Integer);
         var pk2 = ins.Parameters.Add("$k2", SqliteType.Text);
+        var pm = ins.Parameters.Add("$m", SqliteType.Integer);
 
-        foreach (var e in entries)
+        foreach (var (e, mtime) in fileEntries)
         {
             pk.Value = key;
             ps.Value = e.Symbol;
             pf.Value = e.File;
             pl.Value = e.Line;
             pk2.Value = e.Kind;
+            pm.Value = mtime;
             ins.ExecuteNonQuery();
         }
         tx.Commit();
-        return entries.Count;
+        return fileEntries.Count;
+    }
+
+    /// <summary>
+    /// 【P1-1】增量重建：对比磁盘文件 mtime 与索引记录，仅重扫新增/变更文件；
+    /// 删除磁盘上已不存在的文件记录。返回 (总符号数, 重扫文件数)。
+    /// 文件级增量（依赖边每次由 GetAll 全量计算，无需增量）。
+    /// </summary>
+    public (int Total, int Rescanned) BuildAndSaveIncremental(string projectRoot)
+    {
+        var key = Path.GetFullPath(projectRoot);
+        var diskFiles = SymbolIndexer.EnumerateFiles(projectRoot);
+        // 空枚举（工程过大/无代码文件）→ 全量清空该工程索引
+        if (diskFiles.Count == 0)
+        {
+            DeleteProject(key);
+            return (0, 0);
+        }
+
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+
+        // 读现有 (file → mtime)
+        var existing = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        using (var read = conn.CreateCommand())
+        {
+            read.CommandText = "SELECT file, file_mtime FROM symbol_index WHERE project_root = $k;";
+            read.Parameters.AddWithValue("$k", key);
+            using var reader = read.ExecuteReader();
+            while (reader.Read())
+                existing[reader.GetString(0)] = reader.GetInt64(1);
+        }
+
+        var rescanned = 0;
+        using var tx = conn.BeginTransaction();
+        foreach (var (full, rel, _, mtime) in diskFiles)
+        {
+            var relPath = rel.Replace('\\', '/');
+            var changed = !existing.TryGetValue(relPath, out var oldMtime) || oldMtime != mtime;
+            if (!changed) continue;
+
+            // 重扫该文件：删旧行 + 插新行
+            using (var del = conn.CreateCommand())
+            {
+                del.Transaction = tx;
+                del.CommandText = "DELETE FROM symbol_index WHERE project_root = $k AND file = $f;";
+                del.Parameters.AddWithValue("$k", key);
+                del.Parameters.AddWithValue("$f", relPath);
+                del.ExecuteNonQuery();
+            }
+
+            var entries = SymbolIndexer.BuildFile(full, relPath);
+            if (entries.Count > 0)
+            {
+                using var ins = conn.CreateCommand();
+                ins.Transaction = tx;
+                ins.CommandText = """
+                    INSERT INTO symbol_index (project_root, symbol, file, line, kind, file_mtime)
+                    VALUES ($k, $s, $f, $l, $k2, $m);
+                """;
+                var pk = ins.Parameters.Add("$k", SqliteType.Text);
+                var ps = ins.Parameters.Add("$s", SqliteType.Text);
+                var pf = ins.Parameters.Add("$f", SqliteType.Text);
+                var pl = ins.Parameters.Add("$l", SqliteType.Integer);
+                var pk2 = ins.Parameters.Add("$k2", SqliteType.Text);
+                var pm = ins.Parameters.Add("$m", SqliteType.Integer);
+                foreach (var e in entries)
+                {
+                    pk.Value = key; ps.Value = e.Symbol; pf.Value = relPath;
+                    pl.Value = e.Line; pk2.Value = e.Kind; pm.Value = mtime;
+                    ins.ExecuteNonQuery();
+                }
+            }
+            rescanned++;
+        }
+
+        // 删除磁盘已不存在的文件记录
+        var diskSet = diskFiles.Select(f => f.Rel.Replace('\\', '/'))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var stale = existing.Keys.Where(f => !diskSet.Contains(f)).ToList();
+        foreach (var f in stale)
+        {
+            using var del = conn.CreateCommand();
+            del.Transaction = tx;
+            del.CommandText = "DELETE FROM symbol_index WHERE project_root = $k AND file = $f;";
+            del.Parameters.AddWithValue("$k", key);
+            del.Parameters.AddWithValue("$f", f);
+            del.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+
+        long total = 0;
+        using (var cnt = conn.CreateCommand())
+        {
+            cnt.CommandText = "SELECT COUNT(*) FROM symbol_index WHERE project_root = $k;";
+            cnt.Parameters.AddWithValue("$k", key);
+            total = Convert.ToInt64(cnt.ExecuteScalar());
+        }
+        return ((int)total, rescanned);
+    }
+
+    private void DeleteProject(string key)
+    {
+        try
+        {
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+            using var del = conn.CreateCommand();
+            del.CommandText = "DELETE FROM symbol_index WHERE project_root = $k;";
+            del.Parameters.AddWithValue("$k", key);
+            del.ExecuteNonQuery();
+        }
+        catch { }
     }
 
     /// <summary>按符号查询定义位置。返回空列表表示无命中。</summary>

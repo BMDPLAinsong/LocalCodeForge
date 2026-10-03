@@ -1156,5 +1156,85 @@ Console.WriteLine("== 工程图谱增强：依赖分析 ==");
             .InvokeAsync(json, CancellationToken.None).GetAwaiter().GetResult().Contains("工程模式"));
 }
 
+Console.WriteLine("== P0-1 工程失败自动回滚（RollbackTaskFull） ==");
+{
+    var baseTmp = Path.Combine(TestTmp, "tests_rollback");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    var ws = Path.Combine(baseTmp, "run_task123");   // run 级工作目录（task_ 前缀）
+    var proj = Path.Combine(baseTmp, "proj");
+    Directory.CreateDirectory(ws);
+    Directory.CreateDirectory(proj);
+
+    var orderCs = Path.Combine(proj, "Order.cs");
+    File.WriteAllText(orderCs, "class Order { public int Id { get; set; } }");
+    var oldContent = File.ReadAllText(orderCs);
+
+    // 模拟：改已存在文件前备份 + 写入
+    Agent.Infrastructure.Project.BackupService.Backup(ws, orderCs, proj);
+    File.WriteAllText(orderCs, "class Order { public int Id { get; set; } public double Amount { get; set; } }");
+    // 模拟：新建工程文件（标记 .new）
+    var taxCs = Path.Combine(proj, "TaxService.cs");
+    File.WriteAllText(taxCs, "class TaxService { }");
+    Agent.Infrastructure.Project.BackupService.MarkNewFile(ws, taxCs, proj);
+
+    var (restored, removed) = Agent.Infrastructure.Project.BackupService.RollbackTaskFull(ws, proj);
+    Check("P0-1 恢复已存在文件备份", restored == 1 && File.ReadAllText(orderCs) == oldContent);
+    Check("P0-1 清理新建文件", removed == 1 && !File.Exists(taxCs));
+    // .new 目录不作为 stamp 目录（ListBackups/RollbackTask 遍历排除）
+    Check("P0-1 新文件不残留在备份列表", !Agent.Infrastructure.Project.BackupService.ListBackups(ws).Any(b => b.Rel.StartsWith(".new", StringComparison.OrdinalIgnoreCase)));
+}
+
+Console.WriteLine("== P1-1 symbol 索引增量失效（mtime） ==");
+{
+    var baseTmp = Path.Combine(TestTmp, "tests_incr");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    var proj = Path.Combine(baseTmp, "proj");
+    Directory.CreateDirectory(proj);
+    File.WriteAllText(Path.Combine(proj, "A.cs"), "class A { }\nclass A2 { }");
+    File.WriteAllText(Path.Combine(proj, "B.cs"), "class B { }");
+    var db = Path.Combine(TestTmp, "sym_incr_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db");
+    var store = new Agent.Infrastructure.Project.SymbolIndexStore(db);
+
+    var full = store.BuildAndSave(proj);
+    Check("P1-1 全量构建 3 符号", full == 3);
+    // 修改 A.cs（追加新类型）→ 增量应只重扫 A.cs
+    File.WriteAllText(Path.Combine(proj, "A.cs"), "class A { }\nclass A2 { }\nclass A3 { }");
+    var inc = store.BuildAndSaveIncremental(proj);
+    var allAfter = store.GetAll(proj);
+    Check("P1-1 增量仅重扫 1 文件", inc.Rescanned == 1);
+    Check("P1-1 新符号可见（A3）", allAfter.Any(s => s.Symbol == "A3"));
+    Check("P1-1 未变文件保留（B）", allAfter.Any(s => s.Symbol == "B"));
+    // 删除 B.cs → 增量应清除 B 记录（无文件需重扫，仅 stale 清理）
+    File.Delete(Path.Combine(proj, "B.cs"));
+    var inc2 = store.BuildAndSaveIncremental(proj);
+    Check("P1-1 删除文件记录清除", inc2.Rescanned == 0 && !store.GetAll(proj).Any(s => s.Symbol == "B"));
+}
+
+Console.WriteLine("== P0-2 expected_output 严格校验（IsTaskExpectedOutputStrict） ==");
+{
+    var V = typeof(Agent.Infrastructure.Quality.OutputVerifier);
+    System.Func<string, System.Collections.Generic.IReadOnlyList<string>, bool> Strict =
+        (e, l) => Agent.Infrastructure.Quality.OutputVerifier.IsTaskExpectedOutputStrict(e, l);
+    System.Func<string, System.Collections.Generic.IReadOnlyList<string>, bool> Loose =
+        (e, l) => Agent.Infrastructure.Quality.OutputVerifier.IsTaskExpectedOutput(e, l);
+    Check("P0-2 严格：全部行精确匹配 → 通过",
+        Strict("INFO: 1\nWARN: 1\nERROR: 2",
+            new List<string> { "INFO: 1", "WARN: 1", "ERROR: 2" }));
+    Check("P0-2 严格：缺一行 → 不通过",
+        !Strict("INFO: 1\nWARN: 1\nERROR: 2",
+            new List<string> { "INFO: 1", "ERROR: 2" }));
+    Check("P0-2 严格：顺序无关（行集匹配）→ 通过",
+        Strict("INFO: 1\nERROR: 2",
+            new List<string> { "ERROR: 2", "INFO: 1" }));
+    Check("P0-2 严格：空 expected → 不通过（无预期不适用）",
+        !Strict("", new List<string> { "hello" }));
+    // 宽松 vs 严格差异实证：expected 多行、stdout 缺行 → 宽松通过、严格拒绝
+    var loose = Loose("INFO: 1\nWARN: 1\nERROR: 2",
+        new List<string> { "INFO: 1", "ERROR: 2" });
+    var strict = Strict("INFO: 1\nWARN: 1\nERROR: 2",
+        new List<string> { "INFO: 1", "ERROR: 2" });
+    Check("P0-2 宽松/严格差异（宽松通过、严格拒绝）", loose && !strict);
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

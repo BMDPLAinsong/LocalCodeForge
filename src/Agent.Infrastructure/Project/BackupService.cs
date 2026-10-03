@@ -41,7 +41,9 @@ public static class BackupService
         var dir = Path.Combine(runRoot, ".backup");
         if (!Directory.Exists(dir)) return result;
 
-        foreach (var stampDir in Directory.GetDirectories(dir).OrderByDescending(d => d))
+        foreach (var stampDir in Directory.GetDirectories(dir)
+            .Where(d => !Path.GetFileName(d).Equals(".new", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(d => d))
         {
             foreach (var f in Directory.GetFiles(stampDir, "*", SearchOption.AllDirectories))
             {
@@ -75,7 +77,9 @@ public static class BackupService
         if (!Directory.Exists(dir)) return null;
 
         var candidates = new List<string>();
-        foreach (var stampDir in Directory.GetDirectories(dir).OrderByDescending(d => d))
+        foreach (var stampDir in Directory.GetDirectories(dir)
+            .Where(d => !Path.GetFileName(d).Equals(".new", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(d => d))
         {
             var f = Path.Combine(stampDir, rel);
             if (File.Exists(f)) candidates.Add(f);
@@ -90,6 +94,56 @@ public static class BackupService
     }
 
     /// <summary>
+    /// 【P0-1】标记工程可写模式下新建的工程文件：runs/&lt;run&gt;/.backup/.new/&lt;rel&gt;（空文件）。
+    /// 任务失败自动回滚时删除这些新文件（备份仅覆盖已存在文件，新建文件需单独追踪）。
+    /// </summary>
+    public static void MarkNewFile(string workspaceRoot, string fullPath, string projectRoot)
+    {
+        try
+        {
+            var rel = Path.GetRelativePath(projectRoot, fullPath);
+            var runRoot = GetRunRoot(workspaceRoot);
+            var dest = Path.Combine(runRoot, ".backup", ".new", rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.WriteAllText(dest, "");
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// 【P0-1】任务级完整回滚：恢复本任务全部备份文件（已存在文件上次写入前状态）
+    /// + 删除本任务新建的工程文件（.backup/.new 标记）。返回 (恢复数, 清理新文件数)。
+    /// </summary>
+    public static (int Restored, int RemovedNew) RollbackTaskFull(string workspaceRoot, string projectRoot)
+    {
+        var restored = RollbackTask(workspaceRoot, projectRoot);
+        var removed = 0;
+        var runRoot = GetRunRoot(workspaceRoot);
+        var newDir = Path.Combine(runRoot, ".backup", ".new");
+        if (!Directory.Exists(newDir)) return (restored, 0);
+
+        foreach (var marker in Directory.GetFiles(newDir, "*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(newDir, marker);
+            var target = Path.Combine(projectRoot, rel);
+            try
+            {
+                // 仅删除"本任务新建"的文件：标记存在 + 目标存在且仍未被后续修改（内容为空标记）
+                if (File.Exists(target))
+                {
+                    File.Delete(target);
+                    removed++;
+                }
+                File.Delete(marker);
+            }
+            catch { }
+        }
+        // 清理空的 .new 目录
+        try { if (Directory.Exists(newDir) && !Directory.EnumerateFileSystemEntries(newDir).Any()) Directory.Delete(newDir); } catch { }
+        return (restored, removed);
+    }
+
+    /// <summary>
     /// 任务级回滚（多文件修改规划）：恢复本任务全部备份文件。
     /// 每个文件取最近一次备份（=上次写入前状态）；返回恢复的文件数。
     /// </summary>
@@ -101,7 +155,9 @@ public static class BackupService
 
         // 每个相对路径取最近 stamp 的备份 → 恢复
         var latestByRel = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var stampDir in Directory.GetDirectories(dir).OrderByDescending(d => d))
+        foreach (var stampDir in Directory.GetDirectories(dir)
+            .Where(d => !Path.GetFileName(d).Equals(".new", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(d => d))
         {
             foreach (var f in Directory.GetFiles(stampDir, "*", SearchOption.AllDirectories))
             {

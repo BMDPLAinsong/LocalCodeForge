@@ -84,6 +84,14 @@ public sealed class AgentOptions
     /// </summary>
     public bool ComplexToPro { get; set; } = true;
 
+    /// <summary>
+    /// 【P0-2】expected_output 严格校验开关（Orchestrator 验证阶段）。
+    /// false（默认）= 宽松：任一 stdout 行被 expected 包含即通过（防假阳，保持现状）；
+    /// true         = 严格：expected 每一非空行都须在 stdout 中精确出现（消除"预期缺失仍判成功"）。
+    /// 严格模式适合工程改动验证等要求逐项兑现的场景；普通生成任务建议保持宽松。
+    /// </summary>
+    public bool StrictOutputVerification { get; set; } = false;
+
     // ─────────── 循环配置 ───────────
 
     /// <summary>

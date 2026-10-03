@@ -455,6 +455,9 @@ internal class Program
                     RenderEvent(evt);
                 }
                 ArchiveTask(taskProvider, input, taskId, "orchestrator", orchErrors, orchAnswer);
+                // 【P0-1】工程可写模式任务失败 → 自动回滚工程改动（恢复备份 + 清理新建文件）
+                if (orchAnswer is null && options.ProjectRoot is not null)
+                    AutoRollbackOnFailure(workspace, options.ProjectRoot);
             }
             else
             {
@@ -471,6 +474,9 @@ internal class Program
                     RenderEvent(evt);
                 }
                 ArchiveTask(taskProvider, input, taskId, "agent", loopErrors, loopAnswer);
+                // 【P0-1】工程可写模式任务失败 → 自动回滚工程改动
+                if (loopAnswer is null && options.ProjectRoot is not null)
+                    AutoRollbackOnFailure(workspace, options.ProjectRoot);
             }
         }
     }
@@ -494,6 +500,29 @@ internal class Program
         catch
         {
             // 归档失败不阻塞任务
+        }
+    }
+
+    /// <summary>
+    /// 【P0-1】工程可写模式任务失败后的自动回滚：
+    /// 恢复备份的已存在文件 + 删除本任务新建的工程文件（.backup/.new 标记追踪）。
+    /// 纯确定性文件操作，无模型调用；失败不抛（回滚尽力而为）。
+    /// </summary>
+    static void AutoRollbackOnFailure(string workspace, string projectRoot)
+    {
+        try
+        {
+            var (restored, removed) = BackupService.RollbackTaskFull(workspace, projectRoot);
+            if (restored > 0 || removed > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[回滚] 任务失败，工程改动已还原：{restored} 个文件恢复备份、{removed} 个新建文件已清理。");
+                Console.ResetColor();
+            }
+        }
+        catch
+        {
+            // 回滚失败不阻塞（可手动 rollback）
         }
     }
 

@@ -135,6 +135,12 @@ public sealed class WriteFileTool : AgentToolBase
         {
             BackupService.Backup(_workspaceRoot, fullPath, _projectRoot!);
         }
+        // 【P0-1】工程可写模式写【新建】工程文件 → 标记 .backup/.new/<rel>，
+        // 任务失败自动回滚时删除这些新文件（备份只覆盖已存在文件，新文件需单独追踪）。
+        else if (insideProject && _projectRoot is not null)
+        {
+            BackupService.MarkNewFile(_workspaceRoot, fullPath, _projectRoot);
+        }
 
         // 确保父目录存在
         var parent = Path.GetDirectoryName(fullPath);

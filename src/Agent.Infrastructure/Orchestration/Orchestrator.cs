@@ -676,6 +676,14 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     return (false, result + "\n[检测] 输出疑似模板内容。");
                 }
+
+                // 【P0-2】严格校验开关：expected 每一非空行须在 stdout 精确出现
+                if (_options.StrictOutputVerification &&
+                    !string.IsNullOrWhiteSpace(expectedOutput) &&
+                    !OutputVerifier.IsTaskExpectedOutputStrict(expectedOutput, stdoutLines))
+                {
+                    return (false, result + "\n[检测] 输出与计划预期不完全一致（严格模式：预期每一行须在输出中精确出现）。");
+                }
             }
 
             // 所有检查通过
