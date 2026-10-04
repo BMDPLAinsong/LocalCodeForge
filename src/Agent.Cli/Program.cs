@@ -101,8 +101,8 @@ internal class Program
         // ─────────── 工作区目录 ───────────
         var baseDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
         var runsRoot = Path.Combine(baseDir, "workspace", "runs");
-        // 【新增】清理旧 run 目录
-        CleanOldRuns(runsRoot, keepDays: 7, maxCount: 50);
+        // 【新增】清理旧 run 目录（保留最近 10 个；实测 51 个累积的根因是 maxCount=50 过宽）
+        CleanOldRuns(runsRoot, keepDays: 7, maxCount: 10);
         Directory.CreateDirectory(runsRoot);
 
         // 用启动时间 + 4 位随机数生成 run 名字
@@ -1017,7 +1017,7 @@ internal class Program
         Console.ResetColor();
         Console.WriteLine();
 
-        // 【新增】可疑数量
+        // 【新增】可疑数量 + 明细（让"表面成功但未真正实现需求"可审计追踪）
         if (summary.SuspiciousCount > 0)
         {
             Console.Write("  可疑成功:  ");
@@ -1025,6 +1025,28 @@ internal class Program
             Console.Write(summary.SuspiciousCount);
             Console.ResetColor();
             Console.WriteLine("  （触发过模板检测，可能未真正实现需求）");
+
+            // 明细：最近 5 条可疑成功（时间/模式/输入截断）
+            try
+            {
+                var recent = await metrics.GetRecentAsync(50, CancellationToken.None);
+                var suspicious = recent.Where(m => m.IsSuspicious && m.Success).OrderByDescending(m => m.StartedAt).Take(5).ToList();
+                if (suspicious.Count > 0)
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                    foreach (var m in suspicious)
+                    {
+                        var input = m.UserInput.Length > 40 ? m.UserInput[..40] + "..." : m.UserInput;
+                        Console.WriteLine($"    · {m.StartedAt:MM-dd HH:mm} {m.Mode}  {input}");
+                    }
+                    Console.ResetColor();
+                    Console.WriteLine("  （可疑成功明细 · 可 rollback 复查或重跑验证）");
+                }
+            }
+            catch
+            {
+                // 明细读取失败不影响主面板
+            }
         }
 
         Console.Write("  成功率:    ");

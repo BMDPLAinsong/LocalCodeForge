@@ -12,7 +12,33 @@ using System.Text.Json;
 
 // 测试临时根：X 盘（§14-3v，用户要求不在 C 盘 Temp 跑测试）。
 // workspace 已 gitignore；按进程隔离防并发互删。
-var TestTmp = Path.Combine(@"X:\.NET AI\LocalAiWorkbench\workspace\test-tmp", Environment.ProcessId.ToString());
+// 【1】test-tmp 清理：启动时删除 >7 天的旧测试目录（实测 99 个 pid 目录累积，防 X 盘膨胀），
+// 保留近期目录避免并发测试互删（当前 pid 目录后续创建）。
+var testTmpRoot = Path.Combine(@"X:\.NET AI\LocalAiWorkbench\workspace", "test-tmp");
+try
+{
+    if (Directory.Exists(testTmpRoot))
+    {
+        var cutoff = DateTime.Now.AddDays(-7);
+        foreach (var dir in Directory.GetDirectories(testTmpRoot))
+        {
+            try
+            {
+                if (Directory.GetCreationTime(dir) < cutoff)
+                    Directory.Delete(dir, recursive: true);
+            }
+            catch
+            {
+                // 忽略：可能被占用（并发测试）或无权限
+            }
+        }
+    }
+}
+catch
+{
+    // 清理失败不影响测试运行
+}
+var TestTmp = Path.Combine(testTmpRoot, Environment.ProcessId.ToString());
 Directory.CreateDirectory(TestTmp);
 
 var asm = Assembly.Load("Agent.Infrastructure");
@@ -1078,6 +1104,21 @@ Console.WriteLine("== 3 FailureCategorizer 失败类别归类 ==");
     var fb = fcMetrics.GetFailureBreakdownAsync(ctNone3).Result;
     Check("失败类别落库 → compile_error:1（成功不统计）",
         fb.Count == 1 && fb[0].Category == "compile_error" && fb[0].Count == 1);
+
+    // 可疑成功落库 + 明细读取（供 stats 可疑明细块）
+    fcMetrics.RecordAsync(new Agent.Core.Models.TaskMetric
+    {
+        TaskId = "fc_sus_1", SessionId = "s1", UserInput = "写 hello.txt 并验证", Mode = "agent",
+        RoutingTier = "Rule", ServiceId = "large", RoutingReason = "test",
+        Success = true, IsSuspicious = true, RetryCount = 0,
+        TotalMs = 30, PlannerMs = 0, ExecutorMs = 0, ValidatorMs = 0,
+        LintBlockingErrors = 0, LintWarningErrors = 0,
+        ErrorSummary = "", StartedAt = ts, FinishedAt = ts
+    }, ctNone3).Wait();
+    var susRecent = fcMetrics.GetRecentAsync(50, ctNone3).Result
+        .Where(m => m.IsSuspicious && m.Success).ToList();
+    Check("可疑成功落库 → GetRecentAsync 可过滤出明细",
+        susRecent.Count == 1 && susRecent[0].TaskId == "fc_sus_1");
 }
 
 // ── 任务1：工程增量计划校验（Plan vs 已有文件冲突） ──
