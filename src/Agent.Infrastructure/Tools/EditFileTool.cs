@@ -105,7 +105,8 @@ public sealed class EditFileTool : AgentToolBase
             if (conflicts.Count > 0)
             {
                 var hint = TypeConflictDetector.BuildExistingTypesHint(
-                    TypeConflictDetector.GetExistingTypes(_projectRoot, fullPath));
+                    TypeConflictDetector.GetExistingTypes(_projectRoot, fullPath),
+                    relative, true);
                 return $"错误：编辑内容检测到类型重复定义：{string.Join("；", conflicts)}。\n" +
                        $"{hint}\n" +
                        $"请勿在 {relative} 中重复定义工程已有类型；如需修改已有类型，请替换类型内部实现而不是重新定义。";

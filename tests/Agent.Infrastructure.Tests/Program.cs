@@ -311,6 +311,18 @@ Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
         pdNew.Contains("类型重复定义"));
     Check("P-D 新建文件拒绝 → 文件未创建",
         !File.Exists(Path.Combine(proj, "src", "OrderDup.cs")));
+    // 9b1) 10-04 增量修改引导：新建文件拒绝消息 → 含"是新建文件"指引（数据驱动，告诉模型下一步该做什么）
+    Check("P-D 新建文件拒绝消息 → 含'是新建文件'指引",
+        pdNew.Contains("是新建文件") && pdNew.Contains("OrderDup.cs") && pdNew.Contains("edit_file"));
+    // 9b2) 目标文件已存在（覆盖）场景 → 消息含 read_file/edit_file 局部修改指引（不整体重写）
+    W(wRw, "src/OrderService.cs", "using System;\nclass OrderService\n{\n    public int Id { get; set; }\n}\n");
+    var pdExist = W(wRw, "src/OrderService.cs",
+        "using System;\nclass Order\n{\n}\nclass OrderService\n{\n}\n");
+    Check("P-D 已存在文件拒绝消息 → 含 read_file/edit_file 局部修改指引",
+        pdExist.Contains("已存在于工程") && pdExist.Contains("read_file")
+        && pdExist.Contains("edit_file") && pdExist.Contains("不要 write_file 整体重写"));
+    Check("P-D 已存在文件拒绝 → 文件保持原状（未被覆盖）",
+        File.ReadAllText(Path.Combine(proj, "src", "OrderService.cs")).Contains("public int Id"));
     // 9c) 目标文件自身已有该类型（partial 场景）→ 不算冲突（扫描排除目标文件）
     var pdSelf = W(wRw, "src/Order.cs",
         "using System;\nclass Order\n{\n    public int Id { get; set; }\n    public string? Status { get; set; }\n}\n");

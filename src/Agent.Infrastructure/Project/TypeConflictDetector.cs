@@ -94,8 +94,13 @@ public static class TypeConflictDetector
     /// 生成"已有类型清单"文案（数据驱动引导）：
     /// "工程已有类型：Order(Order.cs), OrderService(OrderService.cs), …（共 N 个）。请勿重复定义以上类型；本文件只应定义新类型。"
     /// 超长工程最多列前 30 个 + "等 N 个"。
+    /// targetRelative/targetExists：目标文件状态感知的动作指引（10-04 增强，§14-3t）——
+    /// 让被 P-D 拦截的模型知道"下一步该做什么"：
+    ///   目标已存在 → 指引 read_file 查看 → edit_file 局部修改（不要整体重写）；
+    ///   目标是新文件 → 指引只定义新类型、已有类型在其所在文件内 edit 修改。
     /// </summary>
-    public static string BuildExistingTypesHint(Dictionary<string, string> existingByType)
+    public static string BuildExistingTypesHint(Dictionary<string, string> existingByType,
+        string? targetRelative = null, bool targetExists = false)
     {
         if (existingByType.Count == 0) return "";
         var items = existingByType
@@ -106,6 +111,20 @@ public static class TypeConflictDetector
         const int maxShown = 30;
         var shown = items.Count > maxShown ? items.Take(maxShown).ToList() : items;
         var suffix = items.Count > maxShown ? $" 等共 {items.Count} 个" : $"（共 {items.Count} 个）";
-        return $"工程已有类型：{string.Join(", ", shown)}{suffix}。请勿重复定义以上类型；本文件只应定义清单之外的新类型（不要整体重写已有文件，如需修改请用 edit_file 局部编辑）。";
+        var msg = $"工程已有类型：{string.Join(", ", shown)}{suffix}。请勿重复定义以上类型；本文件只应定义清单之外的新类型（不要整体重写已有文件，如需修改请用 edit_file 局部编辑）。";
+        if (!string.IsNullOrEmpty(targetRelative))
+        {
+            if (targetExists)
+            {
+                msg += $"\n注意：{targetRelative} 已存在于工程。请先 read_file {targetRelative} 查看当前内容，" +
+                       "再用 edit_file 局部修改（不要 write_file 整体重写该文件）。";
+            }
+            else
+            {
+                msg += $"\n注意：{targetRelative} 是新建文件，本文件只应定义清单之外的新类型；" +
+                       "若需修改已有类型，请在其所在文件内用 edit_file 局部编辑。";
+            }
+        }
+        return msg;
     }
 }
