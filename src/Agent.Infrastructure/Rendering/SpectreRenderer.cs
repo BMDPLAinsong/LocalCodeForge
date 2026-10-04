@@ -132,6 +132,8 @@ public sealed class SpectreRenderer : RendererBase
                 await foreach (var evt in channel.Reader.ReadAllAsync())
                 {
                     var line = FormatEvent(evt);
+                    // 事件加入前的快照：最终视图的灰显区只取 final 之前的事件（防同事件两次出现）
+                    var priorLines = new List<string>(lines);
                     foreach (var l in line.Split('\n'))
                         lines.Add(l);
                     while (lines.Count > MaxVisibleLines)
@@ -154,8 +156,9 @@ public sealed class SpectreRenderer : RendererBase
                     Panel panel;
                     if (isTerminalEvt)
                     {
-                        // 【10-04 微调】最终视图：面板内带最终行——最近事件灰显 + 分隔 + 最终行高亮
-                        var tail = lines.Skip(Math.Max(0, lines.Count - 5)).ToList();
+                        // 【10-04 微调】最终视图：面板内带最终行——final 之前的最近事件灰显 + 分隔 + 最终行高亮
+                        // （tail 取 priorLines：不含 final 行，一个事件只渲染一次）
+                        var tail = priorLines.Skip(Math.Max(0, priorLines.Count - 4)).ToList();
                         var body = new List<string>();
                         foreach (var l in tail)
                             body.Add($"[grey]{Markup.Escape(l)}[/]");
