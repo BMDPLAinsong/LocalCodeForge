@@ -102,16 +102,9 @@ public sealed class SpectreRenderer : RendererBase
                 }
                 _liveActive = false;
 
-                // LiveDisplay 区域结束后其内容不可见 → 结束事件必须留痕到滚动缓冲区
-                var line = FormatEvent(evt);
-                var color = evt is AgentEvent.FinalAnswer ? "green" : "red";
-                foreach (var l in line.Split('\n'))
-                    AnsiConsole.MarkupLine($"[{color}]{Markup.Escape(l)}[/]");
-                AnsiConsole.Write(new Rule(evt is AgentEvent.FinalAnswer ? "[bold green]任务完成[/]" : "[bold red]任务失败[/]")
-                {
-                    Style = Style.Parse(evt is AgentEvent.FinalAnswer ? "green" : "red"),
-                });
-                Console.WriteLine();
+                // 【10-04 微调】省掉重复输出：最终行已由 LiveLoopAsync 写入面板（LiveDisplay
+                // 结束后最后画面保留在屏幕上，用户截图实证边框可见）——不再向滚动缓冲区重复
+                // 输出 [完成]/[错误] 与 Rule。异常回退态（无实时区）仍由下方 else 分支直出兜底。
             }
         }
         else if (isTerminal)
@@ -145,6 +138,7 @@ public sealed class SpectreRenderer : RendererBase
                         lines.RemoveAt(0);
 
                     // 实时区渲染：滚动事件流 + 当前状态
+                    var isTerminalEvt = evt is AgentEvent.FinalAnswer or AgentEvent.Error;
                     var color = evt switch
                     {
                         AgentEvent.Routing => "yellow",
@@ -156,10 +150,29 @@ public sealed class SpectreRenderer : RendererBase
                         AgentEvent.Error => "red",
                         _ => "default",
                     };
-                    var markup = new Markup(string.Join('\n', lines.Select(l => $"[{color}]{Markup.Escape(l)}[/]")));
-                    var panel = new Panel(markup)
-                        .Header(evt is AgentEvent.FinalAnswer or AgentEvent.Error ? "任务结束" : "任务执行中", Justify.Left)
-                        .BorderColor(evt is AgentEvent.FinalAnswer ? Color.Green : evt is AgentEvent.Error ? Color.Red : Color.Green);
+
+                    Panel panel;
+                    if (isTerminalEvt)
+                    {
+                        // 【10-04 微调】最终视图：面板内带最终行——最近事件灰显 + 分隔 + 最终行高亮
+                        var tail = lines.Skip(Math.Max(0, lines.Count - 5)).ToList();
+                        var body = new List<string>();
+                        foreach (var l in tail)
+                            body.Add($"[grey]{Markup.Escape(l)}[/]");
+                        body.Add("[grey]──────────[/]");
+                        foreach (var l in line.Split('\n'))
+                            body.Add($"[bold {color}]{Markup.Escape(l)}[/]");
+                        panel = new Panel(new Markup(string.Join('\n', body)))
+                            .Header(evt is AgentEvent.FinalAnswer ? "任务完成" : "任务失败", Justify.Left)
+                            .BorderColor(evt is AgentEvent.FinalAnswer ? Color.Green : Color.Red);
+                    }
+                    else
+                    {
+                        var markup = new Markup(string.Join('\n', lines.Select(l => $"[{color}]{Markup.Escape(l)}[/]")));
+                        panel = new Panel(markup)
+                            .Header("任务执行中", Justify.Left)
+                            .BorderColor(Color.Green);
+                    }
                     ctx.UpdateTarget(panel);
                     ctx.Refresh();
                 }
