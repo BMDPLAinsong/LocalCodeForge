@@ -54,8 +54,10 @@ public sealed class DependencyAnalyzerTool : AgentToolBase
 
         var relative = args.GetProperty("path").GetString()!;
         var fullPath = Path.GetFullPath(Path.Combine(_projectRoot, relative));
-        if (!fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase))
-            return Task.FromResult("错误：路径越界。");
+
+        // 【读策略 · 双根保护】工程模式放开 + 敏感区源头硬拒（analyze_deps 只服务工程模式）
+        if (SensitivePathGuard.IsDenied(fullPath))
+            return Task.FromResult($"错误：路径涉及敏感区（{fullPath}），禁止读取。");
         if (!File.Exists(fullPath))
             return Task.FromResult($"错误：文件不存在：{relative}");
 

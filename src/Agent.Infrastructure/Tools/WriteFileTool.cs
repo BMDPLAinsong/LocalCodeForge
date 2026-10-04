@@ -140,10 +140,11 @@ public sealed class WriteFileTool : AgentToolBase
         // 完整路径
         var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
 
-        // 越界检查：任务工作区 或（工程可写时）工程根 内
-        var insideWorkspace = fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase);
+        // 【写白名单 · 双根保护】WriteRoots = {workspaceRoot} ∪ {projectRoot(工程可写)}；
+        // PathBoundary 逐段比较根治 StartsWith 前缀假阳性（X:\proj2 不再被 X:\proj 放行）
+        var insideWorkspace = PathBoundary.IsInside(_workspaceRoot, fullPath);
         var insideProject = _projectWriteEnabled && _projectRoot is not null
-            && fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase);
+            && PathBoundary.IsInside(_projectRoot, fullPath);
         if (!insideWorkspace && !insideProject)
         {
             var err = "错误：路径越界。";

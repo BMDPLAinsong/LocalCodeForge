@@ -4,6 +4,8 @@ using System.Text.Json;
 // 命名空间
 namespace Agent.Infrastructure.Tools;
 
+using Agent.Infrastructure.Project;
+
 /// <summary>
 /// 列出目录内容的工具。让 Agent 能探查项目结构。
 /// </summary>
@@ -54,12 +56,15 @@ public sealed class ListDirTool : AgentToolBase
         // 拼接并规范化完整路径
         var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
 
-        // 安全检查：路径必须位于任务工作区 或 工程根 内
-        var insideWorkspace = fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase);
-        var insideProject = _projectRoot is not null && fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase);
-        if (!insideWorkspace && !insideProject)
+        // 【读策略 · 双根保护】沙箱模式仅限工作区根内；工程模式放开。
+        // 统一：敏感区源头硬拒（内容不进上下文）。
+        if (_projectRoot is null && !PathBoundary.IsInside(_workspaceRoot, fullPath))
         {
             return Task.FromResult("错误：路径越界。");
+        }
+        if (SensitivePathGuard.IsDenied(fullPath))
+        {
+            return Task.FromResult($"错误：路径涉及敏感区（{fullPath}），禁止读取。");
         }
 
         // 目录不存在
@@ -68,18 +73,26 @@ public sealed class ListDirTool : AgentToolBase
             return Task.FromResult($"错误：目录不存在：{relative}");
         }
 
-        // 用 StringBuilder 拼接输出
+        // 【防呆】条目上限 500：读放开后 list_dir C:\Users 可能几万行——封顶并提示缩小范围
         var sb = new System.Text.StringBuilder();
+        var dirs = Directory.GetDirectories(fullPath);
+        var files = Directory.GetFiles(fullPath);
+        if (dirs.Length + files.Length > 500)
+        {
+            return Task.FromResult(
+                $"错误：目录条目过多（{dirs.Length + files.Length} 项），仅返回前 500 项会造成信息失真。" +
+                $"请缩小范围（列出子目录后用 list_dir 逐级进入）。");
+        }
 
         // 逐个子目录
-        foreach (var dir in Directory.GetDirectories(fullPath))
+        foreach (var dir in dirs)
         {
             // 只显示相对路径的最后一段 + 斜杠
             sb.AppendLine($"[DIR]  {Path.GetFileName(dir)}/");
         }
 
         // 逐个文件
-        foreach (var file in Directory.GetFiles(fullPath))
+        foreach (var file in files)
         {
             // 显示文件名 + 大小
             var info = new FileInfo(file);

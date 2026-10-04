@@ -13,6 +13,8 @@ using System.Text.RegularExpressions;
 
 namespace Agent.Infrastructure.Tools;
 
+using Agent.Infrastructure.Project;
+
 /// <summary>
 /// 分析代码文件结构：类型/方法/属性/函数 名称 + 行号索引。
 /// </summary>
@@ -52,10 +54,11 @@ public sealed class CodeAnalyzerTool : AgentToolBase
         var baseRoot = _projectRoot ?? _workspaceRoot;
         var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
 
-        var insideWorkspace = fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase);
-        var insideProject = _projectRoot is not null && fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase);
-        if (!insideWorkspace && !insideProject)
+        // 【读策略 · 双根保护】沙箱模式仅限工作区根内；工程模式放开。敏感区源头硬拒。
+        if (_projectRoot is null && !PathBoundary.IsInside(_workspaceRoot, fullPath))
             return Task.FromResult("错误：路径越界。");
+        if (SensitivePathGuard.IsDenied(fullPath))
+            return Task.FromResult($"错误：路径涉及敏感区（{fullPath}），禁止读取。");
 
         if (!File.Exists(fullPath))
             return Task.FromResult($"错误：文件不存在：{relative}");

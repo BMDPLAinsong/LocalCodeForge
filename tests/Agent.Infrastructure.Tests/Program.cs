@@ -673,8 +673,8 @@ Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==
         return tool.InvokeAsync(args, CancellationToken.None).GetAwaiter().GetResult();
     }
 
-    Check("工程模式：盘符路径越界（C:\\Windows）→ 拒绝",
-        Rc(proj, "dir C:\\Windows").Contains("越界"));
+    Check("工程模式：盘符敏感路径（C:\\Windows）→ 敏感源头拒",
+        Rc(proj, "dir C:\\Windows").Contains("敏感"));
     Check("工程模式：路径穿越（..）→ 拒绝",
         Rc(proj, "type ..\\..\\Windows\\win.ini").Contains("越界"));
     Check("工程模式：工程根内绝对路径 → 放行",
@@ -1987,6 +1987,134 @@ Console.WriteLine("== Spectre P0 渲染器（Rendering/） ==");
     // ── 5. 双路径漂移回归：orch 命令与任务路径同源（ToolResult 统一截断 300）──
     Check("ToolResult 截断统一 300（orch 路径原 500 已收敛）",
         Agent.Infrastructure.Rendering.RendererBase.FormatEvent(tr2).Length <= 300 + " [工具结果] read_file: ".Length + "...".Length);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 双根保护（读放开 / 写白名单 / 敏感源头拒）——PathBoundary + SensitivePathGuard
+// ═══════════════════════════════════════════════════════════════
+Console.WriteLine("== 双根保护：PathBoundary 逐段比较 ==");
+{
+    Check("子目录在内", Agent.Infrastructure.Project.PathBoundary.IsInside(@"X:\proj", @"X:\proj\src\a.cs"));
+    Check("root 自身在内", Agent.Infrastructure.Project.PathBoundary.IsInside(@"X:\proj", @"X:\proj"));
+    Check("前缀假阳性根治（proj2 不被 proj 放行）", !Agent.Infrastructure.Project.PathBoundary.IsInside(@"X:\proj", @"X:\proj2\a.cs"));
+    Check(".. 跳脱拒绝",
+        !Agent.Infrastructure.Project.PathBoundary.IsInside(@"X:\proj", System.IO.Path.GetFullPath(@"X:\proj\..\proj2\a.cs")));
+    Check("大小写归一", Agent.Infrastructure.Project.PathBoundary.IsInside(@"X:\PROJ", @"x:\proj\a.cs"));
+}
+
+Console.WriteLine("== 双根保护：SensitivePathGuard 敏感区源头拒 ==");
+{
+    Check("系统区命中（C:\\Windows 子路径）", Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(@"C:\Windows\System32\evil.txt"));
+    Check("凭据区命中（.ssh）", Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(@"C:\Users\26543\.ssh\config"));
+    Check("前缀假阳性不误伤（C:\\Windows2）", !Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(@"C:\Windows2\evil.txt"));
+    Check("普通工程路径不拒", !Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(@"X:\work\proj\src\a.cs"));
+
+    // 8.3 短名（条件断言：仅当短名目录真实存在）
+    var shortDir = @"C:\PROGRA~1\Common Files";
+    if (Directory.Exists(shortDir))
+        Check("8.3 短名绕过被拦（C:\\PROGRA~1）", Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(shortDir));
+    else
+        Console.WriteLine("  [SKIP] 8.3 短名断言：C:\\PROGRA~1\\Common Files 不存在（系统可能关闭了 8.3 短名）");
+
+    // 符号链接（条件断言：junction 创建成功才测）
+    var linkBase = Path.Combine(TestTmp, "tests_dr_link");
+    if (Directory.Exists(linkBase)) Directory.Delete(linkBase, true);
+    Directory.CreateDirectory(linkBase);
+    var linkPath = Path.Combine(linkBase, "lnk");
+    var linked = false;
+    try
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{linkPath}\" \"C:\\Windows\"")
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        p.WaitForExit(5000);
+        linked = p.ExitCode == 0 && Directory.Exists(linkPath);
+    }
+    catch { linked = false; }
+    if (linked)
+    {
+        Check("符号链接最终目标命中敏感区（link→C:\\Windows）",
+            Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(Path.Combine(linkPath, "System32", "cmd.exe")));
+        // junction 目录删除需先删链接本体（否则 UnauthorizedAccessException）
+        try { Directory.Delete(linkPath); } catch { }
+        try { Directory.Delete(linkBase, true); } catch { }
+    }
+    else
+        Console.WriteLine("  [SKIP] 符号链接断言：junction 创建失败（权限或环境）");
+
+    // 用户自定义 denylist（第三类预留）：不存在静默 + 存在加载
+    var dlDir = Path.Combine(TestTmp, "tests_dr_denylist");
+    if (Directory.Exists(dlDir)) Directory.Delete(dlDir, true);
+    Directory.CreateDirectory(dlDir);
+    Agent.Infrastructure.Project.SensitivePathGuard.LoadUserDenylist(dlDir); // 无 sensitive_denylist.txt → 静默跳过
+    Check("denylist 文件不存在 → 静默（不抛）", true);
+    File.WriteAllText(Path.Combine(dlDir, "sensitive_denylist.txt"),
+        "# 用户自定义敏感路径\n\n  \nX:\\work\\my_private\n");
+    Agent.Infrastructure.Project.SensitivePathGuard.AddDeniedRoot(@"X:\work\my_private");
+    Check("用户 denylist 追加生效", Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(@"X:\work\my_private\secret.txt"));
+    Directory.Delete(dlDir, true);
+}
+
+Console.WriteLine("== 双根保护：写白名单（WriteRoots）+ 前缀假阳性 ==");
+{
+    var baseTmp = Path.Combine(TestTmp, "tests_dr_write");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    var ws = Path.Combine(baseTmp, "task");
+    var proj = Path.Combine(baseTmp, "proj");
+    var proj2 = Path.Combine(baseTmp, "proj2"); // 前缀同名目录（假阳性测试靶）
+    Directory.CreateDirectory(ws);
+    Directory.CreateDirectory(proj);
+    Directory.CreateDirectory(proj2);
+
+    string W(Agent.Infrastructure.Tools.AgentToolBase tool, string path, string content)
+    {
+        var json = $"{{\"path\":{JsonSerializer.Serialize(path)},\"content\":{JsonSerializer.Serialize(content)}}}";
+        var args = JsonSerializer.Deserialize<JsonElement>(json);
+        return tool.InvokeAsync(args, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    var wRw = new Agent.Infrastructure.Tools.WriteFileTool(ws, proj, true);
+    var absIn = Path.Combine(proj, "src", "Abs.cs");
+    Check("写白名单：工程根内绝对路径 → 放行",
+        W(wRw, absIn, "// abs\n").Contains("已写入") && File.Exists(absIn));
+    var absOut = Path.Combine(baseTmp, "outside.cs");
+    Check("写白名单：双根外绝对路径 → 越界拒",
+        W(wRw, absOut, "x").Contains("越界"));
+    Check("写白名单：前缀同名目录（proj2）→ 越界拒（假阳性根治）",
+        W(wRw, Path.Combine(proj2, "f.cs"), "x").Contains("越界"));
+    Directory.Delete(baseTmp, true);
+}
+
+Console.WriteLine("== 双根保护：run_command 敏感路径源头拒（跨模式） ==");
+{
+    var baseTmp = Path.Combine(TestTmp, "tests_dr_rc");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    var ws = Path.Combine(baseTmp, "task");
+    Directory.CreateDirectory(ws);
+
+    string Rc(string command)
+    {
+        var tool = new Agent.Infrastructure.Tools.RunCommandTool(ws);
+        var args = JsonSerializer.Deserialize<JsonElement>($"{{\"command\":{JsonSerializer.Serialize(command)}}}");
+        return tool.InvokeAsync(args, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    Check("绝对路径敏感命令 → 拒绝", Rc("type C:\\Users\\26543\\.ssh\\config").Contains("敏感"));
+    Check("环境变量展开后敏感命令 → 拒绝", Rc("type %USERPROFILE%\\.ssh\\config").Contains("敏感"));
+    Directory.Delete(baseTmp, true);
+}
+
+Console.WriteLine("== 双根保护：启动重叠自检 ==");
+{
+    var overlaps = Agent.Infrastructure.Project.SensitivePathGuard.FindWriteRootOverlaps(new[] { @"X:\work\proj" });
+    Check("正常工程根不重叠", overlaps.Count == 0);
+    // 工程根落在敏感区内 → 命中
+    var overlaps2 = Agent.Infrastructure.Project.SensitivePathGuard.FindWriteRootOverlaps(
+        new[] { @"C:\Users\26543\.ssh\myproj" });
+    Check("敏感区内工程根 → 重叠检出", overlaps2.Count == 1);
 }
 
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");

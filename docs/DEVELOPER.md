@@ -146,12 +146,12 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 
 | 工具 | 文件 | 职责与关键行为 |
 | --- | --- | --- |
-| `list_dir` | ListDirTool.cs | 列目录；双根越界检查（任务根/工程根） |
-| `read_file` | ReadFileTool.cs | **行级分页**（offset/limit，默认 500）；大文件（>100KB）无 offset 拒绝 + 符号定位引导；分页头附 find_symbol/analyze_code 提示；**hasOffset 收紧**（仅 limit 不算分页意图，防绕过） |
-| `write_file` | WriteFileTool.cs | 写文件；**P-D 类型冲突拦截**（工程已有类型名重复定义拒绝 + 类型清单 + 动作指引）；P-D 熔断（同路径拒≥2 次 → 强制 edit_file 指令）；工程可写自动备份 + MarkNewFile；.py 强制 HTTP timeout=8；项目名幻觉校验；tool_rejections 落库 |
-| `edit_file` | EditFileTool.cs | 精确替换；old_string 未命中查备份漂移诊断；冲突检测；P-D 拦截；备份 |
-| `create_dir` | CreateDirTool.cs | 建目录；双根检查 |
-| `run_command` | RunCommandTool.cs | 命令执行；**白名单**（dotnet/python/type 等）；工程模式路径边界（..\ / 盘符绝对路径越界拒绝）；cwd=工程根（工程模式）；超时双轨（沙箱 30s/工程 90s）；交互拦截（PyCodeGuard）；项目名幻觉校验 |
+| `list_dir` | ListDirTool.cs | 列目录；**读策略分档**（沙箱仅限工作区根/工程模式放开）+ 敏感区源头拒；500 条目上限 |
+| `read_file` | ReadFileTool.cs | **行级分页**（offset/limit，默认 500）；大文件（>100KB）无 offset 拒绝 + 符号定位引导；分页头附 find_symbol/analyze_code 提示；**hasOffset 收紧**（仅 limit 不算分页意图，防绕过）；**读策略分档 + 敏感区源头拒**（工程模式读放开——Trae 式给路径就干活；沙箱仍限工作区根；敏感区读取前硬拒内容不进上下文） |
+| `write_file` | WriteFileTool.cs | 写文件；**写白名单**（WriteRoots=workspaceRoot ∪ projectRoot(工程可写)，PathBoundary 逐段比较）；**P-D 类型冲突拦截**（工程已有类型名重复定义拒绝 + 类型清单 + 动作指引）；P-D 熔断（同路径拒≥2 次 → 强制 edit_file 指令）；工程可写自动备份 + MarkNewFile；.py 强制 HTTP timeout=8；项目名幻觉校验；tool_rejections 落库 |
+| `edit_file` | EditFileTool.cs | 精确替换；old_string 未命中查备份漂移诊断；冲突检测；P-D 拦截；备份；**写白名单**（同 write_file） |
+| `create_dir` | CreateDirTool.cs | 建目录；**写白名单**（同 write_file） |
+| `run_command` | RunCommandTool.cs | 命令执行；**白名单**（dotnet/python/type 等）；**敏感路径源头拒**（跨模式：命令串先展开环境变量再正则提取路径 token → IsDenied，防 `type %USERPROFILE%\.ssh\config` 绕过读黑名单）；工程模式路径边界（..\ / 盘符绝对路径越界拒绝，PathBoundary 逐段）；cwd=工程根（工程模式）；超时双轨（沙箱 30s/工程 90s）；交互拦截（PyCodeGuard）；项目名幻觉校验 |
 | `analyze_code` | CodeAnalyzerTool.cs | 代码符号地图（class/方法/属性+行号，正则确定性）；支持大文件（200KB→5MB）；非代码文件降级提示 |
 | `find_symbol` | FindSymbolTool.cs | 符号定位（symbol_index.db，惰性索引 + **Find 前增量刷新**）；命中返回 [文件:行号] + 操作指引（read_file offset 建议） |
 | `analyze_deps` | DependencyAnalyzerTool.cs | 文件依赖/反向依赖（改动影响面）；复用 symbol 索引 |
@@ -195,6 +195,8 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 | 类型冲突 P-D | TypeConflictDetector.cs | 写前检测新内容含工程已有类型 → 拒绝（class/interface/enum/struct/record，剥离注释/字符串防误报） |
 | 测试门 | TestProjectDetector.cs + TestRunnerService.cs | 检测测试入口（*.Tests.csproj/pytest/package.json test）；工程模式改代码后自动跑测试 |
 | 计划校验 | Orchestrator.CheckIncrementalPlanConflicts | 工程增量任务 Plan 中"已有文件≥2" → Planner 阶段拒绝（防整体重写） |
+| **路径边界** | PathBoundary.cs | **逐路径分段比较**（OrdinalIgnoreCase + 分隔符归一）：root 自身/子目录=true，`X:\proj2` 对 `X:\proj`=false（StartsWith 前缀假阳性根治），`..` 跳脱经 GetFullPath 归一后必越界。**写白名单共用**（WriteFile/EditFile/CreateDir 的 WriteRoots = workspaceRoot ∪ projectRoot） |
+| **敏感源头拒** | SensitivePathGuard.cs | **读=黑名单排除**：内置系统区 4 + 凭据区 9 + 用户 denylist（workspace\sensitive_denylist.txt，# 注释/空行跳过/幂等）；**源头拒绝**（读取动作前判定，内容不进 chatHistory/SQLite/记忆库）。四条判定线：①长名逐段匹配 ②8.3 短名双向展开（GetLongPathNameW/GetShortPathNameW P/Invoke）③符号链接/junction **逐段** ResolveLinkTarget（reparse point 在目录段，只解析整路径会漏）④UNC `\\?\` 前缀剥除。模式分档：工程模式读放开+黑名单硬拒；沙箱模式读仍限 workspaceRoot。`FindWriteRootOverlaps` 启动自检（工程根命中 denylist → WARN）。已知边界：脚本内敏感读不做（用户意图即授权，下一轮做写入内容扫描） |
 
 ### 防假完成防线（AgentLoop）
 

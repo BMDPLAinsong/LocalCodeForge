@@ -7,6 +7,8 @@ using System.Text.Json;
 
 namespace Agent.Infrastructure.Tools;
 
+using Agent.Infrastructure.Project;
+
 /// <summary>
 /// 创建目录的工具。
 /// 已存在时不报错，无副作用（幂等）。
@@ -56,10 +58,10 @@ public sealed class CreateDirTool : AgentToolBase
         var baseRoot = _projectWriteEnabled && _projectRoot is not null ? _projectRoot : _workspaceRoot;
         var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
 
-        // 越界检查：任务工作区 或（工程可写时）工程根 内
-        var insideWorkspace = fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase);
+        // 【写白名单 · 双根保护】WriteRoots = {workspaceRoot} ∪ {projectRoot(工程可写)}；逐段比较根治前缀假阳性
+        var insideWorkspace = PathBoundary.IsInside(_workspaceRoot, fullPath);
         var insideProject = _projectWriteEnabled && _projectRoot is not null
-            && fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase);
+            && PathBoundary.IsInside(_projectRoot, fullPath);
         if (!insideWorkspace && !insideProject)
             return Task.FromResult("错误：路径越界。");
 

@@ -67,6 +67,15 @@ public sealed class RunCommandTool : AgentToolBase
         // 【新增】命令规范化
         command = NormalizeCommand(command);
 
+        // 【双根保护】敏感路径源头拒（跨模式：工程/沙箱都生效）——防 run_command 绕过读黑名单：
+        // 命令串先展开环境变量（%USERPROFILE% 等），再正则提取路径 token，归一化后 IsDenied。
+        // 与 read_file 等读工具的敏感区硬拒同源：敏感内容不进 stdout → 不进 chatHistory/SQLite/记忆库。
+        var sensitiveError = CheckSensitivePaths(command);
+        if (sensitiveError is not null)
+        {
+            return sensitiveError;
+        }
+
         // 【工程感知 §14-3t】工程模式路径边界：命令中的显式盘符路径必须落在
         // 任务根 或 工程根 内；.. 穿越直接拒绝（检查在 NormalizePython 之前，
         // 工具注入的系统 python 绝对路径不参与检查）。沙箱模式（projectRoot=null）保持现状。
@@ -256,6 +265,44 @@ public sealed class RunCommandTool : AgentToolBase
     }
 
     /// <summary>
+    /// 敏感路径源头拒（双根保护）：命令串展开环境变量后提取路径 token，
+    /// 归一化判定是否命中敏感区。接受"正则提取"精度（用户确认）——
+    /// 误伤边界（如 echo "C:\Windows" 字面输出）以明确提示兜底。
+    /// </summary>
+    private static string? CheckSensitivePaths(string command)
+    {
+        // 1) 环境变量展开（%VAR% 形态；cmd 运行时同样展开，此处仅用于路径判定）
+        string expanded;
+        try { expanded = Environment.ExpandEnvironmentVariables(command); }
+        catch { expanded = command; }
+
+        // 2) 提取路径 token：引号包裹路径 / 盘符绝对路径 / UNC 路径（含 \\?\ 前缀形态）
+        var pathMatches = System.Text.RegularExpressions.Regex.Matches(
+            expanded, "\"[^\"]+\"|\\b[A-Za-z]:\\\\[^ \\t\\n\\r\"]*|\\\\\\\\[^ \\t\\n\\r\"]+");
+
+        foreach (System.Text.RegularExpressions.Match m in pathMatches)
+        {
+            var token = m.Value.Trim('"');
+            if (token.Length == 0) continue;
+
+            var norm = Agent.Infrastructure.Project.PathBoundary.Normalize(token);
+            if (string.IsNullOrEmpty(norm)) continue;
+
+            // 非绝对路径 token（相对路径/裸词）跳过——无法归一化到敏感区
+            if (!Path.IsPathRooted(norm)) continue;
+
+            if (Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(norm))
+            {
+                return $"错误：命令涉及敏感路径，禁止执行：{token}\n" +
+                       "命令引用了系统区或凭据区路径（内容不得进入上下文）。" +
+                       "若仅为字面文本输出，请改写命令避免引用真实路径。\n退出码：126";
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// 工程模式路径边界检查（§14-3t）。
     /// 1) 命令含 .. 路径片段（..\ 或 ../）→ 拒绝（防穿越逃逸）。
     /// 2) 显式盘符绝对路径（含引号包裹的空格路径）→ Path.GetFullPath 解析，
@@ -280,8 +327,8 @@ public sealed class RunCommandTool : AgentToolBase
             try { full = Path.GetFullPath(token); }
             catch { continue; }
 
-            var insideWorkspace = full.StartsWith(workspaceRoot, StringComparison.OrdinalIgnoreCase);
-            var insideProject = full.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase);
+            var insideWorkspace = Agent.Infrastructure.Project.PathBoundary.IsInside(workspaceRoot, full);
+            var insideProject = Agent.Infrastructure.Project.PathBoundary.IsInside(projectRoot, full);
             if (!insideWorkspace && !insideProject)
             {
                 return $"错误：路径越界（命令引用工作区/工程根之外的路径）：{token}\n退出码：126";

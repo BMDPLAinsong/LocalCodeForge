@@ -4,6 +4,8 @@ using System.Text.Json;
 // 命名空间
 namespace Agent.Infrastructure.Tools;
 
+using Agent.Infrastructure.Project;
+
 /// <summary>
 /// 读取文本文件内容的工具。
 /// </summary>
@@ -69,11 +71,13 @@ public sealed class ReadFileTool : AgentToolBase
         // 完整路径
         var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
 
-        // 越界检查：任务工作区 或 工程根 内
-        var insideWorkspace = fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase);
-        var insideProject = _projectRoot is not null && fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase);
-        if (!insideWorkspace && !insideProject)
+        // 【读策略 · 双根保护】沙箱模式（projectRoot null）：仅限工作区根内（隔离语义保持）；
+        // 工程模式（用户显式授权）：默认放开——"给路径就干活"。
+        // 两种模式统一：敏感区在读取动作【之前】源头硬拒——内容物理不进 chatHistory/SQLite/记忆库。
+        if (_projectRoot is null && !PathBoundary.IsInside(_workspaceRoot, fullPath))
             return "错误：路径越界。";
+        if (SensitivePathGuard.IsDenied(fullPath))
+            return $"错误：路径涉及敏感区（{fullPath}），禁止读取。";
 
         // 文件不存在
         if (!File.Exists(fullPath))

@@ -111,6 +111,9 @@ internal class Program
         var workspace = Path.Combine(runsRoot, runName);
         Directory.CreateDirectory(workspace);
 
+        // 【双根保护】用户自定义敏感 denylist 加载（workspace 根下 sensitive_denylist.txt，幂等）
+        Agent.Infrastructure.Project.SensitivePathGuard.LoadUserDenylist(workspace);
+
         string? lastTaskId = null; // 手动 rollback 命令作用域：最近一次任务的 taskId（P-B）
 
         // SQLite 数据库：所有 run 共用一个
@@ -408,6 +411,17 @@ internal class Program
                 }
                 if (writeFlag)
                     Console.WriteLine("工程可写模式已开启（改动前自动备份，可用 rollback 恢复）。");
+
+                // 【双根保护】启动自检：工程根是否与敏感区重叠（用户手滑把工程加进 denylist → 读写双拒）
+                var overlaps = Agent.Infrastructure.Project.SensitivePathGuard.FindWriteRootOverlaps(
+                    new[] { options.ProjectRoot! });
+                if (overlaps.Count > 0)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine($"警告：工程根 {overlaps[0]} 命中敏感区 denylist——读写将全部被拒。" +
+                                      "如属误加，请从 workspace\\sensitive_denylist.txt 移除该路径。");
+                    Console.ResetColor();
+                }
                 continue;
             }
 
