@@ -161,23 +161,25 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 
 ---
 
-## 5.1 渲染层（Rendering/，Spectre P0 落地）
+## 5.1 渲染层（Rendering/，Spectre P0+P1+P2 最终态）
 
 **职责**：CLI 壳与未来 UI 宿主共用的渲染契约；事件格式化**单一来源**（防双路径漂移）。
 
 | 文件 | 职责 |
 | --- | --- |
-| `IRenderer.cs` | 渲染契约：Banner/ConfigBlock/Info(DarkGray)/Notice(Magenta)/Warn(Yellow)/Error(Red)/System(无色)/Prompt/ReadLine/**RenderEventAsync**（异步签名——Spectre 生命周期需要） |
+| `IRenderer.cs` | 渲染契约：Banner/ConfigBlock/Info(DarkGray)/Notice(Magenta)/Warn(Yellow)/Error(Red)/System(无色)/Prompt/ReadLine/**RenderEventAsync**（异步签名） |
 | `RendererBase.cs` | Console 直出实现（无头/默认，与旧 CLI 逐字节兼容）+ **纯函数 `FormatEvent`（七事件→文本，唯一事件格式化来源）/Truncate/FormatToolArgs**（tests 直接断言） |
 | `PlainTextRenderer.cs` | 无头路径（管道/重定向/E2E），逐事件 Console 输出 |
-| `SpectreRenderer.cs` | 交互路径：Panel 横幅/配置块 + 彩色事件流 + 任务 Rule 头尾；**构造不碰 AnsiConsole**（非终端可构造可测） |
-| `RendererFactory.cs` | `Create(interactive)`：false→PlainText / true→Spectre |
+| `SpectreRenderer.cs` | 交互路径：Panel 横幅/配置块 + **追加输出事件流**（关键节点 Panel + 高频事件彩色行）+ P2 命令块面板（StatsPanel BarChart / MemoryTable / BackupTable / RollbackPrompt 多选） |
+| `RendererFactory.cs` | `Create(interactive)`：false→PlainText / true→Spectre；**交互分支写入 `AnsiConsole.Profile.Width = Math.Max(80, Console.WindowWidth)`**（宽度根因修复） |
 
 **无头判定**（Program.cs 装配）：`!Console.IsInputRedirected && !Console.IsOutputRedirected` → 交互；管道/重定向 → PlainText（E2E 逐字节兼容）。
 
 **改渲染格式时**：只改 `RendererBase.FormatEvent`（纯函数），PlainText/Spectre 自动同步；必须补 tests 断言（七事件映射已固化，防回归）。
 
-**已知边界（诚实记录）**：~~Spectre 0.49 LiveDisplay 为回调阻塞式 API，与"外部事件流驱动渲染"模型不兼容——实时刷新区未落地~~ → **P1 已落地（10-04）**：事件 `Channel<AgentEvent>` + 后台线程跑 `LiveDisplay.StartAsync`（回调内 `ReadAllAsync` 消费并滚动刷新，保留最近 15 条）；`RenderEventAsync` 投递即返回不阻塞事件循环；FinalAnswer/Error 关闭 Channel → 实时区结束 → 结束事件留痕到滚动缓冲区。失败安全：LiveDisplay 异常捕获回退 P0 直出；live 线程等待带 5s 超时。**P2 命令块面板**：stats 概览 BarChart / memory Table / rollback 多选恢复（`if (renderer is SpectreRenderer spec)` 分支，无头路径零改动，仍走旧 Console 文本——E2E 冒烟逐字节兼容实证）。
+**交互态事件形态（10-04 最终收敛）**：**仅路由决策 / 任务完成 / 任务失败用 Panel**（黄/绿/红，`.Expand()` 撑满宽度）；规划/写入/工具调用/工具结果用彩色 MarkupLine（防一次任务 20 框视觉碎片）。文本一律 `Markup.Escape(FormatEvent(...))`——事件文本含 `[路由]` 等方括号，不转义会被 Spectre 解析成颜色标签。
+
+**教训固化（真终端复验驱动）**：①任务事件是**单向追加流**，不是原地刷新进度条——**禁用 LiveDisplay 类重绘 API**（初版 Channel+LiveDisplay 落地后实测残留：漂浮竖线/绿框缺底边/"任务完成"分隔线有起点无终点，前后帧叠加所致）；②终端 UI 边框类缺陷**先怀疑宽度计算**再归因渲染 API——真根因是 Spectre 误算终端宽度（认为 80 列，120+ 列内容边框错位），修复 = 初始化处显式写 `Console.WindowWidth` + 关键 Panel `.Expand()`；③一个事件一个渲染入口（最终视图灰显区取 final 之前的事件，无重复输出）。
 
 ---
 
