@@ -283,6 +283,25 @@ internal class Program
                     // 默认：显示汇总 + 最近 5 条
                     var decisionStore = provider.GetRequiredService<Agent.Infrastructure.Routing.RoutingDecisionStore>();
                     var rejectStore = provider.GetRequiredService<Agent.Infrastructure.Metrics.ToolRejectionStore>();
+
+                    // 【P2】交互态：stats 概览 BarChart（无头路径不变，仍走 PrintSummaryAsync 文本）
+                    if (renderer is Agent.Infrastructure.Rendering.SpectreRenderer spec)
+                    {
+                        var s = await metrics.GetSummaryAsync(null, CancellationToken.None);
+                        if (s.TotalCount > 0)
+                        {
+                            spec.StatsPanel("任务指标概览",
+                                new List<(string, double)>
+                                {
+                                    ("总任务数", s.TotalCount),
+                                    ("成功", s.SuccessCount),
+                                    ("失败", s.FailureCount),
+                                    ("成功率 %", Math.Round(s.SuccessRate * 100, 1)),
+                                    ("可疑", s.SuspiciousCount),
+                                });
+                        }
+                    }
+
                     await PrintSummaryAsync(metrics, options.LawUnifiedEpoch, featureAggregator, decisionStore, rejectStore);
                     await PrintRecentAsync(metrics, 5);
                 }
@@ -296,13 +315,22 @@ internal class Program
                 var mem = provider.GetRequiredService<Agent.Infrastructure.Memory.AgentMemoryStore>();
                 var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 var sub = parts.Length > 1 ? parts[1].ToLowerInvariant() : "stats";
+                var specRenderer = renderer as Agent.Infrastructure.Rendering.SpectreRenderer;
 
                 switch (sub)
                 {
                     case "list":
                     {
                         var n2 = parts.Length > 2 && int.TryParse(parts[2], out var take2) ? take2 : 20;
-                        foreach (var m in mem.List(n2))
+                        var rows = mem.List(n2);
+                        // 【P2】交互态：Table；无头保持旧文本
+                        if (specRenderer is not null)
+                        {
+                            specRenderer.MemoryTable($"记忆列表（{rows.Count} 条）",
+                                rows.Select(m => (m.Id.ToString(), m.Kind, m.HitCount.ToString(), m.Count.ToString(), m.Topic)).ToList());
+                            break;
+                        }
+                        foreach (var m in rows)
                             Console.WriteLine($"  [{m.Id}] {m.Kind} | hits={m.HitCount} count={m.Count} | {m.Topic} | {m.CreatedAt}");
                         break;
                     }
@@ -329,8 +357,17 @@ internal class Program
                     default:
                     {
                         var st = mem.GetStats();
+                        var rows = mem.List(10);
+                        // 【P2】交互态：统计 Table；无头保持旧文本
+                        if (specRenderer is not null)
+                        {
+                            Console.WriteLine($"记忆统计：共 {st.Total} 条（model {st.ModelCount} / task {st.TaskCount}），总命中 {st.TotalHits} 次");
+                            specRenderer.MemoryTable("最近记忆",
+                                rows.Select(m => (m.Id.ToString(), m.Kind, m.HitCount.ToString(), m.Count.ToString(), m.Topic)).ToList());
+                            break;
+                        }
                         Console.WriteLine($"记忆统计：共 {st.Total} 条（model {st.ModelCount} / task {st.TaskCount}），总命中 {st.TotalHits} 次");
-                        foreach (var m in mem.List(10))
+                        foreach (var m in rows)
                             Console.WriteLine($"  [{m.Id}] {m.Kind} | hits={m.HitCount} count={m.Count} | {m.Topic}");
                         break;
                     }
@@ -391,6 +428,28 @@ internal class Program
                         Console.WriteLine("  (无备份)");
                     foreach (var b in backups.Take(20))
                         Console.WriteLine($"  [{b.TaskId}/{b.Stamp}] {b.Rel}");
+
+                    // 【P2】交互态：备份 Table + 多选恢复（空格多选，回车执行；无头保持旧文本）
+                    if (renderer is Agent.Infrastructure.Rendering.SpectreRenderer spec && backups.Count > 0)
+                    {
+                        spec.BackupTable($"可用备份（{backups.Count} 条）",
+                            backups.Take(20).Select(b => (b.TaskId, b.Stamp, b.Rel)).ToList());
+                        if (!string.IsNullOrEmpty(lastTaskId))
+                        {
+                            var relChoices = backups.Select(b => b.Rel).Distinct().ToList();
+                            var selected = spec.RollbackPrompt(
+                                "选择要恢复的文件（[bold]空格[/]多选，[bold]回车[/]执行；未选则取消）", relChoices);
+                            var restored = 0;
+                            foreach (var relFile in selected)
+                            {
+                                var rollbackDest = BackupService.Rollback(workspace, relFile, options.ProjectRoot, lastTaskId);
+                                if (rollbackDest is not null) { Console.WriteLine($"已回滚：{rollbackDest}"); restored++; }
+                            }
+                            if (restored == 0)
+                                Console.WriteLine("未执行回滚。");
+                        }
+                    }
+
                     Console.WriteLine("用法：rollback all 恢复最近任务全部备份；rollback --dry-run 预览（不执行）；rollback <相对路径> 恢复最近任务该文件最近备份。");
                     continue;
                 }

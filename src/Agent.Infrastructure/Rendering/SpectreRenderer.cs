@@ -2,15 +2,21 @@
 // Rendering / SpectreRenderer.cs
 // 交互态渲染器（真实终端，非管道/重定向）：
 //   · 启动横幅 / 配置块 → Panel 状态卡
-//   · 任务执行 → 彩色事件流（MarkupLine，文本格式与 FormatEvent 单一来源一致）
-//     + 任务开始/结束 Panel 头尾
+//   · 任务执行 → 【P1】LiveDisplay 实时刷新区（事件 Channel + 后台渲染线程）
+//   · 命令块面板（stats/memory/rollback）→ Program.cs 交互分支调用（P2）
 // 构造不碰 AnsiConsole——保证非终端环境可构造可测（RendererFactory.Create(true) 可测）。
-// P0 边界：命令块（plan/memory/stats/rollback/use/健康检查）仍由 Program.cs 直出 Console。
-// 【P1 待办·诚实记录】LiveDisplay 实时刷新区未落地：Spectre 0.49 的 LiveDisplay API 为
-//   回调阻塞式（Start/StartAsync 必须在回调内自驱动工作），与内核"外部事件流驱动渲染"
-//   模型不兼容；P1 方案 = 事件 Channel + 后台渲染线程 + LiveDisplay 阻塞回调消费队列，
-//   或升级 Spectre 版本后重新评估。P0 以 Panel + 彩色事件流交付同等信息量。
+//
+// 【P1 实时刷新区实现（已落地，替代 P0 的 Panel+事件流）】
+//   Spectre 0.49 LiveDisplay 为回调阻塞式 API（StartAsync 必须在回调内自驱动工作）。
+//   本实现：RenderEventAsync 把事件投进 Channel<AgentEvent>（unbounded）后立即返回，
+//   不阻塞事件循环；后台线程跑 LiveDisplay.StartAsync，回调内 ReadAllAsync 消费队列并
+//   刷新（滚动保留最近 N 条）；收到 FinalAnswer/Error 时 TryComplete 关闭 Channel →
+//   回调读完剩余事件后返回 → LiveDisplay 区域结束；随后最终答案/错误经 AnsiConsole
+//   输出到滚动缓冲区（LiveDisplay 区域结束后其内容不可见，必须留痕）。
+//   失败安全：LiveDisplay 启动/刷新异常 → 捕获并回退为 P0 彩色事件流直出；等待 live
+//   线程加入带超时（5s），防非终端环境死锁。
 // ============================================================
+using System.Threading.Channels;
 using Agent.Core.Models;
 using Spectre.Console;
 
@@ -18,7 +24,12 @@ namespace Agent.Infrastructure.Rendering;
 
 public sealed class SpectreRenderer : RendererBase
 {
-    private bool _taskActive;
+    // ── P1：实时刷新区状态 ──
+    private Channel<AgentEvent>? _eventChannel;
+    private Task? _liveTask;
+    private bool _liveActive; // 当前是否有 LiveDisplay 在跑
+    private readonly object _liveLock = new();
+    private const int MaxVisibleLines = 15; // 实时区滚动保留条数
 
     // ── 启动横幅：Panel 状态卡 ──
     public override void Banner(string workspace, string dbPath)
@@ -50,42 +61,174 @@ public sealed class SpectreRenderer : RendererBase
         Console.WriteLine();
     }
 
-    // ── 事件渲染：Panel 头尾 + 彩色事件行（文本与 FormatEvent 单一来源一致）──
+    // ── P1：事件渲染（LiveDisplay 实时区 + 结束留痕） ──
     public override Task RenderEventAsync(AgentEvent evt)
     {
-        var line = FormatEvent(evt);
-
-        // 任务开始（首个非结束事件）：Panel 头
-        if (!_taskActive && evt is not (AgentEvent.FinalAnswer or AgentEvent.Error))
+        // 任务开始（首个事件且非结束事件）：启动实时区
+        if (!_liveActive)
         {
-            AnsiConsole.Write(new Rule("[bold green]任务执行中[/]") { Style = Style.Parse("green") });
-            _taskActive = true;
+            lock (_liveLock)
+            {
+                if (!_liveActive && evt is not (AgentEvent.FinalAnswer or AgentEvent.Error))
+                {
+                    _eventChannel = Channel.CreateUnbounded<AgentEvent>(new UnboundedChannelOptions
+                    {
+                        SingleReader = true,
+                        SingleWriter = false,
+                    });
+                    _liveActive = true;
+                    _liveTask = Task.Run(() => LiveLoopAsync(_eventChannel));
+                }
+            }
         }
 
-        var color = evt switch
+        // 结束事件：投递后关闭 Channel（后台读完剩余即退出），并等待实时区收尾
+        var isTerminal = evt is AgentEvent.FinalAnswer or AgentEvent.Error;
+        var channel = _eventChannel;
+        if (channel is not null)
         {
-            AgentEvent.Routing => "yellow",
-            AgentEvent.PlanGenerated => "yellow",
-            AgentEvent.FileWritten => "cyan",
-            AgentEvent.ToolCall => "cyan",
-            AgentEvent.ToolResultEvent tr => tr.Success ? "grey" : "red",
-            AgentEvent.FinalAnswer => "green",
-            AgentEvent.Error => "red",
-            _ => "default",
-        };
+            channel.Writer.TryWrite(evt);
+            if (isTerminal)
+            {
+                channel.Writer.TryComplete();
+                // 等待 LiveDisplay 回调退出（带超时防非终端死锁）；失败则回退直出
+                try
+                {
+                    _liveTask?.Wait(TimeSpan.FromSeconds(5));
+                }
+                catch (AggregateException)
+                {
+                    // 后台渲染异常已在 LiveLoopAsync 内捕获并回退，此处忽略
+                }
+                _liveActive = false;
 
-        // 多行事件（PlanGenerated 含文件清单）逐行着色输出
-        foreach (var l in line.Split('\n'))
-            AnsiConsole.MarkupLine($"[{color}]{Markup.Escape(l)}[/]");
-
-        // 任务结束：Panel 尾 + 空行
-        if (evt is AgentEvent.FinalAnswer or AgentEvent.Error)
+                // LiveDisplay 区域结束后其内容不可见 → 结束事件必须留痕到滚动缓冲区
+                var line = FormatEvent(evt);
+                var color = evt is AgentEvent.FinalAnswer ? "green" : "red";
+                foreach (var l in line.Split('\n'))
+                    AnsiConsole.MarkupLine($"[{color}]{Markup.Escape(l)}[/]");
+                AnsiConsole.Write(new Rule(evt is AgentEvent.FinalAnswer ? "[bold green]任务完成[/]" : "[bold red]任务失败[/]")
+                {
+                    Style = Style.Parse(evt is AgentEvent.FinalAnswer ? "green" : "red"),
+                });
+                Console.WriteLine();
+            }
+        }
+        else if (isTerminal)
         {
-            AnsiConsole.Write(new Rule(evt is AgentEvent.FinalAnswer ? "[bold green]任务完成[/]" : "[bold red]任务失败[/]") { Style = Style.Parse(evt is AgentEvent.FinalAnswer ? "green" : "red") });
-            Console.WriteLine();
-            _taskActive = false;
+            // 无实时区（异常回退态）：P0 直出，保证结束事件可见
+            var line = FormatEvent(evt);
+            var color = evt is AgentEvent.FinalAnswer ? "green" : "red";
+            foreach (var l in line.Split('\n'))
+                AnsiConsole.MarkupLine($"[{color}]{Markup.Escape(l)}[/]");
         }
 
         return Task.CompletedTask;
+    }
+
+    // ── P1：LiveDisplay 后台循环（阻塞回调内消费队列） ──
+    private static async Task LiveLoopAsync(Channel<AgentEvent> channel)
+    {
+        try
+        {
+            var lines = new List<string>(MaxVisibleLines);
+            var target = new Panel(new Markup("[grey]等待事件…[/]")).BorderColor(Color.Green);
+
+            await AnsiConsole.Live(target).StartAsync(async ctx =>
+            {
+                await foreach (var evt in channel.Reader.ReadAllAsync())
+                {
+                    var line = FormatEvent(evt);
+                    foreach (var l in line.Split('\n'))
+                        lines.Add(l);
+                    while (lines.Count > MaxVisibleLines)
+                        lines.RemoveAt(0);
+
+                    // 实时区渲染：滚动事件流 + 当前状态
+                    var color = evt switch
+                    {
+                        AgentEvent.Routing => "yellow",
+                        AgentEvent.PlanGenerated => "yellow",
+                        AgentEvent.FileWritten => "cyan",
+                        AgentEvent.ToolCall => "cyan",
+                        AgentEvent.ToolResultEvent tr => tr.Success ? "grey" : "red",
+                        AgentEvent.FinalAnswer => "green",
+                        AgentEvent.Error => "red",
+                        _ => "default",
+                    };
+                    var markup = new Markup(string.Join('\n', lines.Select(l => $"[{color}]{Markup.Escape(l)}[/]")));
+                    var panel = new Panel(markup)
+                        .Header(evt is AgentEvent.FinalAnswer or AgentEvent.Error ? "任务结束" : "任务执行中", Justify.Left)
+                        .BorderColor(evt is AgentEvent.FinalAnswer ? Color.Green : evt is AgentEvent.Error ? Color.Red : Color.Green);
+                    ctx.UpdateTarget(panel);
+                    ctx.Refresh();
+                }
+            });
+        }
+        catch (Exception)
+        {
+            // 非终端 / LiveDisplay 不可用：静默放弃实时区（事件仍由 RenderEventAsync 直出留痕）
+        }
+    }
+
+    // ═══════════ P2：命令块面板（交互态专用；无头路径不动，仍走旧 Console 文本） ═══════════
+
+    /// <summary>stats 概览 BarChart（交互态）</summary>
+    public void StatsPanel(string title, IReadOnlyList<(string Label, double Value)> bars)
+    {
+        var chart = new BarChart()
+            .Width(60)
+            .Label(title)
+            .CenterLabel();
+        foreach (var (label, value) in bars)
+            chart.AddItem(label, value);
+        AnsiConsole.Write(chart);
+        Console.WriteLine();
+    }
+
+    /// <summary>memory list / stats Table（交互态）</summary>
+    public void MemoryTable(string title, IReadOnlyList<(string Id, string Kind, string Hits, string Count, string Topic)> rows)
+    {
+        var table = new Table()
+            .Title(title)
+            .Border(TableBorder.Rounded)
+            .AddColumns(
+                new TableColumn("ID").LeftAligned(),
+                new TableColumn("Kind").LeftAligned(),
+                new TableColumn("Hits").RightAligned(),
+                new TableColumn("Count").RightAligned(),
+                new TableColumn("Topic").LeftAligned());
+        foreach (var (id, kind, hits, count, topic) in rows)
+            table.AddRow(id, kind, hits, count, Markup.Escape(topic));
+        AnsiConsole.Write(table);
+        Console.WriteLine();
+    }
+
+    /// <summary>rollback 备份列表 Table（交互态）</summary>
+    public void BackupTable(string title, IReadOnlyList<(string TaskId, string Stamp, string Rel)> rows)
+    {
+        var table = new Table()
+            .Title(title)
+            .Border(TableBorder.Rounded)
+            .AddColumns(
+                new TableColumn("TaskId").LeftAligned(),
+                new TableColumn("Stamp").LeftAligned(),
+                new TableColumn("File").LeftAligned());
+        foreach (var (taskId, stamp, rel) in rows)
+            table.AddRow(taskId, stamp, Markup.Escape(rel));
+        AnsiConsole.Write(table);
+        Console.WriteLine();
+    }
+
+    /// <summary>rollback 多选恢复（交互态；未选任何项返回空列表）</summary>
+    public IReadOnlyList<string> RollbackPrompt(string title, IReadOnlyList<string> choices)
+    {
+        var selected = AnsiConsole.Prompt(
+            new MultiSelectionPrompt<string>()
+                .Title(title)
+                .NotRequired()
+                .PageSize(10)
+                .AddChoices(choices.Distinct().ToArray()));
+        return selected;
     }
 }

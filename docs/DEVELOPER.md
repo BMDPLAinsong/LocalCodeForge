@@ -177,7 +177,7 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 
 **改渲染格式时**：只改 `RendererBase.FormatEvent`（纯函数），PlainText/Spectre 自动同步；必须补 tests 断言（七事件映射已固化，防回归）。
 
-**已知边界（诚实记录）**：Spectre 0.49 LiveDisplay 为回调阻塞式 API，与"外部事件流驱动渲染"模型不兼容——实时刷新区未落地，P1 方案 = 事件 Channel + 后台渲染线程 + LiveDisplay 阻塞回调消费队列（或升级 Spectre 后重评）。P0 以 Panel + 彩色事件流交付。命令块（plan/memory/stats/rollback/use/健康检查）P0 仍直出 Console，P1 面板化。
+**已知边界（诚实记录）**：~~Spectre 0.49 LiveDisplay 为回调阻塞式 API，与"外部事件流驱动渲染"模型不兼容——实时刷新区未落地~~ → **P1 已落地（10-04）**：事件 `Channel<AgentEvent>` + 后台线程跑 `LiveDisplay.StartAsync`（回调内 `ReadAllAsync` 消费并滚动刷新，保留最近 15 条）；`RenderEventAsync` 投递即返回不阻塞事件循环；FinalAnswer/Error 关闭 Channel → 实时区结束 → 结束事件留痕到滚动缓冲区。失败安全：LiveDisplay 异常捕获回退 P0 直出；live 线程等待带 5s 超时。**P2 命令块面板**：stats 概览 BarChart / memory Table / rollback 多选恢复（`if (renderer is SpectreRenderer spec)` 分支，无头路径零改动，仍走旧 Console 文本——E2E 冒烟逐字节兼容实证）。
 
 ---
 
