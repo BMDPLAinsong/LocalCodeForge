@@ -1924,5 +1924,70 @@ Console.WriteLine("== rollback --dry-run 预览（不执行） ==");
     Check("dry-run 不执行任何改动", File.ReadAllText(file).Contains("v1") && File.Exists(newFile));
 }
 
+// ════════════════════════════════════════════════════════════
+// Spectre P0：渲染器抽象（Rendering/）
+//   1. RendererFactory 无头/交互选择（确定性）
+//   2. RendererBase.FormatEvent 七事件 → 文本映射固化（防搬移改坏格式，E2E/日志解析依赖）
+//   3. Truncate / FormatToolArgs 边界
+//   4. 兼容抽样：与旧 CLI 格式精确相等
+// ════════════════════════════════════════════════════════════
+Console.WriteLine("== Spectre P0 渲染器（Rendering/） ==");
+{
+    // ── 1. 工厂选择 ──
+    var plain = Agent.Infrastructure.Rendering.RendererFactory.Create(false);
+    var spectre = Agent.Infrastructure.Rendering.RendererFactory.Create(true);
+    Check("无头 → PlainTextRenderer", plain is Agent.Infrastructure.Rendering.PlainTextRenderer);
+    Check("交互 → SpectreRenderer（构造不抛）", spectre is Agent.Infrastructure.Rendering.SpectreRenderer);
+
+    // ── 2. FormatEvent 七事件映射（与旧 RenderEvent 文本格式逐字节一致）──
+    var rt1 = new Agent.Core.Models.AgentEvent.Routing("large", "L0.5", "写任务", "写任务");
+    Check("Routing 带意图", Agent.Infrastructure.Rendering.RendererBase.FormatEvent(rt1) == "[路由] L0.5 [写任务] → large");
+    var rt2 = new Agent.Core.Models.AgentEvent.Routing("large", "L0.5", "写任务", null);
+    Check("Routing 无意图", Agent.Infrastructure.Rendering.RendererBase.FormatEvent(rt2) == "[路由] L0.5 → large");
+    var pg = new Agent.Core.Models.AgentEvent.PlanGenerated("构建订单系统", "csharp", new List<string> { "Order.cs", "Program.cs" });
+    Check("PlanGenerated 多行文件清单",
+        Agent.Infrastructure.Rendering.RendererBase.FormatEvent(pg) == "[规划] 构建订单系统（csharp，2 个文件）\n  - Order.cs\n  - Program.cs");
+    var fw = new Agent.Core.Models.AgentEvent.FileWritten("x.cs", 123);
+    Check("FileWritten", Agent.Infrastructure.Rendering.RendererBase.FormatEvent(fw) == "[写入] x.cs（123 字符）");
+    var tcArgs = JsonDocument.Parse("{\"command\":\"dotnet run\"}").RootElement;
+    var tc = new Agent.Core.Models.AgentEvent.ToolCall("_-run_command", tcArgs);
+    Check("ToolCall 保留原名+参数格式化",
+        Agent.Infrastructure.Rendering.RendererBase.FormatEvent(tc) == "[工具调用] _-run_command  command=\"dotnet run\"");
+    var tr = new Agent.Core.Models.AgentEvent.ToolResultEvent("read_file", "文件内容", true);
+    Check("ToolResult 成功",
+        Agent.Infrastructure.Rendering.RendererBase.FormatEvent(tr) == "[工具结果] read_file: 文件内容");
+    var longOut = new string('x', 400);
+    var tr2 = new Agent.Core.Models.AgentEvent.ToolResultEvent("read_file", longOut, false);
+    Check("ToolResult 截断 300", Agent.Infrastructure.Rendering.RendererBase.FormatEvent(tr2).EndsWith("..."));
+    var fa = new Agent.Core.Models.AgentEvent.FinalAnswer("任务完成");
+    Check("FinalAnswer", Agent.Infrastructure.Rendering.RendererBase.FormatEvent(fa) == "[完成] 任务完成");
+    var err = new Agent.Core.Models.AgentEvent.Error("出错");
+    Check("Error", Agent.Infrastructure.Rendering.RendererBase.FormatEvent(err) == "[错误] 出错");
+
+    // ── 3. Truncate / FormatToolArgs 边界 ──
+    Check("Truncate 短串不变",
+        Agent.Infrastructure.Rendering.RendererBase.Truncate("abc", 5) == "abc");
+    Check("Truncate 长串截断",
+        Agent.Infrastructure.Rendering.RendererBase.Truncate("abcdef", 3) == "abc...");
+    var wfArgs = JsonDocument.Parse("{\"path\":\"p.py\",\"content\":\"0123456789\"}").RootElement;
+    Check("FormatToolArgs write_file",
+        Agent.Infrastructure.Rendering.RendererBase.FormatToolArgs("write_file", wfArgs) == "path=\"p.py\", content=10 字符");
+    var ldArgs = JsonDocument.Parse("{}").RootElement;
+    Check("FormatToolArgs list_dir 默认 path",
+        Agent.Infrastructure.Rendering.RendererBase.FormatToolArgs("list_dir", ldArgs) == "path=\".\"");
+
+    // ── 4. 兼容抽样：旧 CLI 格式精确相等 ──
+    Check("兼容抽样 FileWritten",
+        Agent.Infrastructure.Rendering.RendererBase.FormatEvent(fw) == "[写入] x.cs（123 字符）");
+    Check("兼容抽样 Routing",
+        Agent.Infrastructure.Rendering.RendererBase.FormatEvent(rt2) == "[路由] L0.5 → large");
+    Check("PlainText RenderEventAsync 不抛",
+        plain.RenderEventAsync(fa).IsCompletedSuccessfully);
+
+    // ── 5. 双路径漂移回归：orch 命令与任务路径同源（ToolResult 统一截断 300）──
+    Check("ToolResult 截断统一 300（orch 路径原 500 已收敛）",
+        Agent.Infrastructure.Rendering.RendererBase.FormatEvent(tr2).Length <= 300 + " [工具结果] read_file: ".Length + "...".Length);
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

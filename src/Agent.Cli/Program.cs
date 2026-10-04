@@ -13,6 +13,7 @@ namespace Agent.Cli;
 using Agent.Infrastructure.Metrics;
 using Agent.Infrastructure.Orchestration;
 using Agent.Infrastructure.Project;
+using Agent.Infrastructure.Rendering;
 using Agent.Infrastructure.Routing;
 
 /// <summary>
@@ -163,20 +164,17 @@ internal class Program
         // 会话 ID
         var sessionId = Guid.NewGuid().ToString("N");
 
+        // ─────────── 渲染器装配（Spectre P0） ───────────
+        // 无头判定：管道输入 / 输出重定向 / 非交互环境 → PlainTextRenderer（输出与旧 CLI 逐字节兼容，E2E 依赖）；
+        // 真实终端 → SpectreRenderer（Panel 横幅 + LiveDisplay 任务实时区）。
+        var renderer = RendererFactory.Create(
+            !Console.IsInputRedirected && !Console.IsOutputRedirected);
+
         // ─────────── 打印欢迎 ───────────
-        Console.WriteLine("=== Local AI Workbench ===");
-        Console.WriteLine($"运行目录: {workspace}");
-        Console.WriteLine($"会话库:   {dbPath}");
-        Console.WriteLine("输入需求，回车执行。输入 exit 退出。输入 new 开启新会话。");
-        Console.WriteLine();
+        renderer.Banner(workspace, dbPath);
 
         // ─────────── 打印配置 ───────────
-        Console.WriteLine("=== 实际生效配置 ===");
-        Console.WriteLine($"Classifier: {options.Classifier.Model}");
-        Console.WriteLine($"Small:      {options.Small.Model}");
-        Console.WriteLine($"AgentPro:   {options.AgentPro.Model}   (ComplexToPro={options.ComplexToPro})");
-        Console.WriteLine($"Large:      {options.Large.Model}");
-        Console.WriteLine();
+        renderer.ConfigBlock(options);
 
         // ─────────── 本地模型健康检查 ───────────
         await CheckLocalModelsAsync(options);
@@ -184,7 +182,7 @@ internal class Program
         // ─────────── 主循环 ───────────
         while (true)
         {
-            Console.Write("> ");
+            renderer.Prompt();
             var input = Console.ReadLine();
             // 【A-补强】统一剥离 BOM（U+FEFF）——PS 5.1 管道注入 UTF-8 BOM 到首行时
             // StartsWith("use ")/StartsWith("plan ") 等全部不命中、命令被当任务执行。
@@ -197,7 +195,7 @@ internal class Program
             if (input.Equals("new", StringComparison.OrdinalIgnoreCase))
             {
                 sessionId = Guid.NewGuid().ToString("N");
-                Console.WriteLine("[系统] 已开启新会话。");
+                renderer.System("[系统] 已开启新会话。");
                 continue;
             }
 
@@ -255,47 +253,9 @@ internal class Program
 
                 await foreach (var evt in orchestrator.RunAsync(orchInput, workspace, CancellationToken.None))
                 {
-                    switch (evt)
-                    {
-                        case AgentEvent.PlanGenerated pg:
-                            Console.ForegroundColor = ConsoleColor.DarkYellow;
-                            Console.WriteLine($"[规划] {pg.Summary}（{pg.Language}，{pg.FilePaths.Count} 个文件）");
-                            foreach (var p in pg.FilePaths)
-                                Console.WriteLine($"  - {p}");
-                            Console.ResetColor();
-                            break;
-
-                        case AgentEvent.FileWritten fw:
-                            Console.ForegroundColor = ConsoleColor.Cyan;
-                            Console.WriteLine($"[写入] {fw.Path}（{fw.Size} 字符）");
-                            Console.ResetColor();
-                            break;
-
-                        case AgentEvent.ToolCall tc:
-                            Console.ForegroundColor = ConsoleColor.DarkCyan;
-                            Console.WriteLine($"[工具调用] {tc.Name}  {FormatToolArgs(tc.Name, tc.Args)}");
-                            Console.ResetColor();
-                            break;
-
-                        case AgentEvent.ToolResultEvent tr:
-                            Console.ForegroundColor = tr.Success ? ConsoleColor.DarkGray : ConsoleColor.Red;
-                            Console.WriteLine($"[工具结果] {tr.Name}: {Truncate(tr.Output, 500)}");
-                            Console.ResetColor();
-                            break;
-
-                        case AgentEvent.FinalAnswer fa:
-                            Console.ForegroundColor = ConsoleColor.Green;
-                            Console.WriteLine($"[完成] {fa.Text}");
-                            Console.ResetColor();
-                            Console.WriteLine();
-                            break;
-
-                        case AgentEvent.Error e:
-                            Console.ForegroundColor = ConsoleColor.Red;
-                            Console.WriteLine($"[错误] {e.Message}");
-                            Console.ResetColor();
-                            break;
-                    }
+                    // Spectre P0：统一走渲染器（消灭此处与 RenderEvent 重复的事件 switch——双路径漂移实例；
+                    // 原此处 ToolResult 截断 500 与 RenderEvent 300 不一致，统一为 300）。
+                    await renderer.RenderEventAsync(evt);
                 }
 
                 continue;
@@ -479,9 +439,7 @@ internal class Program
             var taskId = Guid.NewGuid().ToString("N")[..8];
             lastTaskId = taskId; // 手动 rollback 命令作用域（恢复最近任务备份）
 
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine($"[工作目录] {Path.GetFileName(workspace)}（任务归属 task_{taskId}）");
-            Console.ResetColor();
+            renderer.Info($"[工作目录] {Path.GetFileName(workspace)}（任务归属 task_{taskId}）");
 
             // 【关键修复】为每个任务创建独立 DI 容器（工具绑定 run 根）——P-B 工具层注入 taskId 隔离备份
             var taskServices = new ServiceCollection();
@@ -491,9 +449,7 @@ internal class Program
             if (TaskClassifier.ShouldOrchestrate(input))
             {
                 // 走三阶段编排
-                Console.ForegroundColor = ConsoleColor.Magenta;
-                Console.WriteLine($"[自动编排] 任务复杂，启用 Planner-Executor");
-                Console.ResetColor();
+                renderer.Notice($"[自动编排] 任务复杂，启用 Planner-Executor");
 
                 var orchestrator = taskProvider.GetRequiredService<IOrchestrator>();
                 var orchErrors = new List<string>();
@@ -502,12 +458,12 @@ internal class Program
                 {
                     if (evt is AgentEvent.Error e) orchErrors.Add(e.Message);
                     if (evt is AgentEvent.FinalAnswer fa) orchAnswer = fa.Text;
-                    RenderEvent(evt);
+                    await renderer.RenderEventAsync(evt);
                 }
                 ArchiveTask(taskProvider, input, taskId, "orchestrator", orchErrors, orchAnswer);
                 // 【P0-1】工程可写模式任务失败 → 自动回滚工程改动（P-B：仅回滚本任务）
                 if (orchAnswer is null && options.ProjectRoot is not null)
-                    AutoRollbackOnFailure(workspace, options.ProjectRoot, taskId);
+                    AutoRollbackOnFailure(workspace, options.ProjectRoot, taskId, renderer);
                 // 【P-B】成功收尾清理本任务备份与 .new 标记（防跨任务残留误删）
                 else if (options.ProjectRoot is not null)
                     BackupService.ClearNewMarkers(workspace, taskId);
@@ -524,12 +480,12 @@ internal class Program
                 {
                     if (evt is AgentEvent.Error e) loopErrors.Add(e.Message);
                     if (evt is AgentEvent.FinalAnswer fa) loopAnswer = fa.Text;
-                    RenderEvent(evt);
+                    await renderer.RenderEventAsync(evt);
                 }
                 ArchiveTask(taskProvider, input, taskId, "agent", loopErrors, loopAnswer);
                 // 【P0-1】工程可写模式任务失败 → 自动回滚工程改动（P-B：仅回滚本任务）
                 if (loopAnswer is null && options.ProjectRoot is not null)
-                    AutoRollbackOnFailure(workspace, options.ProjectRoot, taskId);
+                    AutoRollbackOnFailure(workspace, options.ProjectRoot, taskId, renderer);
                 // 【P-B】成功收尾清理本任务备份与 .new 标记（防跨任务残留误删）
                 else if (options.ProjectRoot is not null)
                     BackupService.ClearNewMarkers(workspace, taskId);
@@ -569,16 +525,14 @@ internal class Program
     /// 恢复备份的已存在文件 + 删除本任务新建的工程文件（P-B：仅回滚本 taskId 作用域）。
     /// 纯确定性文件操作，无模型调用；失败不抛（回滚尽力而为）。
     /// </summary>
-    static void AutoRollbackOnFailure(string workspace, string projectRoot, string taskId)
+    static void AutoRollbackOnFailure(string workspace, string projectRoot, string taskId, IRenderer renderer)
     {
         try
         {
             var (restored, removed) = BackupService.RollbackTaskFull(workspace, projectRoot, taskId);
             if (restored > 0 || removed > 0)
             {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"[回滚] 任务失败，工程改动已还原：{restored} 个文件恢复备份、{removed} 个新建文件已清理。");
-                Console.ResetColor();
+                renderer.Warn($"[回滚] 任务失败，工程改动已还原：{restored} 个文件恢复备份、{removed} 个新建文件已清理。");
             }
         }
         catch
@@ -589,58 +543,9 @@ internal class Program
 
     // ─────────── 辅助方法 ───────────
 
-    /// <summary>字符串截断</summary>
-    static string Truncate(string s, int max)
-        => s.Length <= max ? s : s[..max] + "...";
-
-    /// <summary>
-    /// 根据工具类型，智能格式化参数显示。
-    /// write_file 只显示 path 和 content 长度，不显示全文。
-    /// </summary>
-    static string FormatToolArgs(string toolName, System.Text.Json.JsonElement args)
-    {
-        // 【新增】剥离工具名前缀
-        // SK 会把 pluginName 拼到工具名前，形如 "agent_tools-list_dir" 或 "_-list_dir"
-        var dashIndex = toolName.IndexOf('-');
-        if (dashIndex > 0 && dashIndex < toolName.Length - 1)
-        {
-            toolName = toolName[(dashIndex + 1)..];
-        }
-
-        try
-        {
-            // write_file：显示 path + content 长度
-            if (toolName.Contains("write_file"))
-            {
-                var path = args.TryGetProperty("path", out var p) ? p.GetString() : "?";
-                var content = args.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
-                return $"path=\"{path}\", content={content.Length} 字符";
-            }
-
-            // run_command：显示 command
-            if (toolName.Contains("run_command"))
-            {
-                var cmd = args.TryGetProperty("command", out var c) ? c.GetString() : "?";
-                return $"command=\"{cmd}\"";
-            }
-
-            // list_dir / read_file：显示 path
-            if (toolName.Contains("list_dir") || toolName.Contains("read_file"))
-            {
-                var path = args.TryGetProperty("path", out var p) ? p.GetString() : ".";
-                return $"path=\"{path}\"";
-            }
-
-            // 其它工具：原样输出，超长截断
-            var raw = args.ToString();
-            return raw.Length > 150 ? raw[..150] + "..." : raw;
-        }
-        catch
-        {
-            var raw = args.ToString();
-            return raw.Length > 150 ? raw[..150] + "..." : raw;
-        }
-    }
+    // 【Spectre P0】Truncate / FormatToolArgs / RenderEvent 已下沉
+    // src/Agent.Infrastructure/Rendering/RendererBase.cs（单一来源，tests 直接断言）——
+    // CLI 不再持有独立实现，消灭事件渲染双路径漂移。
 
     /// <summary>
     /// 检查所有本地 Ollama 模型的可用性。
@@ -848,71 +753,6 @@ internal class Program
         }
 
         Console.WriteLine();
-    }
-
-    /// <summary>
-    /// 统一渲染 Agent 事件。
-    /// </summary>
-    static void RenderEvent(AgentEvent evt)
-    {
-        switch (evt)
-        {
-            case AgentEvent.Routing rt:
-                Console.ForegroundColor = ConsoleColor.DarkYellow;
-                var intentText = string.IsNullOrEmpty(rt.Intent) ? "" : $" [{rt.Intent}]";
-                Console.WriteLine($"[路由] {rt.Tier}{intentText} → {rt.ServiceId}");
-                Console.ResetColor();
-                break;
-
-            case AgentEvent.PlanGenerated pg:
-                Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.WriteLine($"[规划] {pg.Summary}（{pg.Language}，{pg.FilePaths.Count} 个文件）");
-                foreach (var p in pg.FilePaths)
-                    Console.WriteLine($"  - {p}");
-                Console.ResetColor();
-                break;
-
-            case AgentEvent.FileWritten fw:
-                Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.WriteLine($"[写入] {fw.Path}（{fw.Size} 字符）");
-                Console.ResetColor();
-                break;
-
-            case AgentEvent.ToolCall tc:
-                // 剥前缀：_-run_command → run_command
-                var displayName = tc.Name;
-                var di = displayName.IndexOf('-');
-                if (di > 0 && di < displayName.Length - 1)
-                    displayName = displayName[(di + 1)..];
-                Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.WriteLine($"[工具调用] {tc.Name}  {FormatToolArgs(tc.Name, tc.Args)}");
-                Console.ResetColor();
-                break;
-
-            case AgentEvent.ToolResultEvent tr:
-                // 剥前缀
-                var resultName = tr.Name;
-                var rdi = resultName.IndexOf('-');
-                if (rdi > 0 && rdi < resultName.Length - 1)
-                    resultName = resultName[(rdi + 1)..];
-                Console.ForegroundColor = tr.Success ? ConsoleColor.DarkGray : ConsoleColor.Red;
-                Console.WriteLine($"[工具结果] {tr.Name}: {Truncate(tr.Output, 300)}");
-                Console.ResetColor();
-                break;
-
-            case AgentEvent.FinalAnswer fa:
-                Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine($"[完成] {fa.Text}");
-                Console.ResetColor();
-                Console.WriteLine();
-                break;
-
-            case AgentEvent.Error e:
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"[错误] {e.Message}");
-                Console.ResetColor();
-                break;
-        }
     }
 
     /// <summary>

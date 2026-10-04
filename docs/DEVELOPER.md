@@ -27,7 +27,7 @@
 | 核心依赖 | Microsoft.SemanticKernel 1.80.1 + SK OpenAI Connector（走 Ollama `/v1` 兼容端点，全本地）+ Microsoft.Data.Sqlite |
 | 模型 | Ollama：classifier=`qwen2.5:1.5b`；small/large/agent_pro 三角色全部 = `law-unified`（30B Qwen3-Coder-A3B，同 tag 单驻，请求级 temperature 区分：small 0.3 / agent_pro 0.5 / large 0.7） |
 | 版本控制 | 本机 git 仓库（main，91+ commits，无远端） |
-| 测试 | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，353/353，`dotnet run --project` 一键回归） |
+| 测试 | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，372/372，`dotnet run --project` 一键回归） |
 | 数据落盘 | `workspace/`：sessions.db、runs/、project_context.db、agent_memory.db、symbol_index.db、test-tmp/、e2e/ |
 
 ### 1.1 三层项目结构
@@ -161,6 +161,26 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 
 ---
 
+## 5.1 渲染层（Rendering/，Spectre P0 落地）
+
+**职责**：CLI 壳与未来 UI 宿主共用的渲染契约；事件格式化**单一来源**（防双路径漂移）。
+
+| 文件 | 职责 |
+| --- | --- |
+| `IRenderer.cs` | 渲染契约：Banner/ConfigBlock/Info(DarkGray)/Notice(Magenta)/Warn(Yellow)/Error(Red)/System(无色)/Prompt/ReadLine/**RenderEventAsync**（异步签名——Spectre 生命周期需要） |
+| `RendererBase.cs` | Console 直出实现（无头/默认，与旧 CLI 逐字节兼容）+ **纯函数 `FormatEvent`（七事件→文本，唯一事件格式化来源）/Truncate/FormatToolArgs**（tests 直接断言） |
+| `PlainTextRenderer.cs` | 无头路径（管道/重定向/E2E），逐事件 Console 输出 |
+| `SpectreRenderer.cs` | 交互路径：Panel 横幅/配置块 + 彩色事件流 + 任务 Rule 头尾；**构造不碰 AnsiConsole**（非终端可构造可测） |
+| `RendererFactory.cs` | `Create(interactive)`：false→PlainText / true→Spectre |
+
+**无头判定**（Program.cs 装配）：`!Console.IsInputRedirected && !Console.IsOutputRedirected` → 交互；管道/重定向 → PlainText（E2E 逐字节兼容）。
+
+**改渲染格式时**：只改 `RendererBase.FormatEvent`（纯函数），PlainText/Spectre 自动同步；必须补 tests 断言（七事件映射已固化，防回归）。
+
+**已知边界（诚实记录）**：Spectre 0.49 LiveDisplay 为回调阻塞式 API，与"外部事件流驱动渲染"模型不兼容——实时刷新区未落地，P1 方案 = 事件 Channel + 后台渲染线程 + LiveDisplay 阻塞回调消费队列（或升级 Spectre 后重评）。P0 以 Panel + 彩色事件流交付。命令块（plan/memory/stats/rollback/use/健康检查）P0 仍直出 Console，P1 面板化。
+
+---
+
 ## 6. 工程感知与安全机制（Project/）
 
 | 机制 | 文件 | 说明 |
@@ -223,8 +243,8 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 
 ### 9.2 测试（tests/Agent.Infrastructure.Tests/Program.cs）
 
-- 零依赖断言 harness（`Check(name, cond)`），单文件 1900+ 行，`dotnet run --project` 回归，**353/353**。
-- 断言分组：OutputVerifier 判定 / 路由词表与意图 / 工具行为（P-D/分页/越界/备份/回滚）/ 记忆（去重/治理/过滤）/ 指标（归类/聚合/时代隔离）/ 符号索引（增量/刷新）等。
+- **零依赖断言 harness**（`Check(name, cond)`），单文件 2000+ 行，`dotnet run --project` 回归，**372/372**。
+- 断言分组：OutputVerifier 判定 / 路由词表与意图 / 工具行为（P-D/分页/越界/备份/回滚）/ 记忆（去重/治理/过滤）/ 指标（归类/聚合/时代隔离）/ 符号索引（增量/刷新）/ **渲染层（Rendering：工厂选择 + FormatEvent 七事件映射固化 + Truncate/FormatToolArgs 边界 + 兼容抽样）**。
 - **新增功能必须带 tests**（用户流程惯例：功能 → tests +N → E2E 复测 → 文档 → 提交）。
 
 ### 9.3 E2E 复测
@@ -284,6 +304,7 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 | `src/Agent.Infrastructure/Project/DependencyAnalyzer.cs` | 依赖边 |
 | `src/Agent.Infrastructure/Project/TestRunnerService.cs` | 工程测试自动执行 |
 | `src/Agent.Infrastructure/Quality/OutputVerifier.cs` | 输出判定单一来源（双路径共用） |
+| `src/Agent.Infrastructure/Rendering/` | 渲染层（IRenderer/RendererBase/PlainText/Spectre/Factory，§5.1） |
 | `src/Agent.Infrastructure/Metrics/SqliteMetricsCollector.cs` | 三表指标 + 失败归类 + 时代隔离 |
 | `src/Agent.Infrastructure/Metrics/FailureCategorizer.cs` | 失败类别词表 |
 | `src/Agent.Infrastructure/Memory/AgentMemoryStore.cs` | 记忆存储（去重/治理） |
