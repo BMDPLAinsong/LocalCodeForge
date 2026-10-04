@@ -362,9 +362,12 @@ internal class Program
             }
 
             // ═══════════ use 命令（工程感知 P0/P1） ═══════════
-            if (input.StartsWith("use ", StringComparison.OrdinalIgnoreCase))
+            // E2E 基建：PS 5.1 -File 模式向子进程 stdin 注入 UTF-8 BOM（EF BB BF）到首行
+            // → 剥离 BOM（U+FEFF），否则 StartsWith("use ") 不命中、use 行被当任务执行
+            var trimmedInput = input.TrimStart('\uFEFF');
+            if (trimmedInput.StartsWith("use ", StringComparison.OrdinalIgnoreCase))
             {
-                var rest = input.Substring(4).Trim();
+                var rest = trimmedInput.Substring(4).Trim();
                 var writeFlag = rest.StartsWith("--write ", StringComparison.OrdinalIgnoreCase);
                 if (writeFlag) rest = rest.Substring(8).Trim();
                 var proj = Path.GetFullPath(rest);

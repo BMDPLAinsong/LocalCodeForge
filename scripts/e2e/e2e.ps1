@@ -1,4 +1,4 @@
-﻿﻿# ============================================================
+﻿# ============================================================
 # E2E 复测脚本（LocalAiWorkbench）
 # 一键跑 4 类任务的端到端回归：工程增量 / 单文件 / 多文件 / 读查
 # 每用例用独立工程副本（防污染），断言：
@@ -49,10 +49,13 @@ function Run-Case($name, $kind, $userInput, $writeMode, $expectFile) {
     $caseLog = Join-Path $logDir "case_$($kind)_$([IO.Path]::GetFileName($caseDir)).log"
     $cmd = if ($writeMode) { "use --write $caseDir`n$userInput`nexit`n" } else { "$userInput`nexit`n" }
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $cmd | & $Cli *> $caseLog
+    # PS 5.1 -File 模式向子进程 stdin 注入 UTF-8 BOM（EF BB BF，管道/直写/BaseStream 均绕不过）
+    # → CLI use 命令不命中（use 行被当任务）= E2E 假完成根因。改用 python subprocess 喂 stdin（确定性）
+    $cmdB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cmd))
+    python "X:\.NET AI\LocalAiWorkbench\scripts\e2e\runner.py" $Cli $cmdB64 $caseLog
     $sw.Stop()
 
-    $logText = Get-Content $caseLog -Raw -ErrorAction SilentlyContinue
+    $logText = Get-Content $caseLog -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
     $hasDone = $logText -match "\[完成\]"
     $hasFail = $logText -match "任务未通过验证|\[错误\]|\[失败\]"
     $hasIntercept = $logText -match "工程增量计划校验|类型重复定义|不存在于工程根"
