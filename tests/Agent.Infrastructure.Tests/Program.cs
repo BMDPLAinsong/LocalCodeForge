@@ -2117,5 +2117,51 @@ Console.WriteLine("== 双根保护：启动重叠自检 ==");
     Check("敏感区内工程根 → 重叠检出", overlaps2.Count == 1);
 }
 
+// 双根保护·输入路径自动识别（给路径就干活）——ProjectPathDetector
+// ═══════════════════════════════════════════════════════════════
+Console.WriteLine("== 双根保护：ProjectPathDetector 输入路径自动识别 ==");
+{
+    var baseTmp = Path.Combine(TestTmp, "tests_dr_autouse");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    var proj = Path.Combine(baseTmp, "My Project", "Sub"); // 含空格的嵌套目录（真实路径）
+    Directory.CreateDirectory(proj);
+    Directory.CreateDirectory(Path.Combine(proj, "src"));
+    File.WriteAllText(Path.Combine(proj, "README.md"), "# demo");
+
+    string Ext(string input) =>
+        Agent.Infrastructure.Project.ProjectPathDetector.TryExtractProjectPath(input, out var p) ? p : "";
+
+    // 提取：中文标点分片 + 尾部 CJK 语境词剥离
+    Check("提取：标点分片后命中（读取一下 …项目）",
+        Ext($"读取一下 {proj} 这个路径的项目，分析一下").Equals(Path.GetFullPath(proj), StringComparison.OrdinalIgnoreCase));
+    Check("提取：含空格真实路径直接命中（不误剥）",
+        Ext($"看看 {proj}").Equals(Path.GetFullPath(proj), StringComparison.OrdinalIgnoreCase));
+    Check("提取：尾部中文语境词剥离（X:\\…目录）",
+        Ext($"分析 {proj} 目录").Equals(Path.GetFullPath(proj), StringComparison.OrdinalIgnoreCase));
+    Check("提取：无路径 → 失败", !Agent.Infrastructure.Project.ProjectPathDetector.TryExtractProjectPath("你好，介绍一下", out _));
+    Check("提取：不存在路径尾部非 CJK → 不剥不误判",
+        !Agent.Infrastructure.Project.ProjectPathDetector.TryExtractProjectPath($"读取 {Path.Combine(baseTmp, "not_exist_123")} 的内容", out _));
+
+    // 语境门
+    Check("读语境：读取/分析/看看/项目 命中",
+        Agent.Infrastructure.Project.ProjectPathDetector.HasReadContext($"读取一下 {proj} 这个路径的项目，分析一下") &&
+        Agent.Infrastructure.Project.ProjectPathDetector.HasReadContext($"看看 {proj} 的结构") &&
+        Agent.Infrastructure.Project.ProjectPathDetector.HasReadContext($"{proj} 项目"));
+    Check("写语境：写/创建/生成 命中（写优先拦）",
+        Agent.Infrastructure.Project.ProjectPathDetector.HasWriteContext($"帮我写一个 C# 项目，保存到 {proj}") &&
+        Agent.Infrastructure.Project.ProjectPathDetector.HasWriteContext($"把文件复制到 {proj}"));
+
+    // 组合判定
+    Check("自动 use：读语境 + 存在路径 → 通过",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryGetAutoUsePath($"读取一下 {proj} 这个路径的项目，分析一下", out var p1) &&
+        p1.Equals(Path.GetFullPath(proj), StringComparison.OrdinalIgnoreCase));
+    Check("自动 use：写任务 → 不触发",
+        !Agent.Infrastructure.Project.ProjectPathDetector.TryGetAutoUsePath($"帮我写一个 C# 项目，保存到 {proj}", out _));
+    Check("自动 use：敏感区路径 → 源头不触发",
+        !Agent.Infrastructure.Project.ProjectPathDetector.TryGetAutoUsePath("读取一下 C:\\Windows\\System32 的内容", out _));
+
+    Directory.Delete(baseTmp, true);
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

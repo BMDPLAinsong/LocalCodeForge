@@ -387,42 +387,18 @@ internal class Program
                 var rest = trimmedInput.Substring(4).Trim();
                 var writeFlag = rest.StartsWith("--write ", StringComparison.OrdinalIgnoreCase);
                 if (writeFlag) rest = rest.Substring(8).Trim();
-                var proj = Path.GetFullPath(rest);
-                if (!Directory.Exists(proj))
-                {
-                    Console.WriteLine($"错误：目录不存在：{proj}");
-                    continue;
-                }
-                options.ProjectRoot = proj;
-                options.ProjectWriteEnabled = writeFlag;
-                var scan = ProjectScanner.Scan(proj);
-                // 工程感知 P2：工程上下文缓存——工程未变化时命中缓存（跨 CLI 重启持久化）
-                var cached = provider.GetRequiredService<ProjectContextStore>()
-                    .TryGet(proj, scan.FileCount, scan.DirCount, scan.TotalBytes, scan.MaxMtimeTicks);
-                if (cached is not null)
-                {
-                    Console.WriteLine(cached.Overview);
-                    Console.WriteLine("（工程上下文命中缓存，未重新扫描）");
-                }
-                else
-                {
-                    provider.GetRequiredService<ProjectContextStore>().Put(proj, scan);
-                    Console.WriteLine(scan.Overview);
-                }
-                if (writeFlag)
-                    Console.WriteLine("工程可写模式已开启（改动前自动备份，可用 rollback 恢复）。");
-
-                // 【双根保护】启动自检：工程根是否与敏感区重叠（用户手滑把工程加进 denylist → 读写双拒）
-                var overlaps = Agent.Infrastructure.Project.SensitivePathGuard.FindWriteRootOverlaps(
-                    new[] { options.ProjectRoot! });
-                if (overlaps.Count > 0)
-                {
-                    Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"警告：工程根 {overlaps[0]} 命中敏感区 denylist——读写将全部被拒。" +
-                                      "如属误加，请从 workspace\\sensitive_denylist.txt 移除该路径。");
-                    Console.ResetColor();
-                }
+                ApplyUse(provider, options, rest, writeFlag, autoSource: null);
                 continue;
+            }
+
+            // ═══════════ 双根保护·输入路径自动识别（给路径就干活） ═══════════
+            // 输入含"存在的绝对目录路径 + 读/分析语境（非写任务）" → 自动只读 use。
+            // 敏感区路径源头不 use（SensitivePathGuard.IsDenied，内容不进 chatHistory）；
+            // 显式 use 优先（已设工程根不覆盖）；写任务不触发（路径是目标文件而非读目标）。
+            if (options.ProjectRoot is null &&
+                Agent.Infrastructure.Project.ProjectPathDetector.TryGetAutoUsePath(trimmedInput, out var autoProjectPath))
+            {
+                ApplyUse(provider, options, autoProjectPath, writeFlag: false, autoSource: trimmedInput);
             }
 
             // ═══════════ rollback 命令（工程感知 P1） ═══════════
@@ -566,6 +542,52 @@ internal class Program
             // 【任务4 备份生命周期】每任务结束后保留最近 8 个任务备份，清理更早的（防 .backup 增长）
             if (options.ProjectRoot is not null)
                 BackupService.PruneBackups(workspace, 8);
+        }
+    }
+
+    /// <summary>
+    /// use 命令与路径自动识别共用：设置工程根 + 工程扫描/缓存 + 可写提示 + 双根重叠自检。
+    /// autoSource 非空 = 自动识别触发（打印 [自动识别] 行，只读）。
+    /// </summary>
+    static void ApplyUse(IServiceProvider provider, AgentOptions options,
+        string rest, bool writeFlag, string? autoSource)
+    {
+        var proj = Path.GetFullPath(rest);
+        if (!Directory.Exists(proj))
+        {
+            Console.WriteLine($"错误：目录不存在：{proj}");
+            return;
+        }
+        if (autoSource is not null)
+            Console.WriteLine($"[自动识别] 检测到工程路径 {proj}（只读），已设置工程根。");
+        options.ProjectRoot = proj;
+        options.ProjectWriteEnabled = writeFlag;
+        var scan = ProjectScanner.Scan(proj);
+        // 工程感知 P2：工程上下文缓存——工程未变化时命中缓存（跨 CLI 重启持久化）
+        var cached = provider.GetRequiredService<ProjectContextStore>()
+            .TryGet(proj, scan.FileCount, scan.DirCount, scan.TotalBytes, scan.MaxMtimeTicks);
+        if (cached is not null)
+        {
+            Console.WriteLine(cached.Overview);
+            Console.WriteLine("（工程上下文命中缓存，未重新扫描）");
+        }
+        else
+        {
+            provider.GetRequiredService<ProjectContextStore>().Put(proj, scan);
+            Console.WriteLine(scan.Overview);
+        }
+        if (writeFlag)
+            Console.WriteLine("工程可写模式已开启（改动前自动备份，可用 rollback 恢复）。");
+
+        // 【双根保护】启动自检：工程根是否与敏感区重叠（用户手滑把工程加进 denylist → 读写双拒）
+        var overlaps = Agent.Infrastructure.Project.SensitivePathGuard.FindWriteRootOverlaps(
+            new[] { options.ProjectRoot! });
+        if (overlaps.Count > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"警告：工程根 {overlaps[0]} 命中敏感区 denylist——读写将全部被拒。" +
+                              "如属误加，请从 workspace\\sensitive_denylist.txt 移除该路径。");
+            Console.ResetColor();
         }
     }
 

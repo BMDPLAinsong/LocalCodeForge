@@ -197,6 +197,7 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 | 计划校验 | Orchestrator.CheckIncrementalPlanConflicts | 工程增量任务 Plan 中"已有文件≥2" → Planner 阶段拒绝（防整体重写） |
 | **路径边界** | PathBoundary.cs | **逐路径分段比较**（OrdinalIgnoreCase + 分隔符归一）：root 自身/子目录=true，`X:\proj2` 对 `X:\proj`=false（StartsWith 前缀假阳性根治），`..` 跳脱经 GetFullPath 归一后必越界。**写白名单共用**（WriteFile/EditFile/CreateDir 的 WriteRoots = workspaceRoot ∪ projectRoot） |
 | **敏感源头拒** | SensitivePathGuard.cs | **读=黑名单排除**：内置系统区 4 + 凭据区 9 + 用户 denylist（workspace\sensitive_denylist.txt，# 注释/空行跳过/幂等）；**源头拒绝**（读取动作前判定，内容不进 chatHistory/SQLite/记忆库）。四条判定线：①长名逐段匹配 ②8.3 短名双向展开（GetLongPathNameW/GetShortPathNameW P/Invoke）③符号链接/junction **逐段** ResolveLinkTarget（reparse point 在目录段，只解析整路径会漏）④UNC `\\?\` 前缀剥除。模式分档：工程模式读放开+黑名单硬拒；沙箱模式读仍限 workspaceRoot。`FindWriteRootOverlaps` 启动自检（工程根命中 denylist → WARN）。已知边界：脚本内敏感读不做（用户意图即授权，下一轮做写入内容扫描） |
+| **输入路径自动识别** | ProjectPathDetector.cs | "给路径就干活"：CLI 任务执行前检测输入含"存在绝对目录路径 + 读/分析语境（非写）"→ 自动只读 use。分片正则（**不含 ':'，盘符冒号是路径一部分**）+ Directory.Exists 校验 + 尾部 CJK 语境词剥离（≤3 次，有效路径空格段不误剥）+ 写词表优先 + `SensitivePathGuard.IsDenied` 敏感源头不触发。CLI 侧 `ApplyUse` 与 use 命令共用 |
 
 ### 防假完成防线（AgentLoop）
 
