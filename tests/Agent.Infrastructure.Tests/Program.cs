@@ -347,6 +347,21 @@ Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
         pdTypes.Contains("Real") && pdTypes.Contains("IThing") && pdTypes.Contains("Color")
         && pdTypes.Contains("Point") && pdTypes.Contains("Person")
         && !pdTypes.Contains("Fake") && !pdTypes.Contains("InString"));
+    // 9g) 【B】P-D 熔断语义化：同路径第 2 次被拒 → 确定性指令（禁止再 write_file，强制 edit_file）。
+    //     实证：模型被 P-D 拒后不换 edit_file、反复 write_file → 3 连拒熔断白跑。
+    //     第 2 次拒绝即返回强指令（数据驱动引导，非提示词）。
+    var pdAgain = W(wRw, "src/OrderService.cs",
+        "using System;\nclass Order\n{\n}\nclass OrderService\n{\n}\n");
+    Check("P-D 连续拒绝 → 熔断指令（第 3 次 + 禁止 write_file + 强制 edit_file）",
+        pdAgain.Contains("第 3 次") && pdAgain.Contains("禁止再次使用 write_file")
+        && pdAgain.Contains("edit_file") && pdAgain.Contains("类型重复被拒绝"));
+    Check("P-D 二连拒 → 文件仍未变",
+        File.ReadAllText(Path.Combine(proj, "src", "OrderService.cs")).Contains("public int Id"));
+    // 9h) 不同路径的拒绝计数独立（写其他文件第 1 次仍为普通拒绝）
+    var pdOther1 = W(wRw, "src/OrderDup2.cs",
+        "using System;\nclass Order\n{\n}\n");
+    Check("P-D 其他路径第 1 次 → 普通拒绝（非熔断）",
+        pdOther1.Contains("类型重复定义") && !pdOther1.Contains("第 2 次"));
 
     // 【方案A】工程模式写前拦截项目文件：防"侧路新建同名项目"假完成
     // （模型新建 OrderSystem.csproj + 全套文件 → dotnet run 编译通过 = 假完成，demo 工程未接入）
@@ -878,6 +893,100 @@ Console.WriteLine("== D2 TaskFeatureClassifier + TaskMetricsAggregator ==");
     var otherStats = agg.Get(Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.Other);
     Check("聚合：无其他类样本 → null",
         otherStats is null);
+}
+
+// ── 3A：RoutingDecisionStore 路由决策落库 ──
+Console.WriteLine("== 3A RoutingDecisionStore 路由决策落库 ==");
+{
+    var rdDir = Path.Combine(TestTmp, "rd_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(rdDir);
+    var rdDb = Path.Combine(rdDir, "metrics.db");
+    var store = new Agent.Infrastructure.Routing.RoutingDecisionStore(rdDb);
+
+    // 记录 3 条不同决策
+    var ctNone = CancellationToken.None;
+    store.RecordAsync(
+        new Agent.Infrastructure.Routing.RoutingDecision(
+            Agent.Infrastructure.Routing.RoutingDecision.Large,
+            Agent.Infrastructure.Routing.RoutingTier.Rule,
+            "写任务直连 large"), "帮我写一个订单系统", null, ctNone).Wait();
+    store.RecordAsync(
+        new Agent.Infrastructure.Routing.RoutingDecision(
+            Agent.Infrastructure.Routing.RoutingDecision.Small,
+            Agent.Infrastructure.Routing.RoutingTier.Rule,
+            "查询类任务"), "看看有哪些文件", null, ctNone).Wait();
+    // 超长输入截断断言
+    var longInput = new string('x', 500);
+    store.RecordAsync(
+        new Agent.Infrastructure.Routing.RoutingDecision(
+            Agent.Infrastructure.Routing.RoutingDecision.Small,
+            Agent.Infrastructure.Routing.RoutingTier.SmallModel,
+            "意图 SimpleQA", Agent.Infrastructure.Routing.IntentType.SimpleQA),
+        longInput, null, ctNone).Wait();
+
+    var rdSum = store.GetSummaryAsync(ctNone).Result;
+    Check("落库：总数 3", rdSum.Total == 3);
+    Check("落库：按服务 large=1 small=2",
+        rdSum.ByService.FirstOrDefault(x => x.Service == "large").Count == 1
+        && rdSum.ByService.FirstOrDefault(x => x.Service == "small").Count == 2);
+    Check("落库：按特征类 写任务=单文件生成 读任务=读/查",
+        rdSum.ByFeature.FirstOrDefault(x => x.Feature == "单文件生成").Count >= 1
+        && rdSum.ByFeature.FirstOrDefault(x => x.Feature == "读/查").Count >= 1);
+
+    // 截断验证：直接查库
+    using var rdConn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={rdDb}");
+    rdConn.Open();
+    using var rdCmd = rdConn.CreateCommand();
+    rdCmd.CommandText = "SELECT user_input, input_len FROM routing_decisions WHERE input_len = 200";
+    using var rdReader = rdCmd.ExecuteReader();
+    var truncated = rdReader.Read();
+    Check("落库：超长输入截断到 200", truncated && rdReader.GetString(0).Length == 200);
+}
+
+// ── C：ToolRejectionStore 工具拒绝事件落库 ──
+Console.WriteLine("== C ToolRejectionStore 工具拒绝事件落库 ==");
+{
+    var trDir = Path.Combine(TestTmp, "tr_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(trDir);
+    var trDb = Path.Combine(trDir, "metrics.db");
+    var trStore = new Agent.Infrastructure.Metrics.ToolRejectionStore(trDb);
+    var ctNone = CancellationToken.None;
+
+    // 1) Store 单元：记录 2 类 3 条 + 聚合
+    trStore.RecordAsync("write_file", "pd_conflict", "src/OrderService.cs", "t1", "错误：检测到类型重复定义：Order。", ctNone).Wait();
+    trStore.RecordAsync("write_file", "pd_conflict", "src/OrderService.cs", "t1", "错误：第 2 次因类型重复被拒绝。", ctNone).Wait();
+    trStore.RecordAsync("edit_file", "old_not_found", "src/A.cs", "t1", "错误：找不到 old_string。", ctNone).Wait();
+    var trSum = trStore.GetSummaryAsync(ctNone).Result;
+    Check("拒绝落库：总数 3", trSum.Total == 3);
+    Check("拒绝落库：按类别 pd_conflict=2 old_not_found=1",
+        trSum.ByCategory.FirstOrDefault(x => x.Category == "pd_conflict").Count == 2
+        && trSum.ByCategory.FirstOrDefault(x => x.Category == "old_not_found").Count == 1);
+    Check("拒绝落库：按工具 write_file=2 edit_file=1",
+        trSum.ByTool.FirstOrDefault(x => x.Tool == "write_file").Count == 2
+        && trSum.ByTool.FirstOrDefault(x => x.Tool == "edit_file").Count == 1);
+
+    // 2) WriteFileTool 带 store：P-D 拒绝 → 事件落库（补度量盲区）
+    var ws2 = Path.Combine(trDir, "ws");
+    var proj2 = Path.Combine(trDir, "proj");
+    Directory.CreateDirectory(ws2);
+    Directory.CreateDirectory(Path.Combine(proj2, "src"));
+    File.WriteAllText(Path.Combine(proj2, "src", "Order.cs"),
+        "using System;\nclass Order\n{\n    public int Id { get; set; }\n}\n");
+    var wRw2 = new Agent.Infrastructure.Tools.WriteFileTool(ws2, proj2, true, "t2", trStore);
+    var json = $"{{\"path\":\"src/OrderService.cs\",\"content\":{JsonSerializer.Serialize("using System;\nclass Order\n{\n}\nclass OrderService\n{\n}\n")}}}";
+    var trArgs = JsonSerializer.Deserialize<JsonElement>(json);
+    var ret = wRw2.InvokeAsync(trArgs, ctNone).GetAwaiter().GetResult();
+    Check("带 store 的 P-D 拒绝 → 仍返回拒绝",
+        ret.Contains("类型重复定义"));
+    var trSum2 = trStore.GetSummaryAsync(ctNone).Result;
+    Check("带 store 的 P-D 拒绝 → 事件落库（pd_conflict 增至 3）",
+        trSum2.ByCategory.FirstOrDefault(x => x.Category == "pd_conflict").Count == 3);
+
+    // 3) 不带 store（tests 既有构造）→ 静默不炸
+    var wNoStore = new Agent.Infrastructure.Tools.WriteFileTool(ws2);
+    var ret2 = wNoStore.InvokeAsync(trArgs, ctNone).GetAwaiter().GetResult();
+    Check("不带 store 构造 → 拒绝正常返回（无异常）",
+        ret2.Contains("越界") || ret2.Contains("类型重复定义") || ret2.Contains("已写入"));
 }
 
 // ── 任务1：工程增量计划校验（Plan vs 已有文件冲突） ──

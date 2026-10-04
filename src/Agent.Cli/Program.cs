@@ -25,6 +25,13 @@ internal class Program
     /// </summary>
     static async Task Main(string[] args)
     {
+        // ─────────── 输入编码加固（A-补强） ───────────
+        // PS 5.1 管道注入 UTF-8 BOM（EF BB BF）时，若控制台按 GBK 解码 → "锘縰" 乱码，
+        // TrimStart('\uFEFF') 无效（BOM 已被错误解码成乱码字符）。
+        // 显式设为 UTF-8：EF BB BF → U+FEFF → 主循环统一 trim。重定向 stdin 时可能抛 → 静默降级。
+        try { Console.InputEncoding = System.Text.Encoding.UTF8; }
+        catch { /* 重定向/终端不支持时保持默认，主循环 trim 仍兜底 U+FEFF 形态 */ }
+
         // ─────────── 配置区 ───────────
         // 读环境变量
         var dashscopeKey = Environment.GetEnvironmentVariable("DASHSCOPE_API_KEY") ?? "";
@@ -141,6 +148,10 @@ internal class Program
         // 【关键】启动时显式解析 IMetricsCollector，触发 SQLite 建表
         // 否则 Singleton 工厂不会被调用，metrics.db 不会创建
         _ = provider.GetRequiredService<IMetricsCollector>();
+        // 【3A】显式解析 RoutingDecisionStore，触发 routing_decisions 表建表
+        _ = provider.GetRequiredService<Agent.Infrastructure.Routing.RoutingDecisionStore>();
+        // 【C】显式解析 ToolRejectionStore，触发 tool_rejections 表建表
+        _ = provider.GetRequiredService<Agent.Infrastructure.Metrics.ToolRejectionStore>();
 
         // 【D2】启动时加载任务特征类历史聚合（路由数据校准 + stats 归因）
         var featureAggregator = provider.GetRequiredService<Agent.Infrastructure.Routing.TaskMetricsAggregator>();
@@ -175,6 +186,10 @@ internal class Program
         {
             Console.Write("> ");
             var input = Console.ReadLine();
+            // 【A-补强】统一剥离 BOM（U+FEFF）——PS 5.1 管道注入 UTF-8 BOM 到首行时
+            // StartsWith("use ")/StartsWith("plan ") 等全部不命中、命令被当任务执行。
+            // 原 370 行仅 use 分支 trim；此处提到主循环入口，覆盖所有命令分支。
+            input = input?.TrimStart('\uFEFF');
 
             if (string.IsNullOrWhiteSpace(input) || input.Equals("exit", StringComparison.OrdinalIgnoreCase))
                 break;
@@ -306,7 +321,9 @@ internal class Program
                 else
                 {
                     // 默认：显示汇总 + 最近 5 条
-                    await PrintSummaryAsync(metrics, options.LawUnifiedEpoch, featureAggregator);
+                    var decisionStore = provider.GetRequiredService<Agent.Infrastructure.Routing.RoutingDecisionStore>();
+                    var rejectStore = provider.GetRequiredService<Agent.Infrastructure.Metrics.ToolRejectionStore>();
+                    await PrintSummaryAsync(metrics, options.LawUnifiedEpoch, featureAggregator, decisionStore, rejectStore);
                     await PrintRecentAsync(metrics, 5);
                 }
 
@@ -966,7 +983,7 @@ internal class Program
     }
 
     /// <summary>打印指标汇总。</summary>
-    static async Task PrintSummaryAsync(IMetricsCollector metrics, DateTimeOffset? lawUnifiedEpoch, Agent.Infrastructure.Routing.TaskMetricsAggregator? featureAggregator = null)
+    static async Task PrintSummaryAsync(IMetricsCollector metrics, DateTimeOffset? lawUnifiedEpoch, Agent.Infrastructure.Routing.TaskMetricsAggregator? featureAggregator = null, Agent.Infrastructure.Routing.RoutingDecisionStore? decisionStore = null, Agent.Infrastructure.Metrics.ToolRejectionStore? rejectStore = null)
     {
         var summary = await metrics.GetSummaryAsync(null, CancellationToken.None);
 
@@ -1069,6 +1086,52 @@ internal class Program
                 Console.WriteLine($"  ({s.SuccessCount}/{s.TotalCount})  avg {s.AvgTotalMs / 1000:N0}s  失败主因: {s.TopFailureCause}");
             }
             if (hasData) Console.WriteLine("  （特征类归因 · D2 路由数据校准）");
+        }
+
+        // 【3A】路由决策落库：决策分布（调权数据地基的可见面）
+        if (decisionStore is not null)
+        {
+            try
+            {
+                var rd = await decisionStore.GetSummaryAsync(CancellationToken.None);
+                if (rd.Total > 0)
+                {
+                    Console.WriteLine("=== 路由决策（3A 落库） ===");
+                    Console.Write($"  决策总数:  ");
+                    Console.WriteLine(rd.Total);
+                    var svcLine = string.Join("  ", rd.ByService.Select(x => $"{x.Service}:{x.Count}"));
+                    Console.WriteLine($"  按服务:    {svcLine}");
+                    var featLine = string.Join("  ", rd.ByFeature.Take(5).Select(x => $"{x.Item1}:{x.Item2}"));
+                    Console.WriteLine($"  按特征类:  {featLine}");
+                    Console.WriteLine("  （routing_decisions 表 · 3B 自动调权数据地基）");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  [路由决策] 读取失败: {ex.Message}");
+            }
+        }
+
+        // 【C】工具拒绝事件：拒绝类别分布（补工具层拦截不可观测盲区）
+        if (rejectStore is not null)
+        {
+            try
+            {
+                var tr = await rejectStore.GetSummaryAsync(CancellationToken.None);
+                if (tr.Total > 0)
+                {
+                    Console.WriteLine("=== 工具拒绝（C 事件落库） ===");
+                    Console.Write($"  拒绝总数:  ");
+                    Console.WriteLine(tr.Total);
+                    var catLine = string.Join("  ", tr.ByCategory.Select(x => $"{x.Category}:{x.Count}"));
+                    Console.WriteLine($"  按类别:    {catLine}");
+                    Console.WriteLine("  （tool_rejections 表 · 拦截影响面可观测）");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  [工具拒绝] 读取失败: {ex.Message}");
+            }
         }
 
         Console.WriteLine();

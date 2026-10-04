@@ -76,6 +76,17 @@ public static class DependencyInjection
 
         // ─────────── 路由：Layer 3 ───────────
         // 【关键】要把 AgentOptions 注入进去（AgentPro 分流用）
+        // ─────────── 3A：路由决策落库（调权数据地基） ───────────
+        // routing_decisions 表放 metrics.db 同库：3B 调权需与 task_metrics 关联（成功率 vs 路由）。
+        services.AddSingleton<Routing.RoutingDecisionStore>(_ =>
+        {
+            var storeDbPath = Path.Combine(
+                Path.GetDirectoryName(dbPath) ?? ".",
+                "metrics.db");
+            return new Routing.RoutingDecisionStore(storeDbPath);
+        });
+
+        // ─────────── 路由：三层漏斗 ───────────
         services.AddSingleton<IModelRouter>(sp =>
         {
             var rules = sp.GetRequiredService<IRuleEngine>();
@@ -83,15 +94,24 @@ public static class DependencyInjection
             var logger = sp.GetRequiredService<ILogger<ModelRouter>>();
             var opts = sp.GetRequiredService<AgentOptions>();
             var metrics = sp.GetRequiredService<IMetricsCollector>();
-            return new ModelRouter(rules, classifier, logger, opts, metrics);
+            var decisions = sp.GetRequiredService<Routing.RoutingDecisionStore>();
+            return new ModelRouter(rules, classifier, logger, opts, metrics, decisions);
         });
 
         // ─────────── 【关键】工具（少了这几行就报这个错） ───────────
         // 工程感知 P0/P1：只读工具可感知工程根（双根）；写工具在 --write 授权下可写工程根（改前备份）
-        services.AddSingleton<IAgentTool>(_ => new ListDirTool(workspaceRoot, projectRoot));
-        services.AddSingleton<IAgentTool>(_ => new ReadFileTool(workspaceRoot, projectRoot));
-        services.AddSingleton<IAgentTool>(_ => new WriteFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId));
-        services.AddSingleton<IAgentTool>(_ => new EditFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId));    // ← 新增
+        // 【C】拒绝事件落库：ToolRejectionStore 单例（metrics.db 同库），WriteFileTool/EditFileTool 注入
+        services.AddSingleton<Metrics.ToolRejectionStore>(_ =>
+        {
+            var rejectDbPath = Path.Combine(
+                Path.GetDirectoryName(dbPath) ?? ".",
+                "metrics.db");
+            return new Metrics.ToolRejectionStore(rejectDbPath);
+        });
+        services.AddSingleton<IAgentTool>(sp => new ListDirTool(workspaceRoot, projectRoot));
+        services.AddSingleton<IAgentTool>(sp => new ReadFileTool(workspaceRoot, projectRoot));
+        services.AddSingleton<IAgentTool>(sp => new WriteFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>()));
+        services.AddSingleton<IAgentTool>(sp => new EditFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>()));    // ← 新增
         services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot, projectRoot, projectWriteEnabled));   // ← 新增
         services.AddSingleton<IAgentTool>(_ => new RunCommandTool(workspaceRoot, projectRoot));
         services.AddSingleton<IAgentTool>(_ => new RememberTool(_.GetRequiredService<AgentMemoryStore>()));   // ← P3：模型级记忆

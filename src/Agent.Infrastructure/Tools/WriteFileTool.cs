@@ -4,6 +4,7 @@ using System.Text.Json;
 // 命名空间
 namespace Agent.Infrastructure.Tools;
 
+using Agent.Infrastructure.Metrics;
 using Agent.Infrastructure.Project;
 
 /// <summary>
@@ -17,14 +18,37 @@ public sealed class WriteFileTool : AgentToolBase
     private readonly bool _projectWriteEnabled;
     private readonly string _taskId;
 
+    // 【C】工具拒绝事件落库（可空：tests 直接构造不传 → 静默跳过；DI 传真实 store）
+    private readonly ToolRejectionStore? _rejections;
+
+    // 【B】P-D 熔断语义化：同文件被 P-D 类型冲突拒绝的次数（per-task 实例，无跨任务污染）。
+    // 实证：模型被 P-D 拒后不换 edit_file、反复 write_file → 3 连拒熔断白跑。
+    // 第 2 次拒绝即返回确定性指令（数据驱动引导，非提示词）。
+    private readonly Dictionary<string, int> _pdRejectionCounts = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>构造函数。</summary>
-    public WriteFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null)
+    public WriteFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null)
     {
         // 规范化
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
         _projectWriteEnabled = projectWriteEnabled;
         _taskId = string.IsNullOrWhiteSpace(taskId) ? "default" : taskId;
+        _rejections = rejections;
+    }
+
+    /// <summary>记录一次拒绝事件（fail-safe：记录失败不影响工具主流程）。</summary>
+    private async Task RecordRejectionAsync(string category, string path, string message, CancellationToken ct)
+    {
+        try
+        {
+            if (_rejections is not null)
+                await _rejections.RecordAsync("write_file", category, path, _taskId, message, ct);
+        }
+        catch
+        {
+            // 静默：记录失败不影响工具主流程
+        }
     }
 
     /// <summary>工具名。</summary>
@@ -69,7 +93,9 @@ public sealed class WriteFileTool : AgentToolBase
 
             if (!allowedEmptyFiles.Contains(fileName))
             {
-                return "错误：内容为空，拒绝写入。如果需要创建空占位文件（如 __init__.py），请写入单个换行符 \"\\n\"。";
+                var err = "错误：内容为空，拒绝写入。如果需要创建空占位文件（如 __init__.py），请写入单个换行符 \"\\n\"。";
+                await RecordRejectionAsync("empty_content", relative, err, ct);
+                return err;
             }
 
             // 白名单文件允许空内容——继续往下走，不做替换
@@ -82,6 +108,7 @@ public sealed class WriteFileTool : AgentToolBase
         var interactiveError = PyCodeGuard.DetectInteractive(content, relative);
         if (interactiveError is not null)
         {
+            await RecordRejectionAsync("interactive", relative, interactiveError, ct);
             return interactiveError;
         }
 
@@ -118,7 +145,11 @@ public sealed class WriteFileTool : AgentToolBase
         var insideProject = _projectWriteEnabled && _projectRoot is not null
             && fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase);
         if (!insideWorkspace && !insideProject)
-            return "错误：路径越界。";
+        {
+            var err = "错误：路径越界。";
+            await RecordRejectionAsync("out_of_bounds", relative, err, ct);
+            return err;
+        }
 
         // 【P-D】写前类型冲突检测：工程可写时，新内容定义了工程【其他文件】已有类型 → 拒绝写入。
         // ShippingService 类任务 3/3 失败根因：模型把已有 class Order 重复定义进 OrderService.cs（CS0101）。
@@ -135,19 +166,37 @@ public sealed class WriteFileTool : AgentToolBase
                 || ext.Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
                 || ext.Equals(".vbproj", StringComparison.OrdinalIgnoreCase))
             {
-                return $"错误：工程模式禁止修改/新建项目文件 {relative}。工程结构由工程根已有项目锚定；" +
+                var err = $"错误：工程模式禁止修改/新建项目文件 {relative}。工程结构由工程根已有项目锚定；" +
                        "本任务只需新增/修改 .cs 源文件，无需改动项目文件。\n退出码：126";
+                await RecordRejectionAsync("project_file", relative, err, ct);
+                return err;
             }
 
             var conflicts = TypeConflictDetector.DetectDuplicateTypes(_projectRoot, fullPath, content);
             if (conflicts.Count > 0)
             {
+                // 【B】P-D 熔断语义化：同路径被拒次数累计，第 2 次起返回确定性指令
+                var count = _pdRejectionCounts.TryGetValue(fullPath, out var prev) ? prev + 1 : 1;
+                _pdRejectionCounts[fullPath] = count;
+
                 var hint = TypeConflictDetector.BuildExistingTypesHint(
                     TypeConflictDetector.GetExistingTypes(_projectRoot, fullPath),
                     relative, File.Exists(fullPath));
-                return $"错误：检测到类型重复定义：{string.Join("；", conflicts)}。\n" +
+
+                if (count >= 2)
+                {
+                    var err = $"错误：{relative} 已是第 {count} 次因类型重复被拒绝。禁止再次使用 write_file 整体重写该文件。\n" +
+                           $"必须改用 edit_file 做局部修改（保留文件其余内容）；如需定义新类型，请用 write_file 写入独立的新文件名。\n" +
+                           $"{hint}";
+                    await RecordRejectionAsync("pd_conflict", relative, err, ct);
+                    return err;
+                }
+
+                var err1 = $"错误：检测到类型重复定义：{string.Join("；", conflicts)}。\n" +
                        $"{hint}\n" +
                        $"请勿在 {relative} 中重复定义工程已有类型；如需修改已有类型，请用 edit_file 局部编辑，不要整体重写文件。";
+                await RecordRejectionAsync("pd_conflict", relative, err1, ct);
+                return err1;
             }
         }
 
@@ -159,7 +208,9 @@ public sealed class WriteFileTool : AgentToolBase
             var projPath = Path.GetFullPath(Path.Combine(_projectRoot, relative));
             if (projPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase) && File.Exists(projPath))
             {
-                return $"错误：工程只读模式（use 未带 --write），拒绝写入工程文件 {relative}。\n如需修改工程文件，请使用 use --write 开启工程可写后重试。";
+                var err = $"错误：工程只读模式（use 未带 --write），拒绝写入工程文件 {relative}。\n如需修改工程文件，请使用 use --write 开启工程可写后重试。";
+                await RecordRejectionAsync("read_only", relative, err, ct);
+                return err;
             }
         }
 

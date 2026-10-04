@@ -19,6 +19,7 @@ public sealed class ModelRouter : IModelRouter
     private readonly ILogger<ModelRouter> _logger;
     private readonly AgentOptions _options;   // ← 新增
     private readonly IMetricsCollector _metrics;   // ← 数据闭环：历史表现回流
+    private readonly RoutingDecisionStore _decisions;   // ← 3A：路由决策落库（调权数据地基）
 
     /// <summary>构造函数。</summary>
     public ModelRouter(
@@ -26,13 +27,28 @@ public sealed class ModelRouter : IModelRouter
         IIntentClassifier classifier,
         ILogger<ModelRouter> logger,
         AgentOptions options,
-        IMetricsCollector metrics)
+        IMetricsCollector metrics,
+        RoutingDecisionStore decisions)
     {
         _rules = rules;
         _classifier = classifier;
         _logger = logger;
         _options = options;
         _metrics = metrics;
+        _decisions = decisions;
+    }
+
+    /// <summary>路由决策落库（fail-safe：记录失败不影响主流程）。</summary>
+    private async Task RecordDecisionAsync(RoutingDecision d, string input, CancellationToken ct)
+    {
+        try
+        {
+            await _decisions.RecordAsync(d, input, sessionId: null, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[路由决策] 落库失败（不影响主流程）。");
+        }
     }
 
     /// <summary>
@@ -51,10 +67,12 @@ public sealed class ModelRouter : IModelRouter
         if (queryKeywords.Any(k => context.UserInput.Contains(k, StringComparison.OrdinalIgnoreCase)))
         {
             _logger.LogInformation("[L0-查询] 命中查询词，直接走本地 small");
-            return new RoutingDecision(
+            var d = new RoutingDecision(
                 RoutingDecision.Small,
                 RoutingTier.Rule,
                 "查询类任务，走本地 Small");
+            await RecordDecisionAsync(d, context.UserInput, ct);
+            return d;
         }
 
         // ---------- L0.5：写任务 → 直连 large ----------
@@ -80,10 +98,12 @@ public sealed class ModelRouter : IModelRouter
                     smallStats, largeStats, minSamples: 3, minSuccessRate: 0.6, out var reason))
                 {
                     _logger.LogInformation("[数据闭环] L0.5 写任务降级 small（{Reason}）", reason);
-                    return new RoutingDecision(
+                    var d = new RoutingDecision(
                         RoutingDecision.Small,
                         RoutingTier.Rule,
                         $"写任务降级 small（{reason}）");
+                    await RecordDecisionAsync(d, context.UserInput, ct);
+                    return d;
                 }
 
                 _logger.LogDebug("保持 large：{Reason}", reason);
@@ -94,10 +114,12 @@ public sealed class ModelRouter : IModelRouter
             }
 
             _logger.LogInformation("[L0.5-写任务] 写任务 → 直连 large");
-            return new RoutingDecision(
+            var writeD = new RoutingDecision(
                 RoutingDecision.Large,
                 RoutingTier.Rule,
                 "写任务直连 large（跳过 4B 空响应）");
+            await RecordDecisionAsync(writeD, context.UserInput, ct);
+            return writeD;
         }
 
         // ---------- Layer 1：规则拦截 ----------
@@ -121,10 +143,12 @@ public sealed class ModelRouter : IModelRouter
                         proStats, smallStats, minSamples: 3, badRate: 0.6, minSuccessRate: 0.5, out var readReason))
                     {
                         _logger.LogInformation("[数据闭环] L0.5b 读任务升级 agent_pro（{Reason}）", readReason);
-                        return new RoutingDecision(
+                        var d = new RoutingDecision(
                             RoutingDecision.AgentPro,
                             RoutingTier.Rule,
                             $"读任务升级 agent_pro（{readReason}）");
+                        await RecordDecisionAsync(d, context.UserInput, ct);
+                        return d;
                     }
 
                     _logger.LogDebug("读任务保持 small：{Reason}", readReason);
@@ -138,6 +162,7 @@ public sealed class ModelRouter : IModelRouter
             _logger.LogInformation(
                 "[L1-规则] {Rule} → {ServiceId}",
                 ruleHit.Reason, ruleHit.ServiceId);
+            await RecordDecisionAsync(ruleHit, context.UserInput, ct);
             return ruleHit;
         }
 
@@ -189,10 +214,12 @@ public sealed class ModelRouter : IModelRouter
             serviceId == RoutingDecision.AgentPro ? " (AgentPro/本地4B)" : "");
 
         // 返回决策，携带意图信息
-        return new RoutingDecision(
+        var finalD = new RoutingDecision(
             serviceId,
             RoutingTier.SmallModel,
             $"意图 {intent}",
             intent);
+        await RecordDecisionAsync(finalD, context.UserInput, ct);
+        return finalD;
     }
 }
