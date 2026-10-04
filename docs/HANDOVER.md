@@ -1,6 +1,7 @@
 # LocalAiWorkbench 项目交接文档
 
 > 撰写日期：2026-09-22（基于源码通读 + 真实构建验证 + workspace 运行数据核对）
+> **10-04 增量引导收尾 + E2E 断言语义校准 + #66 判定完成（按用户建议顺序 ①②③ 推进）：** ①**E2E incremental 断言语义校准**（`scripts/e2e/e2e.ps1` 三态细分）：原把"安全拦截但模型能力失败"（P-D 拒后模型不换路、dotnet run 验证旧代码假完成）与"侧路假完成漏洞"（模型在工程根外建项目文件）混为一标——改为三态：`[安全拦截生效-模型未接入]` / `[安全拦截]`（无拦截信号但完成且 demo 未动=疑似漏洞）/ `[工程未接入]`。run10=3/4 验证。②**增量修改引导（#65）**：P-D 拦截消息从"不能做什么"升级为"不能做什么 + 下一步动作"（数据驱动）：`TypeConflictDetector.BuildExistingTypesHint` 增加 `targetRelative/targetExists`——目标已存在 → 附"请先 read_file {target} 查看当前内容，再用 edit_file 局部修改（不要 write_file 整体重写）"；目标是新文件 → 附"本文件只应定义清单之外的新类型；若需修改已有类型请在其所在文件内 edit_file 局部编辑"。WriteFileTool/EditFileTool 传目标文件状态。tests 308→**311/311**（+3）。**构建坑（字节级定性）**：run11/12 新引导不生效根因 = `dotnet build <项目> --no-incremental` 只重建 CLI 自身，**依赖项目 Agent.Infrastructure.dll 未被复制更新**（CLI bin DLL 旧）；`dotnet build LocalAiWorkbench.slnx --no-incremental` 全量重建后才更新。验证方法：python 字节级搜索 UTF-16LE 字面量（`是新建文件`=b'\x2f\x66\xb0\x65\xfa\x5e\x87\x65\xf6\x4e'，UTF-16 解码搜索曾误报 False——字符串编码细节不可靠，字节搜索为准）。**run13 实证**：拦截消息已含完整两段引导（工程已有类型清单 + read_file/edit_file 动作指引）——但**模型仍不换路**（看到引导后依然 write_file 整体重写被 P-D 拦）= 30B Executor 增量能力上限，非安全漏洞（安全层恒定兜底）。③**#66 多文件规划引导判定完成**：探查结论——Planner 阶段工程图谱引导**已由 10-03 #41 工程图谱增强（BuildEngineeringGraphBlock 注入已有文件清单+类型分布+影响面）+ CheckIncrementalPlanConflicts 计划校验完整落地且已生效**（run13 实证：增量任务已走 Orchestrator、Planner 输出合规=新增 1 + 接入 1、计划校验放行合规形态）；剩余失败集中在 Executor 生成环节（30B 收到拦截消息后仍整体重写），无新增代码空间，**基线固化：E2E 3/4 + 安全拦截恒定，ShippingService 类任务标注为已知模型能力边界**（用户确认方案 A）。提交：282bf8d（①）、e9b6fbd（②）。
 > **10-03 改进批次：显存卸载实验 + 工程增量计划校验（用户确认顺序 2→1）：** ①**显存卸载实验**（请求级 num_gpu 基准 4/8/12：生成速度 16.6→18.2→18.8 tok/s 仅 +10-13%，瓶颈在 CPU 层；显存 2381→3939→5475MB，12 层余量 <700MB 有 OOM 风险）→ **Modelfile num_gpu 4→8**（+10% 速度、显存余 2.2GB、CPU 层减 4 缓解编译抢算力；blob 复用重建秒级，已 ollama create 生效）。②**工程增量计划校验**（`Orchestrator.CheckIncrementalPlanConflicts` 静态方法）：ProjectIncremental 特征任务 Plan 中"已有文件 ≥2"判定整体重写倾向 → **Planner 阶段拒绝**（走规划失败升级链，早拦截避免 Executor 白写一轮）——合法形态（新增 1 + 接入 1）已有 ≤1 放行；确定性集合运算非提示词。tests 294→**298/298**（+4：3 已有冲突/1 接入放行/全新增放行/大小写分隔符归一化）。ShippingService 复测：三层拦截网全链路验证通过（P-D 100% 拦截整体重写 + D2 重试校准 + 回滚干净），任务本身仍失败（30B 写幻觉字段）——能力边界已接受。
 > **10-03 改进批次二：备份生命周期 + 记忆注入过滤（用户确认顺序 4/5）：** ③**备份生命周期**（`BackupService.PruneBackups(workspace, keepLastN=8)`）：任务结束后保留最近 8 个任务备份目录、删除更早的（防 .backup 无限增长；手动 rollback 仍覆盖最近 8 任务）；CLI 每任务收尾统一挂点。④**记忆注入特征过滤**（任务 5）：agent_memory 表新增 `feature` 列（TaskFeatureClassifier 特征类，兼容 ALTER）；ArchiveTask 归档 + RememberTool 决策写入时打特征标签；`Search(input, limit, feature)`——kind=task 归档记忆跨特征类**剔除**（强特征相关防污染）、kind=model 决策记忆跨类**降权**保留（score-1，决策可能跨任务复用）；`LoadRelevantMemory` 按输入特征类过滤注入。tests 298→**304/304**（+2 Prune + 4 记忆过滤）。E2E 脚本 `scripts/e2e/e2e.ps1`（UTF-8 BOM 必须，PS5.1 读无 BOM 会按 GBK 乱码）——4 用例（工程增量/单文件/多文件/读查）逐用例工程副本隔离 + 断言 + 汇总，落 `workspace\e2e\e2e_<ts>.log`。
 > **10-03 D2 路由数据校准（用户确认实施）：** D1 归因接入路由层（纯数据/结构驱动，非提示词）。新建 `Routing/TaskFeatureClassifier.cs`（确定性关键词任务特征分类：工程增量/外部凭据/多文件/单文件/读查/其他——工程增量含 `.cs` 中新增方法等变体）与 `Routing/TaskMetricsAggregator.cs`（启动加载 metrics.db → 按特征类聚合 Total/Success/Rate/AvgMs/失败主因，30 秒缓存，失败归因词表与 D1 一致）。**Orchestrator 重试上限校准**：特征类历史样本 ≥3 且成功率 <50% → ExecutorMaxRetries 3→1（数据依据：工程增量类历史 0 成功，3 次重试纯浪费 CPU 推理约 9 分钟/任务；失败即回滚不再空转）——日志注记 `[D2] 特征类 X 历史成功率 Y%，重试上限校准 3→1`。CLI 接入：启动 Load() + `stats` 新增特征类归因块（每类成功率/样本/均耗时/失败主因，颜色分级）。tests 281→**294/294**（+13：8 分类断言含 `.cs` 中新增变体 + 5 聚合断言：工程增量 3 条 0 成功/失败主因=编译/类型冲突、外部凭据 2/2、单文件 1/1、无样本类 null）。提交 8a51e9c。
@@ -584,7 +585,7 @@ AgentLoop.cs(554,50): error CS0161 并非所有的代码路径都返回值
 
 20. **【已修 10-04】PS 5.1 -File 模式向子进程 stdin 注入 UTF-8 BOM**：管道、`StandardInput.Write`、`StandardInput.BaseStream.Write` 全绕不过（捕获实证 `b'\xef\xbb\xbfuse --write ...'` 37B 含 EF BB BF）——CLI `StartsWith("use ")` 不命中、use 行被当任务执行 = E2E"假完成"根因。已双管修复：CLI `use` 前 `TrimStart('\uFEFF')` 剥离 BOM + E2E 改用 runner.py（python subprocess 喂 stdin）。**接手注意**：任何从 PS 5.1 向原生 exe 管道传多行 stdin 的场景都会踩此坑（-Command 与 -File 行为不同）。
 
-21. **【待校准】E2E incremental 断言语义**：incremental 用例把"安全拦截但任务失败"（P-D 拒后模型不换路、dotnet run 验证旧代码假完成）与"侧路假完成"（安全漏洞，模型在工程根外建项目文件）都标为 `[工程未接入-假完成]`——语义失真，易误读为安全漏洞回潮。建议校准为两态：安全拦截+模型能力失败 / 侧路假完成。
+21. **【已修 10-04】E2E incremental 断言语义**：incremental 用例把"安全拦截但任务失败"（P-D 拒后模型不换路、dotnet run 验证旧代码假完成）与"侧路假完成"（安全漏洞，模型在工程根外建项目文件）都标为 `[工程未接入-假完成]`——语义失真，易误读为安全漏洞回潮。已校准为三态（提交 282bf8d）：`[安全拦截生效-模型未接入]`（有拦截信号但模型能力失败）/ `[安全拦截]`（无拦截信号但完成且 demo 未动=疑似侧路漏洞）/ `[工程未接入]`。run10/13 实证：incremental 恒为 `[安全拦截生效-模型未接入]`，安全层恒定生效。
 
 22. **【依赖说明】E2E 基建依赖 python311**：`scripts\e2e\runner.py` 用 python subprocess 启动 CLI 喂 stdin（确定性，绕 PS BOM 坑）。系统有 Python311（已装 requests），接手需确保 `python` 在 PATH（E2E 脚本直接调 `python`）。
 
@@ -634,9 +635,9 @@ setx DASHSCOPE\_API\_KEY <你的key>   # 改后需重开终端
 powershell -NoProfile -File scripts/e2e/e2e.ps1
 ```
 
-* 结果落 `workspace/e2e/e2e_<ts>.log` + `case_<kind>_<rand>.log`；最近一次 run9 = 3/4（single/multi/read PASS，incremental 安全层生效、模型能力失败，见 §12-21）。
+* 结果落 `workspace/e2e/e2e_<ts>.log` + `case_<kind>_<rand>.log`；最近 run13 = 3/4（single/multi/read PASS，incremental `[安全拦截生效-模型未接入]`，见 §12-21）。
 * 依赖 python311（`scripts/e2e/runner.py`，python subprocess 喂 stdin 绕 PS BOM 坑，见 §12-20）。
-* incremental 用例要求工程模式增量修改 demo 工程（ShippingService 接入），当前受 30B 增量修改能力上限制约，非安全漏洞。
+* incremental 用例要求工程模式增量修改 demo 工程（ShippingService 接入），当前受 30B 增量修改能力上限制约，非安全漏洞——**已知能力边界，基线固化 3/4 + 安全拦截恒定（10-04 用户确认方案 A）**。
 
 
 
