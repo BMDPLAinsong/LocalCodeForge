@@ -56,16 +56,16 @@ public sealed class SpectreRenderer : RendererBase
         switch (evt)
         {
             case AgentEvent.Routing:
+                // 关键节点（路由决策 / 完成 / 错误）用 Panel；其余高频事件用彩色行——防一次任务 20 个框
                 WriteEventPanel(evt, "路由", Color.Yellow);
                 break;
             case AgentEvent.PlanGenerated:
-                WriteEventPanel(evt, "规划", Color.Yellow);
+                AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(FormatEvent(evt))}[/]");
                 break;
             case AgentEvent.FileWritten:
-                WriteEventPanel(evt, "写入", Color.Aqua);
+                AnsiConsole.MarkupLine($"[aqua]{Markup.Escape(FormatEvent(evt))}[/]");
                 break;
             case AgentEvent.ToolCall:
-                // 高频事件：精简彩色行（不叠框，避免刷屏）
                 AnsiConsole.MarkupLine($"[cyan]{Markup.Escape(FormatEvent(evt))}[/]");
                 break;
             case AgentEvent.ToolResultEvent tr:
@@ -83,12 +83,13 @@ public sealed class SpectreRenderer : RendererBase
         return Task.CompletedTask;
     }
 
-    /// <summary>关键事件 → 标题 Panel（一次性输出，边框完整）</summary>
+    /// <summary>关键事件 → 标题 Panel（.Expand() 撑满终端宽度，内容自动折行，边框按实际宽度画）</summary>
     private static void WriteEventPanel(AgentEvent evt, string title, Color border)
     {
         var panel = new Panel(new Markup(Markup.Escape(FormatEvent(evt))))
             .Header(title, Justify.Left)
             .BorderColor(border)
+            .Expand()
             .Padding(1, 0, 1, 0);
         AnsiConsole.Write(panel);
     }
