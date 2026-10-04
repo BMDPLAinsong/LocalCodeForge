@@ -582,6 +582,12 @@ AgentLoop.cs(554,50): error CS0161 并非所有的代码路径都返回值
 
 19. **【已完成】双路径检查链重复实现 → 已抽公共 OutputVerifier（10-01）**：凭据 11 模式 / 通用失败词 / JSON 字段 / stderr 剥离此前在 AgentLoop 与 Orchestrator **各写一份（≈120 行重复）**，9/22 已因"只改一条路径"踩 3 次双路径不一致。已收敛为 `Quality/OutputVerifier.cs`（internal 静态类，无状态无新依赖）：`HasCredentialFailure` / `StripHarmlessWarnings` / `HasStructuralError` / `HasGenericFailure`（含 expected+success 双容错与查找类信号）/ `HasPlaceholderKey` / `IsPlaceholderOutput` / `IsTemplateOutput`。**判定逻辑单一来源**，失败后反馈文案保留两路径差异（免 Key 注入 / 计划预期输出）。信号集取两路径并集（AgentLoop 检查 3 新增 ZeroDivisionError 等）；stderr 阈值统一为"剥离后非空即失败"；顺手修正原 Orchestrator 的 NETSDK 替换顺序缺陷（先过滤 warning 行再做词替换）。AgentLoop 1002→891、Orchestrator 966→801、新增 271 行；构建 0 错误，28 项确定性回归（%TEMP%\lawcheck\ovtest）全部通过。
 
+20. **【已修 10-04】PS 5.1 -File 模式向子进程 stdin 注入 UTF-8 BOM**：管道、`StandardInput.Write`、`StandardInput.BaseStream.Write` 全绕不过（捕获实证 `b'\xef\xbb\xbfuse --write ...'` 37B 含 EF BB BF）——CLI `StartsWith("use ")` 不命中、use 行被当任务执行 = E2E"假完成"根因。已双管修复：CLI `use` 前 `TrimStart('\uFEFF')` 剥离 BOM + E2E 改用 runner.py（python subprocess 喂 stdin）。**接手注意**：任何从 PS 5.1 向原生 exe 管道传多行 stdin 的场景都会踩此坑（-Command 与 -File 行为不同）。
+
+21. **【待校准】E2E incremental 断言语义**：incremental 用例把"安全拦截但任务失败"（P-D 拒后模型不换路、dotnet run 验证旧代码假完成）与"侧路假完成"（安全漏洞，模型在工程根外建项目文件）都标为 `[工程未接入-假完成]`——语义失真，易误读为安全漏洞回潮。建议校准为两态：安全拦截+模型能力失败 / 侧路假完成。
+
+22. **【依赖说明】E2E 基建依赖 python311**：`scripts\e2e\runner.py` 用 python subprocess 启动 CLI 喂 stdin（确定性，绕 PS BOM 坑）。系统有 Python311（已装 requests），接手需确保 `python` 在 PATH（E2E 脚本直接调 `python`）。
+
 ### 多文件回归中的观察（2026-09-22 18:25）
 
 
@@ -621,6 +627,16 @@ setx DASHSCOPE\_API\_KEY <你的key>   # 改后需重开终端
 工作区根目录取 `AppContext.BaseDirectory` 上跳 5 级（从 bin/Debug/net10.0 回到项目根），产物落 `workspace/runs/`；`RoutingRules.json` 以 `CopyToOutputDirectory=PreserveNewest` 拷到输出目录。
 
 **建议的快速验证路径**：`dotnet run --project src/Agent.Cli` → 输入 `用 C# 写一个待办事项项目，分 Todo 模型、TodoService、Program，多文件组织` → 观察 \[规划]/\[写入]/\[完成] 事件与产物文件数 → `stats` 看指标。
+
+**E2E 端到端复测（4 用例：工程增量-ShippingService / 单文件-hello python / 多文件-C#学生系统 / 读查-Order.cs）**：
+
+```
+powershell -NoProfile -File scripts/e2e/e2e.ps1
+```
+
+* 结果落 `workspace/e2e/e2e_<ts>.log` + `case_<kind>_<rand>.log`；最近一次 run9 = 3/4（single/multi/read PASS，incremental 安全层生效、模型能力失败，见 §12-21）。
+* 依赖 python311（`scripts/e2e/runner.py`，python subprocess 喂 stdin 绕 PS BOM 坑，见 §12-20）。
+* incremental 用例要求工程模式增量修改 demo 工程（ShippingService 接入），当前受 30B 增量修改能力上限制约，非安全漏洞。
 
 
 
@@ -662,9 +678,17 @@ setx DASHSCOPE\_API\_KEY <你的key>   # 改后需重开终端
 
 3n. **【已完成】升级链缺陷修复：空响应升级被 recovery 覆盖**（10-01）：复测暴露——P2-3 升级链设 `firstDecision=large` 后，若 `_lastStepFailed=true`（此前工具失败），AgentLoop 140-152 行 `else if (_lastStepFailed) → RouteAsync`，recovery 规则（200）把决策重路由回 agent_pro，**升级白升**（16:56 天气任务实证：升级 large → recovery → agent_pro → 空响应 → 终止）。修复：空响应升级分支同时 `_lastStepFailed = false`——升级是主动决策，recovery 只该响应工具失败；下一轮走 else 复用升级后的 firstDecision。**验证**：构建 0 错误；tests 42/42；17:13 天气任务一次成功（模型直接写对 wttr.in 键名，输出北京 22°C/晴 + 当前位置 35°C/多云，timeout/错误处理齐备）——本次未触发修复链/升级链（模型写对），升级链修复的真实触发场景（修复失败→空响应→升级→不再被拽回）依赖模型行为不可控，由代码逻辑（_lastStepFailed 作用域/复用路径）保障。**待确认（方案 2 未实施）**：天气类任务 wttr.in 键名领域知识注入（ExternalTaskDetector 附加键名事实段）——用户仅确认方案 1，方案 2 暂缓。
 
-4. **补 Executor prompt 禁令**：「禁止 Console.ReadLine/while (true)」，让交互式任务在规划层就规避，而不是靠超时判失败。
+3o. **【已完成】D2 路由数据校准（10-03）**：`TaskFeatureClassifier` + `TaskMetricsAggregator`（metrics→特征类成功率/失败主因聚合）+ Orchestrator 重试上限校准（高失败率特征类 3→1，省 CPU 空转）+ CLI stats 特征类归因块；tests 294/294；提交 8a51e9c。
 
-5. **清理 RoutingRules.json 重名规则**，合并语义；**EnableOrchestration 接线或删除**。
+3p. **【已完成】显存卸载层实验 + 工程增量计划校验（10-03）**：num_gpu 4→8（基准 16.6→18.2 tok/s、显存余 2.2GB 无 OOM 风险）取 8 + `ollama create law-unified` 重建；`Orchestrator.CheckIncrementalPlanConflicts`（Plan 中已有文件 ≥2 判定整体重写倾向 → Planner 阶段拒绝，早拦截）；tests 298/298；提交 466810c。
+
+3q. **【已完成】改进批次二（10-03）**：备份生命周期 `BackupService.PruneBackups(keepLastN=8)` + agent_memory 加 feature 列 + Indexed search 过滤 + ArchiveTask/Remember 打标签（跨类剔除 task 归档 / 降权 model 决策）+ E2E 脚本（工程接入 diff 防假完成，`scripts\e2e\e2e.ps1`）；tests 304/304；提交 441a99e。
+
+3r. **【已完成】方案 A：工程模式写前拦截项目文件（10-04）**：E2E 暴露"侧路新建项目假完成"——工程模式下模型避开 demo 工程，在 CLI run 目录新建 OrderSystem.csproj + 全套文件 → `dotnet run` 编译通过=假完成，demo 工程实际未接入。实施：WriteFileTool / EditFileTool `insideProject` 块（P-D 检测前）工程模式下 `.csproj/.sln/.slnx/.fsproj/.vbproj` 禁止修改/新建 → 退出码 126；tests +4 → 308/308；提交 00e5bc5。端到端验证链暴露真正根因：**PS 5.1 -File 模式向子进程 stdin 注入 UTF-8 BOM（EF BB BF，管道 / StandardInput.Write / BaseStream.Write 全绕不过，捕获实证 37B）→ CLI `StartsWith("use ")` 不命中、use 行被当任务执行=E2E 假完成**。
+
+3s. **【已完成】E2E BOM 根因修复（10-04）**：双管齐下——① CLI 侧 `use` 命令前 `TrimStart('\uFEFF')` 剥离 BOM（Program.cs，产品级管道调用鲁棒性）；② 测试侧新增 `scripts\e2e\runner.py`（python subprocess 启动 CLI 喂 stdin，确定性无 BOM 注入，UTF-8 严格 / GBK 回退解码），e2e.ps1 弃用 PS 直写 stdin。**E2E run9 = 3/4**：single 31s / multi 81s / read 29s 全 PASS（耗时较此前 59-160s 大降）；incremental 安全层全生效（use 工程模式 + P-D 类型拦截触发并附工程已有类型清单 + 无侧路项目文件写入）；剩余失败 = **30B 增量修改能力上限**（被 P-D 拦后不读工程、不换 edit_file 局部改、直接 dotnet run 验证旧代码假完成——与 ShippingService 幻觉字段同类，用户已接受现状，非安全漏洞）。tests 308/308；提交 f247faf。
+
+4. **补 Executor prompt 禁令**：「禁止 Console.ReadLine/while (true)」，让交互式任务在规划层就规避，而不是靠超时判失败。5. **清理 RoutingRules.json 重名规则**，合并语义；**EnableOrchestration 接线或删除**。
 
 6. `git init`**&#x20;纳入版本控制**；为 TaskClassifier / RuleEngine / TryParseToolCallsFromText 补单元测试。
 
