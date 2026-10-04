@@ -36,6 +36,9 @@ public interface IMetricsCollector
     /// </summary>
     Task<(Agent.Infrastructure.Routing.ServiceStats Current, Agent.Infrastructure.Routing.ServiceStats Legacy)> GetEpochBreakdownAsync(
         string serviceId, DateTimeOffset epoch, CancellationToken ct);
+
+    /// <summary>【失败类别】失败任务按 failure_category 分布（供 stats 面板 / 3B 按类别调权）。</summary>
+    Task<IReadOnlyList<(string Category, int Count)>> GetFailureBreakdownAsync(CancellationToken ct);
 }
 
 /// <summary>

@@ -1035,6 +1035,22 @@ internal class Program
         Console.WriteLine($"  平均修复:  {summary.AvgRetryCount:F2} 次");
         Console.WriteLine($"  平均总耗时: {summary.AvgTotalMs:F0} ms");
 
+        // 【3】失败类别分布：失败任务按 failure_category 自动归类（词表打标，无模型）
+        try
+        {
+            var fb = await metrics.GetFailureBreakdownAsync(CancellationToken.None);
+            if (fb.Count > 0)
+            {
+                var line = string.Join("  ", fb.Select(x => $"{x.Category}:{x.Count}"));
+                Console.WriteLine($"  失败类别:  {line}");
+                Console.WriteLine("  （failure_category 自动归类 · 3B 按类别调权可用）");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  [失败类别] 读取失败: {ex.Message}");
+        }
+
         // 【时代隔离】agent_pro：当前时代（30B law-unified）vs 历史时代（4B），如实反映模型能力
         if (lawUnifiedEpoch is not null)
         {

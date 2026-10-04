@@ -989,6 +989,97 @@ Console.WriteLine("== C ToolRejectionStore 工具拒绝事件落库 ==");
         ret2.Contains("越界") || ret2.Contains("类型重复定义") || ret2.Contains("已写入"));
 }
 
+// ── 1：ReadFileTool 分页续读（大文件不再拒绝） ──
+Console.WriteLine("== 1 ReadFileTool 分页续读 ==");
+{
+    var rfDir = Path.Combine(TestTmp, "rf_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(rfDir);
+    var rfProj = Path.Combine(rfDir, "proj");
+    Directory.CreateDirectory(rfProj);
+
+    // 大文件（>200KB）：6000 行 × 填充 ≈ 600KB
+    var bigPath = Path.Combine(rfProj, "big.txt");
+    var bigContent = string.Join("\n", Enumerable.Range(1, 6000).Select(i => $"line{i} " + new string('x', 90)));
+    File.WriteAllText(bigPath, bigContent);
+
+    var rfTool = new Agent.Infrastructure.Tools.ReadFileTool(rfDir, rfProj);
+    var ctNone2 = CancellationToken.None;
+
+    // 大文件默认：返回前 500 行 + 总行数提示（不再拒绝）
+    var jBig = "{\"path\":\"big.txt\"}";
+    var argsBig = JsonSerializer.Deserialize<JsonElement>(jBig);
+    var rBig = rfTool.InvokeAsync(argsBig, ctNone2).GetAwaiter().GetResult();
+    Check("大文件默认 → 返回前 500 行 + 续读提示",
+        rBig.Contains("共 6000 行") && rBig.Contains("已返回第 1-500 行") && rBig.Contains("offset=501") && rBig.Contains("line1"));
+
+    // 显式 offset 续读：501-1000
+    var jOff = "{\"path\":\"big.txt\",\"offset\":501,\"limit\":500}";
+    var argsOff = JsonSerializer.Deserialize<JsonElement>(jOff);
+    var rOff = rfTool.InvokeAsync(argsOff, ctNone2).GetAwaiter().GetResult();
+    Check("大文件 offset 续读 → 501-1000 行",
+        rOff.Contains("已返回第 501-1000 行") && rOff.Contains("line501") && rOff.Contains("offset=1001"));
+
+    // 末页：无续读提示
+    var jTail = "{\"path\":\"big.txt\",\"offset\":5501,\"limit\":1000}";
+    var argsTail = JsonSerializer.Deserialize<JsonElement>(jTail);
+    var rTail = rfTool.InvokeAsync(argsTail, ctNone2).GetAwaiter().GetResult();
+    Check("大文件末页 → 无续读提示",
+        rTail.Contains("已返回第 5501-6000 行") && !rTail.Contains("offset="));
+
+    // 小文件默认：全文无头（向后兼容）
+    var smallPath = Path.Combine(rfProj, "small.txt");
+    File.WriteAllText(smallPath, "hello\nworld");
+    var argsSmall = JsonSerializer.Deserialize<JsonElement>("{\"path\":\"small.txt\"}");
+    var rSmall = rfTool.InvokeAsync(argsSmall, ctNone2).GetAwaiter().GetResult();
+    Check("小文件默认 → 全文无分页头",
+        rSmall == "hello\nworld");
+}
+
+// ── 3：FailureCategorizer 失败类别自动归类 ──
+Console.WriteLine("== 3 FailureCategorizer 失败类别归类 ==");
+{
+    var ctNone3 = CancellationToken.None;
+    Check("类别：外部凭据 401", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("错误: 401 - {\"cod\":401, \"message\": \"Invalid API key\"}") == "external_credential");
+    Check("类别：外部凭据 403", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("获取位置信息失败: 403") == "external_credential");
+    Check("类别：编译错误 CS", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("error CS0272: 属性或索引器不能使用") == "compile_error");
+    Check("类别：运行崩溃 Traceback", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("Traceback (most recent call last): ZeroDivisionError") == "runtime_error");
+    Check("类别：超时", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("错误：命令执行超时（>30秒）。\n退出码：124") == "timeout");
+    Check("类别：工具拒绝 P-D", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("错误：检测到类型重复定义：Order。\n请勿重复定义") == "tool_rejected");
+    Check("类别：工具拒绝 白名单", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("错误：命令 python -c 不在白名单中。\n退出码：127") == "tool_rejected");
+    Check("类别：未找到", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("错误：文件不存在：pyst.py") == "not_found");
+    Check("类别：空响应", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("模型连续返回空答案，任务终止") == "empty_response");
+    Check("类别：其他兜底", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("未知错误 XYZ") == "other");
+    Check("类别：成功不归类（空入参）", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("") == "other");
+
+    // SqliteMetricsCollector 落库 failure_category
+    var fcDir = Path.Combine(TestTmp, "fc_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(fcDir);
+    var fcDb = Path.Combine(fcDir, "metrics.db");
+    var fcMetrics = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(fcDb);
+    var ts = DateTimeOffset.UtcNow;
+    fcMetrics.RecordAsync(new Agent.Core.Models.TaskMetric
+    {
+        TaskId = "fc_fail_1", SessionId = "s1", UserInput = "测试编译失败", Mode = "agent",
+        RoutingTier = "Rule", ServiceId = "large", RoutingReason = "test",
+        Success = false, IsSuspicious = false, RetryCount = 1,
+        TotalMs = 100, PlannerMs = 0, ExecutorMs = 0, ValidatorMs = 0,
+        LintBlockingErrors = 0, LintWarningErrors = 0,
+        ErrorSummary = "error CS0101: 重复定义", StartedAt = ts, FinishedAt = ts
+    }, ctNone3).Wait();
+    fcMetrics.RecordAsync(new Agent.Core.Models.TaskMetric
+    {
+        TaskId = "fc_ok_1", SessionId = "s1", UserInput = "测试成功", Mode = "agent",
+        RoutingTier = "Rule", ServiceId = "large", RoutingReason = "test",
+        Success = true, IsSuspicious = false, RetryCount = 0,
+        TotalMs = 50, PlannerMs = 0, ExecutorMs = 0, ValidatorMs = 0,
+        LintBlockingErrors = 0, LintWarningErrors = 0,
+        ErrorSummary = "", StartedAt = ts, FinishedAt = ts
+    }, ctNone3).Wait();
+    var fb = fcMetrics.GetFailureBreakdownAsync(ctNone3).Result;
+    Check("失败类别落库 → compile_error:1（成功不统计）",
+        fb.Count == 1 && fb[0].Category == "compile_error" && fb[0].Count == 1);
+}
+
 // ── 任务1：工程增量计划校验（Plan vs 已有文件冲突） ──
 Console.WriteLine("== 工程增量计划校验（CheckIncrementalPlanConflicts） ==");
 {

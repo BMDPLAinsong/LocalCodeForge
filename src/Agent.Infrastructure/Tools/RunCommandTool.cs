@@ -25,8 +25,9 @@ public sealed class RunCommandTool : AgentToolBase
         "tree", "find", "findstr", "where"
     };
 
-    // 单次命令超时（秒）
-    private const int TimeoutSeconds = 30;
+    // 单次命令超时（秒）：普通模式 30s；工程模式放宽 90s（dotnet build 大工程 / 长测试常 >30s 被误杀）
+    private const int TimeoutSecondsSandbox = 30;
+    private const int TimeoutSecondsProject = 90;
 
     /// <summary>构造函数。</summary>
     public RunCommandTool(string workspaceRoot, string? projectRoot = null)
@@ -35,6 +36,9 @@ public sealed class RunCommandTool : AgentToolBase
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
     }
+
+    /// <summary>当前超时秒数（工程模式放宽，防编译/测试被 30s 误杀）。</summary>
+    private int TimeoutSeconds => _projectRoot is not null ? TimeoutSecondsProject : TimeoutSecondsSandbox;
 
     /// <summary>工具名。</summary>
     public override string Name => "run_command";

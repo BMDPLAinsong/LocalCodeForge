@@ -54,6 +54,7 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
                     lint_blocking_errors INTEGER NOT NULL,
                     lint_warning_errors INTEGER NOT NULL,
                     error_summary       TEXT NOT NULL,
+                    failure_category    TEXT NOT NULL DEFAULT '',
                     started_at          INTEGER NOT NULL,
                     finished_at         INTEGER NOT NULL
                 );
@@ -63,17 +64,57 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
             cmd.ExecuteNonQuery();
         }
 
-        // 兼容旧数据库：如果旧表没有 is_suspicious 列，ALTER 加上
+        // 兼容旧数据库：缺列则 ALTER 补上（is_suspicious → failure_category）
+        var cols = new List<string>();
+        using (var pragma = conn.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA table_info(task_metrics)";
+            using var reader = pragma.ExecuteReader();
+            while (reader.Read())
+                cols.Add(reader.GetString(1));
+        }
+
+        if (!cols.Contains("is_suspicious", StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                using var alterCmd = conn.CreateCommand();
+                alterCmd.CommandText =
+                    "ALTER TABLE task_metrics ADD COLUMN is_suspicious INTEGER NOT NULL DEFAULT 0";
+                alterCmd.ExecuteNonQuery();
+            }
+            catch
+            {
+                // 列已存在 → 忽略
+            }
+        }
+
+        if (!cols.Contains("failure_category", StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                using var alterCmd = conn.CreateCommand();
+                alterCmd.CommandText =
+                    "ALTER TABLE task_metrics ADD COLUMN failure_category TEXT NOT NULL DEFAULT ''";
+                alterCmd.ExecuteNonQuery();
+            }
+            catch
+            {
+                // 列已存在 → 忽略
+            }
+        }
+
+        // 失败类别索引：必须在 ALTER 之后建（旧库先迁移再建索引，否则 CREATE INDEX 引用不存在列报错）
         try
         {
-            using var alterCmd = conn.CreateCommand();
-            alterCmd.CommandText =
-                "ALTER TABLE task_metrics ADD COLUMN is_suspicious INTEGER NOT NULL DEFAULT 0";
-            alterCmd.ExecuteNonQuery();
+            using var idxCmd = conn.CreateCommand();
+            idxCmd.CommandText =
+                "CREATE INDEX IF NOT EXISTS idx_metrics_category ON task_metrics(failure_category)";
+            idxCmd.ExecuteNonQuery();
         }
         catch
         {
-            // 列已存在 → 忽略
+            // 列迁移失败时忽略（索引不建不致命）
         }
     }
 
@@ -91,14 +132,14 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
                 success, is_suspicious, retry_count,
                 total_ms, planner_ms, executor_ms, validator_ms,
                 lint_blocking_errors, lint_warning_errors,
-                error_summary, started_at, finished_at
+                error_summary, failure_category, started_at, finished_at
             ) VALUES (
                 $task_id, $session_id, $user_input, $mode,
                 $routing_tier, $service_id, $routing_reason,
                 $success, $is_suspicious, $retry_count,
                 $total_ms, $planner_ms, $executor_ms, $validator_ms,
                 $lint_blocking_errors, $lint_warning_errors,
-                $error_summary, $started_at, $finished_at
+                $error_summary, $failure_category, $started_at, $finished_at
             );
         """;
 
@@ -119,10 +160,39 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         cmd.Parameters.AddWithValue("$lint_blocking_errors", metric.LintBlockingErrors);
         cmd.Parameters.AddWithValue("$lint_warning_errors", metric.LintWarningErrors);
         cmd.Parameters.AddWithValue("$error_summary", Truncate(metric.ErrorSummary, 500));
+        // 【3】失败类别自动归类：成功 → 空；失败 → FailureCategorizer 词表打标（纯数据层，无模型）
+        var failureCategory = metric.Success
+            ? ""
+            : FailureCategorizer.Categorize(metric.ErrorSummary);
+        cmd.Parameters.AddWithValue("$failure_category", failureCategory);
         cmd.Parameters.AddWithValue("$started_at", metric.StartedAt.ToUnixTimeSeconds());
         cmd.Parameters.AddWithValue("$finished_at", metric.FinishedAt.ToUnixTimeSeconds());
 
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>失败类别分布（成功任务不统计，供 stats 面板 / 3B 按类别调权）。</summary>
+    public async Task<IReadOnlyList<(string Category, int Count)>> GetFailureBreakdownAsync(CancellationToken ct)
+    {
+        var list = new List<(string, int)>();
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT failure_category, COUNT(*)
+            FROM task_metrics
+            WHERE success = 0
+            GROUP BY failure_category
+            ORDER BY COUNT(*) DESC
+            """;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var cat = reader.GetString(0);
+            list.Add((string.IsNullOrEmpty(cat) ? "other" : cat, reader.GetInt32(1)));
+        }
+        return list;
     }
 
     /// <summary>查询最近 N 条。</summary>
