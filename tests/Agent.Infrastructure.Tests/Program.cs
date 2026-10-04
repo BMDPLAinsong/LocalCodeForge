@@ -729,6 +729,9 @@ Console.WriteLine("== IntentOverride 意图覆盖（§14-3w） ==");
 
     Check("SimpleQA + 添加注释到文件 → CodeGenerate",
         Ov(Agent.Infrastructure.Routing.IntentType.SimpleQA, "在 src/Agent.Core/Models/AgentOptions.cs 中 ProjectRoot 属性定义之后添加一行注释：// 标记") == Agent.Infrastructure.Routing.IntentType.CodeGenerate);
+    // 【A 补全】"加一行注释"（日志实测缺口：OperationVerbs 缺单字"加" → 误判 SimpleQA）
+    Check("加一行注释 → SimpleQA 覆盖为 CodeGenerate",
+        Ov(Agent.Infrastructure.Routing.IntentType.SimpleQA, "在 BigService.cs 的 Method1500 方法里加一行注释 // 已审查") == Agent.Infrastructure.Routing.IntentType.CodeGenerate);
     Check("SimpleQA + 修改代码 → CodeGenerate",
         Ov(Agent.Infrastructure.Routing.IntentType.SimpleQA, "修改 AgentOptions.cs 中 ProjectWriteEnabled 属性的注释说明") == Agent.Infrastructure.Routing.IntentType.CodeGenerate);
     Check("SimpleQA + 纯问答 → 保持 SimpleQA",
@@ -755,6 +758,9 @@ Console.WriteLine("== IntentOverride 写任务判定（§14-3w 直连 large） =
         !Wr("今天天气怎么样"));
     Check("读取文件 → 非写任务（读保持 small）",
         !Wr("读取 src/Agent.Core/Models/AgentOptions.cs"));
+    // 【A 补全】"加一行注释"（日志实测缺口：OperationVerbs 缺单字"加" → 误判 SimpleQA）
+    Check("加一行注释 → 写任务（词表补全）",
+        Wr("在 BigService.cs 的 Method1500 方法里加一行注释 // 已审查"));
     Check("列出目录 → 非写任务",
         !Wr("列出 src/Agent.Core/Models 目录"));
     Check("操作词但无文件语境 → 非写任务",
@@ -1031,14 +1037,14 @@ Console.WriteLine("== 1 ReadFileTool 分页续读 ==");
     var rfTool = new Agent.Infrastructure.Tools.ReadFileTool(rfDir, rfProj);
     var ctNone2 = CancellationToken.None;
 
-    // 大文件默认：返回前 500 行 + 总行数提示（不再拒绝）
+    // 【大文件首读重定向】工程模式 + 大文件 + 无 offset → 拒绝 + 定位引导（强制走 find_symbol/analyze_code）
     var jBig = "{\"path\":\"big.txt\"}";
     var argsBig = JsonSerializer.Deserialize<JsonElement>(jBig);
     var rBig = rfTool.InvokeAsync(argsBig, ctNone2).GetAwaiter().GetResult();
-    Check("大文件默认 → 返回前 500 行 + 续读提示",
-        rBig.Contains("共 6000 行") && rBig.Contains("已返回第 1-500 行") && rBig.Contains("offset=501") && rBig.Contains("line1"));
+    Check("工程模式大文件无 offset → 拒绝 + 定位引导",
+        rBig.Contains("错误：文件过大") && rBig.Contains("find_symbol") && rBig.Contains("offset/limit"));
 
-    // 显式 offset 续读：501-1000
+    // 显式 offset 续读：501-1000（重定向放行——带分页参数即精确读取）
     var jOff = "{\"path\":\"big.txt\",\"offset\":501,\"limit\":500}";
     var argsOff = JsonSerializer.Deserialize<JsonElement>(jOff);
     var rOff = rfTool.InvokeAsync(argsOff, ctNone2).GetAwaiter().GetResult();
@@ -1051,6 +1057,13 @@ Console.WriteLine("== 1 ReadFileTool 分页续读 ==");
     var rTail = rfTool.InvokeAsync(argsTail, ctNone2).GetAwaiter().GetResult();
     Check("大文件末页 → 无续读提示",
         rTail.Contains("已返回第 5501-6000 行") && !rTail.Contains("offset="));
+
+    // 非工程模式（无 projectRoot）大文件无 offset → 保持分页（向后兼容；相对路径带 proj/ 前缀）
+    var rfTool2 = new Agent.Infrastructure.Tools.ReadFileTool(rfDir);
+    var argsBigRel = JsonSerializer.Deserialize<JsonElement>("{\"path\":\"proj/big.txt\"}");
+    var rBig2 = rfTool2.InvokeAsync(argsBigRel, ctNone2).GetAwaiter().GetResult();
+    Check("非工程模式大文件无 offset → 仍分页（兼容）",
+        rBig2.Contains("共 6000 行") && rBig2.Contains("已返回第 1-500 行") && rBig2.Contains("offset=501"));
 
     // 小文件默认：全文无头（向后兼容）
     var smallPath = Path.Combine(rfProj, "small.txt");
@@ -1394,8 +1407,35 @@ Console.WriteLine("== 工程图谱（符号索引 + find_symbol） ==");
         "{\"name\":\"Order\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
     Check("无工程模式 → 拒绝", out4.Contains("工程模式"));
 
+    // 【新鲜度】已索引后新增文件 → 增量刷新命中（旧索引查不到新符号的回归）
+    // （方法必须独立成行——行首正则不捕单行类内嵌套方法）
+    File.WriteAllText(Path.Combine(proj, "NewThing.cs"),
+        "public class NewThing\n{\n    public void FreshMethod() {}\n}\n");
+    var out5 = fst.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"name\":\"FreshMethod\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("索引后新增符号 → 增量刷新可命中", out5.Contains("FreshMethod") && out5.Contains("NewThing.cs"));
+
     Directory.Delete(proj, true);
     Directory.Delete(work, true);
+}
+
+// ── analyze_code 大文件支持（重定向引导打通） ──
+Console.WriteLine("== analyze_code 大文件支持 ==");
+{
+    var acDir = Path.Combine(TestTmp, "ac_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(acDir);
+    var big = Path.Combine(acDir, "Big.cs");
+    // 300KB 大文件（原 200KB 限制拒绝）
+    var bigContent = "using System;\npublic class BigSvc {\n" +
+        string.Join("\n", Enumerable.Range(0, 4000).Select(i => $"    public int Method{i}(int x) {{ return x + {i}; }}")) +
+        "\n}\n";
+    File.WriteAllText(big, bigContent);
+    var acTool = new Agent.Infrastructure.Tools.CodeAnalyzerTool(acDir, acDir);
+    var acArgs = System.Text.Json.JsonDocument.Parse("{\"path\":\"Big.cs\"}").RootElement;
+    var acOut = acTool.InvokeAsync(acArgs, CancellationToken.None).GetAwaiter().GetResult();
+    Check("analyze_code 大文件(300KB) → 出符号地图",
+        acOut.Contains("符号总数") && acOut.Contains("Method1999") && !acOut.Contains("文件过大"));
+    Directory.Delete(acDir, true);
 }
 
 // ── 记忆治理：去重合并 / forget / prune / stats ──

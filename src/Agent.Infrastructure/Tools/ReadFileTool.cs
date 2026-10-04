@@ -14,6 +14,9 @@ public sealed class ReadFileTool : AgentToolBase
     private readonly string? _projectRoot;
     // 单文件读取大小上限，防止一次读入过大文件
     private const int MaxBytes = 200 * 1024;
+    // 大文件首读重定向阈值：工程模式下超过此大小且未带 offset → 拒绝并引导用符号定位
+    // （模型面对 5000 行文件反复 read_file 首页不定位是日志实测瓶颈——工具层强制走 find_symbol/analyze_code）
+    private const int RedirectThreshold = 100 * 1024;
 
     /// <summary>构造函数。</summary>
     public ReadFileTool(string workspaceRoot, string? projectRoot = null)
@@ -75,8 +78,18 @@ public sealed class ReadFileTool : AgentToolBase
         if (!File.Exists(fullPath))
             return $"错误：文件不存在：{relative}";
 
-        // 文件过大：不再拒绝，改分页（行级续读）——默认返回前 limit 行 + 总行数提示
+        // 【大文件首读重定向】工程模式 + 大文件 + 未带 offset → 拒绝，强制走符号定位
+        // （实测：模型反复 read_file 首页不续读不定位 → 工具层行为约束，非提示词）
         var info = new FileInfo(fullPath);
+        if (_projectRoot is not null && info.Length > RedirectThreshold && !hasPaging)
+        {
+            var totalLines = File.ReadLines(fullPath).Count();
+            return $"错误：文件过大（{info.Length} bytes，约 {totalLines} 行）。" +
+                   $"请先调用 find_symbol <目标类/方法名> 或 analyze_code 获取符号地图定位目标位置，" +
+                   $"再使用 read_file 并携带 offset/limit 参数精确读取目标区间；不要整页翻阅大文件。";
+        }
+
+        // 文件过大：不再拒绝，改分页（行级续读）——默认返回前 limit 行 + 总行数提示
         var lines = await File.ReadAllLinesAsync(fullPath, ct);
         var total = lines.Length;
 
@@ -91,7 +104,8 @@ public sealed class ReadFileTool : AgentToolBase
             var startLine = offset;
             var endLine = offset + slice.Length - 1;
             header = $"【共 {total} 行，已返回第 {startLine}-{endLine} 行（文件 {info.Length} bytes）】\n" +
-                     (endLine < total ? $"如需继续阅读，请用 offset={endLine + 1}（limit={limit}）续读。\n" : string.Empty);
+                     (endLine < total ? $"如需继续阅读，请用 offset={endLine + 1}（limit={limit}）续读。\n" : string.Empty) +
+                     $"如需定位类/方法/符号，请用 find_symbol <名称> 或 analyze_code 获取符号地图，避免逐页翻阅。\n";
         }
 
         // 返回

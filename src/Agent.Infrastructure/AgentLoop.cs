@@ -386,6 +386,16 @@ public sealed class AgentLoop : IAgentLoop
                                 yield return new AgentEvent.Error("任务写入文件但验证未通过（run_command 未成功），熔断终止，防假成功。");
                                 yield break;
                             }
+
+                            // 【H4】熔断收尾的完成门槛（要求写却没写 = 未完成任务）：
+                            // 任务输入含写动词（IsWriteTask）但本轮从未写过文件（只读/循环 read 卡死）
+                            // → read_file 等只读工具证明不了改动，判失败而非"工具已验证"假完成。
+                            if (!_everWroteFile && IntentOverride.IsWriteTask(request.Input))
+                            {
+                                _logger.LogWarning("[熔断] 写任务但未产生任何写入（只读循环），判失败防假完成。");
+                                yield return new AgentEvent.Error("任务要求修改文件但未产生任何写入（仅循环读取），熔断终止。可重试或改用 find_symbol/analyze_code 定位后编辑。");
+                                yield break;
+                            }
                             _logger.LogWarning("[熔断] 工具序列重复无进展（{Sig}），以工具验证结果收尾。", sig);
                             var closeText = $"任务完成：工具已验证（{cleanName}）。最后验证：{TruncateForAnswer(condensed)}";
                             await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", closeText), ct);
@@ -523,6 +533,7 @@ public sealed class AgentLoop : IAgentLoop
             }
 
             var looksLikeCodeRequest =
+                IntentOverride.IsWriteTask(request.Input) ||
                 request.Input.Contains("写") ||
                 request.Input.Contains("创建") ||
                 request.Input.Contains("生成") ||
@@ -538,7 +549,8 @@ public sealed class AgentLoop : IAgentLoop
                 request.Input.Contains("加入") ||
                 request.Input.Contains("改成") ||
                 request.Input.Contains("改为") ||
-                request.Input.Contains("换成");
+                request.Input.Contains("换成") ||
+                request.Input.Contains("加"); // 与 IntentOverride.OperationVerbs 对齐（防双路径漂移：路由词表已含"加"）
 
             var mustRun =
                 request.Input.Contains("运行") ||

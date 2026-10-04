@@ -59,6 +59,19 @@ public sealed class FindSymbolTool : AgentToolBase
             if (built == 0)
                 return Task.FromResult("未在工程中发现可索引的代码符号（无 .cs/.py/.java/.go/.js/.ts 定义或工程过大被跳过）。");
         }
+        else
+        {
+            // 【新鲜度】已索引 → 每次 Find 前增量刷新（P1-1 增量：对比 mtime 只重扫变更文件）。
+            // 修复实测缺陷：索引惰性建后从不刷新，工程变更（恢复/新增大文件）后 find_symbol 查陈旧索引未命中。
+            try
+            {
+                _store.BuildAndSaveIncremental(_projectRoot);
+            }
+            catch
+            {
+                // 增量失败回退旧索引（不致命）
+            }
+        }
 
         var hits = _store.Find(_projectRoot, name);
         if (hits.Count == 0)

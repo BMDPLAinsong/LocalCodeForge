@@ -20,7 +20,9 @@ public sealed class CodeAnalyzerTool : AgentToolBase
 {
     private readonly string _workspaceRoot;
     private readonly string? _projectRoot;
-    private const int MaxBytes = 200 * 1024;
+    // 符号地图是行级正则扫描（不进模型上下文），272KB/5000 行毫秒级完成——
+    // 去掉原 200KB 限制，上限 5MB 防极端大文件（实测：重定向引导模型走 analyze_code 却撞 200KB 墙 → 死路）
+    private const int MaxBytes = 5 * 1024 * 1024;
 
     public CodeAnalyzerTool(string workspaceRoot, string? projectRoot = null)
     {
