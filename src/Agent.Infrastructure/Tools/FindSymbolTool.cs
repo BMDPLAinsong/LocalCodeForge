@@ -84,6 +84,14 @@ public sealed class FindSymbolTool : AgentToolBase
         sb.AppendLine($"符号 {name} 定义位置（{hits.Count} 处）：");
         foreach (var h in hits)
             sb.AppendLine($"  [{h.File}:{h.Line}] {h.Kind} {h.Symbol}");
+
+        // 【定位后执行引导】命中行号是事实（数据驱动）：引导模型用 offset 读目标区间 + edit_file 修改。
+        // 实测断点：find_symbol 命中后模型仍 read_file 首页循环（不用 offset / 不 edit_file）。
+        var first = hits[0];
+        var start = Math.Max(1, first.Line - 10);
+        sb.AppendLine(
+            $"操作指引：请用 read_file 携带 offset={start}（limit=30）读取 [{first.File}] 第 {first.Line} 行附近内容确认上下文，" +
+            $"确认后调用 edit_file 修改该位置。不要整页读取大文件。");
         return Task.FromResult(sb.ToString());
     }
 }

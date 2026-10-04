@@ -57,7 +57,8 @@ public sealed class ReadFileTool : AgentToolBase
         var offset = 1;
         var limit = 500;
         var hasPaging = args.TryGetProperty("offset", out var offEl) || args.TryGetProperty("limit", out _);
-        if (args.TryGetProperty("offset", out offEl) && offEl.ValueKind == JsonValueKind.Number)
+        var hasOffset = args.TryGetProperty("offset", out offEl) && offEl.ValueKind == JsonValueKind.Number;
+        if (hasOffset)
             offset = Math.Max(1, offEl.GetInt32());
         if (args.TryGetProperty("limit", out var limEl) && limEl.ValueKind == JsonValueKind.Number)
             limit = Math.Clamp(limEl.GetInt32(), 1, 1000);
@@ -79,9 +80,10 @@ public sealed class ReadFileTool : AgentToolBase
             return $"错误：文件不存在：{relative}";
 
         // 【大文件首读重定向】工程模式 + 大文件 + 未带 offset → 拒绝，强制走符号定位
-        // （实测：模型反复 read_file 首页不续读不定位 → 工具层行为约束，非提示词）
+        // （实测：模型反复 read_file 首页不续读不定位 → 工具层行为约束，非提示词；
+        //   仅 limit 不算分页意图——模型传 limit 可绕过定位，故以 hasOffset 为准）
         var info = new FileInfo(fullPath);
-        if (_projectRoot is not null && info.Length > RedirectThreshold && !hasPaging)
+        if (_projectRoot is not null && info.Length > RedirectThreshold && !hasOffset)
         {
             var totalLines = File.ReadLines(fullPath).Count();
             return $"错误：文件过大（{info.Length} bytes，约 {totalLines} 行）。" +

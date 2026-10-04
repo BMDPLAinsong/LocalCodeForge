@@ -207,6 +207,16 @@ public sealed class AgentLoop : IAgentLoop
         // 避免模型逐行 read_file 探索两步链（4B 生成不稳的根源）。
         if (projectBlock is not null && Agent.Infrastructure.Routing.IntentOverride.IsReadTask(request.Input))
             userMsg += "\n\n（工程提示：理解代码结构请优先调用 analyze_code 获取类/方法/行号索引，再按需 read_file 读具体行段——符号地图比逐行探索高效。）";
+
+        // 【目标文件注入（最小版）】工程可写模式 + 写任务：从输入正则提取目标文件并注入，
+        // 让模型聚焦目标文件（实测跑偏根因：任务说改 BigService.cs，模型却读 Program/TaxService 等无关小文件）。
+        // 数据驱动（正则），非提示词堆砌；只注入事实，不做工具约束。
+        if (projectBlock is not null && IntentOverride.IsWriteTask(request.Input))
+        {
+            var target = ExtractTargetFile(request.Input);
+            if (target is not null)
+                userMsg += $"\n\n（任务目标文件：{target}——本次任务只需读取/修改此文件，其余文件与本任务无关，请勿阅读。）";
+        }
         chatHistory.AddUserMessage(userMsg);
         await _store.AppendTurnAsync(request.SessionId, new ChatTurn("user", request.Input), ct);
 
@@ -806,6 +816,19 @@ public sealed class AgentLoop : IAgentLoop
         }
 
         return name;
+    }
+
+    /// <summary>目标文件正则：匹配输入中的文件名（含常见代码/文本扩展名）。数据驱动，供目标文件注入。</summary>
+    private static readonly System.Text.RegularExpressions.Regex TargetFileRe = new(
+        @"\b([\w.-]+\.(?:cs|py|js|ts|json|csproj|sln|slnx|md|txt|xml|yaml|yml|java|go))\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>从任务输入提取目标文件名（首个命中；排除工作区路径前缀干扰）。未命中返回 null。</summary>
+    public static string? ExtractTargetFile(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return null;
+        var m = TargetFileRe.Match(input);
+        return m.Success ? m.Groups[1].Value : null;
     }
 
     /// <summary>执行一个工具，返回（输出, 是否成功）。</summary>

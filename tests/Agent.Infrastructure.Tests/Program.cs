@@ -744,6 +744,23 @@ Console.WriteLine("== IntentOverride 意图覆盖（§14-3w） ==");
         Ov(Agent.Infrastructure.Routing.IntentType.SimpleQA, "   ") == Agent.Infrastructure.Routing.IntentType.SimpleQA);
 }
 
+// 【目标文件注入】ExtractTargetFile 数据驱动提取（最小版）
+Console.WriteLine("== ExtractTargetFile 目标文件提取 ==");
+{
+    string? Tf(string s) => Agent.Infrastructure.AgentLoop.ExtractTargetFile(s);
+
+    Check("提取 BigService.cs",
+        Tf("在 BigService.cs 的 Method1500 方法里加一行注释") == "BigService.cs");
+    Check("提取 py 文件",
+        Tf("修改 weather.py 里的超时参数") == "weather.py");
+    Check("提取 csproj",
+        Tf("给 OrderSystem.csproj 添加包引用") == "OrderSystem.csproj");
+    Check("无文件名 → null",
+        Tf("帮我分析一下这个项目的架构") == null);
+    Check("空输入 → null",
+        Tf("   ") == null);
+}
+
 Console.WriteLine("== IntentOverride 写任务判定（§14-3w 直连 large） ==");
 {
     bool Wr(string s) => Agent.Infrastructure.Routing.IntentOverride.IsWriteTask(s);
@@ -1044,12 +1061,19 @@ Console.WriteLine("== 1 ReadFileTool 分页续读 ==");
     Check("工程模式大文件无 offset → 拒绝 + 定位引导",
         rBig.Contains("错误：文件过大") && rBig.Contains("find_symbol") && rBig.Contains("offset/limit"));
 
-    // 显式 offset 续读：501-1000（重定向放行——带分页参数即精确读取）
+    // 显式 offset 续读：501-1000（重定向放行——带 offset 即精确读取）
     var jOff = "{\"path\":\"big.txt\",\"offset\":501,\"limit\":500}";
     var argsOff = JsonSerializer.Deserialize<JsonElement>(jOff);
     var rOff = rfTool.InvokeAsync(argsOff, ctNone2).GetAwaiter().GetResult();
     Check("大文件 offset 续读 → 501-1000 行",
         rOff.Contains("已返回第 501-1000 行") && rOff.Contains("line501") && rOff.Contains("offset=1001"));
+
+    // 【重定向收紧】仅 limit 无 offset → 仍拒绝（模型传 limit 绕过定位的实证修复）
+    var jLim = "{\"path\":\"big.txt\",\"limit\":500}";
+    var argsLim = JsonSerializer.Deserialize<JsonElement>(jLim);
+    var rLim = rfTool.InvokeAsync(argsLim, ctNone2).GetAwaiter().GetResult();
+    Check("大文件仅 limit 无 offset → 仍拒绝（防绕过）",
+        rLim.Contains("错误：文件过大") && rLim.Contains("find_symbol"));
 
     // 末页：无续读提示
     var jTail = "{\"path\":\"big.txt\",\"offset\":5501,\"limit\":1000}";
@@ -1414,6 +1438,10 @@ Console.WriteLine("== 工程图谱（符号索引 + find_symbol） ==");
     var out5 = fst.InvokeAsync(System.Text.Json.JsonDocument.Parse(
         "{\"name\":\"FreshMethod\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
     Check("索引后新增符号 → 增量刷新可命中", out5.Contains("FreshMethod") && out5.Contains("NewThing.cs"));
+
+    // 【定位后执行引导】find_symbol 命中 → 返回含 offset 操作指引（数据驱动）
+    Check("find_symbol 命中 → 注入 offset 操作指引",
+        out5.Contains("操作指引") && out5.Contains("offset=") && out5.Contains("edit_file"));
 
     Directory.Delete(proj, true);
     Directory.Delete(work, true);
