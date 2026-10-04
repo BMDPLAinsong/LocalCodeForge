@@ -89,6 +89,18 @@ public sealed class EditFileTool : AgentToolBase
         // 与 write_file 同理（模型可能用 edit_file 引入重复类型定义）；局部编辑本身少见，成本毫秒级。
         if (insideProject && _projectRoot is not null)
         {
+            // 【方案A】工程模式禁止编辑项目文件（同 write_file 写前拦截）
+            var projExt = Path.GetExtension(fullPath);
+            if (projExt.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+                || projExt.Equals(".sln", StringComparison.OrdinalIgnoreCase)
+                || projExt.Equals(".slnx", StringComparison.OrdinalIgnoreCase)
+                || projExt.Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
+                || projExt.Equals(".vbproj", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"错误：工程模式禁止修改项目文件 {relative}。工程结构由工程根已有项目锚定；" +
+                       "本任务只需新增/修改 .cs 源文件，无需改动项目文件。\n退出码：126";
+            }
+
             var conflicts = TypeConflictDetector.DetectDuplicateTypes(_projectRoot, fullPath, newStr);
             if (conflicts.Count > 0)
             {

@@ -125,6 +125,20 @@ public sealed class WriteFileTool : AgentToolBase
         // 确定性拦截（正则扫工程已有类型）+ 附"已有类型清单"引导（数据驱动，非提示词）。
         if (insideProject && _projectRoot is not null)
         {
+            // 【方案A】工程模式写前拦截项目文件：.csproj/.sln 是工程结构锚，工程增量任务
+            // （加类/改类）不应改动项目文件——拦截"侧路新建同名项目"假完成（模型新建
+            // OrderSystem.csproj + 全套文件 → dotnet run 编译通过 = 假完成，demo 工程未接入）。
+            var ext = Path.GetExtension(fullPath);
+            if (ext.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".sln", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".slnx", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".vbproj", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"错误：工程模式禁止修改/新建项目文件 {relative}。工程结构由工程根已有项目锚定；" +
+                       "本任务只需新增/修改 .cs 源文件，无需改动项目文件。\n退出码：126";
+            }
+
             var conflicts = TypeConflictDetector.DetectDuplicateTypes(_projectRoot, fullPath, content);
             if (conflicts.Count > 0)
             {

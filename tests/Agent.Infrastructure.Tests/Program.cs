@@ -335,6 +335,18 @@ Console.WriteLine("== 工程感知 P1：写工具双根 + 备份 + 回滚 ==");
         pdTypes.Contains("Real") && pdTypes.Contains("IThing") && pdTypes.Contains("Color")
         && pdTypes.Contains("Point") && pdTypes.Contains("Person")
         && !pdTypes.Contains("Fake") && !pdTypes.Contains("InString"));
+
+    // 【方案A】工程模式写前拦截项目文件：防"侧路新建同名项目"假完成
+    // （模型新建 OrderSystem.csproj + 全套文件 → dotnet run 编译通过 = 假完成，demo 工程未接入）
+    var aCsproj = W(wRw, "OrderSystem.csproj", "<Project></Project>");
+    Check("方案A write_file 新建 .csproj → 拒绝",
+        aCsproj.Contains("工程模式禁止修改/新建项目文件") && aCsproj.Contains("退出码：126"));
+    Check("方案A write_file 拒绝 → 文件未创建",
+        !File.Exists(Path.Combine(proj, "OrderSystem.csproj")));
+    Check("方案A edit_file 改 .csproj → 拒绝",
+        E(eRw, "lawcheck_demo.csproj", "<Project>", "<Project>").Contains("工程模式禁止修改项目文件"));
+    Check("方案A write_file 新建 .sln → 拒绝",
+        W(wRw, "demo.sln", "x").Contains("工程模式禁止修改/新建项目文件"));
     var restoredB = Agent.Infrastructure.Project.BackupService.Rollback(ws2, "src/B.cs", proj, "default");
     Check("run 目录 rollback → 恢复任务目录产生的备份",
         restoredB is not null && File.ReadAllText(Path.Combine(proj, "src", "B.cs")).Contains("v1"));
