@@ -87,7 +87,12 @@ function Run-Case($name, $kind, $userInput, $writeMode, $expectFile) {
         elseif ($hasIntercept) { $detail = "安全拦截" }
         elseif ($hasFail) { $detail = "失败但受控" }
         else { $detail = "异常" }
-        if (-not $touched) { $detail += " [工程未接入-假完成]" }
+        if (-not $touched) {
+            # 三态细分（10-04 校准，§12-21）：demo 基线未动 ≠ 一律"假完成"
+            if ($hasIntercept) { $detail += " [安全拦截生效-模型未接入]" }  # 安全层正常拦截，模型增量修改能力失败（非漏洞）
+            elseif ($hasDone)  { $detail += " [侧路假完成-疑似漏洞]" }      # 无拦截信号但完成且 demo 未动 = 安全漏洞形态（方案A 应已杜绝）
+            else               { $detail += " [工程未接入]" }
+        }
         if ($dirty) { $detail += " [残留:$($leftovers -join ',')]" }
     } elseif ($kind -eq "single" -or $kind -eq "multi") {
         # 非写模式产物在 CLI 自己的工作目录（run 目录），不在 caseDir
