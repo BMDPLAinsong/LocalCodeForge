@@ -1,6 +1,7 @@
 # LocalAiWorkbench 项目交接文档
 
 > 撰写日期：2026-09-22（基于源码通读 + 真实构建验证 + workspace 运行数据核对）
+> **10-04 全面系统评估（重新评估整个系统内核，用户要求）：** 当前基线：git main @ e94e2a8（**91 commits**）、构建 0 错误、tests **353/353**、工作区干净。**架构现状**：三层项目（Core 抽象 12 文件 / Infrastructure 主体 55 文件 14 模块 / Cli 入口单文件）；**单模型三角色**（law-unified 30B 一模型承载 small/large/agent_pro，Modelfile + 请求级 temperature 区分；classifier 仍 qwen2.5:1.5b）；10 个工具（原 6 + analyze_code/find_symbol/analyze_deps/remember）；**5 库**（sessions/metrics/project_context/agent_memory/symbol_index，metrics 三表 task_metrics+routing_decisions+tool_rejections + failure_category 归类）；**三层漏斗路由**（L0 查询词/L0.5 写任务直连 large/L0.5b 读任务数据闭环/L1 8 规则/L2 意图+确定性覆盖/L3 分发 + RoutingIntelligence 数据闭环调权 + TaskFeatureClassifier 特征归因）。**能力六层**：①路由（规则+意图+数据闭环）；②工程感知（只读/可写回滚/符号索引/依赖分析/类型冲突 P-D/工程缓存签名失效重扫/目标文件注入）；③跨任务连续性（run 级工作目录+任务归档记忆+失败教训注入+记忆治理）；④任务安全（交互拦截/路径边界双通道/白名单/P-D 拦截/大文件重定向/防假完成 H2-H4/循环熔断/项目名幻觉校验/模板检测）；⑤度量（metrics 三表+失败类别自动归类+特征归因+时代隔离+可疑成功明细）；⑥工具治理（分页续读/超时双轨/重定向收紧/命中行号引导）。**评估结论（强/弱/边界）**：**强**——安全层恒定兜底（P-D 100% 拦截、回滚跨任务隔离已审计、防假完成防线全生效）、工程图谱链路打通（find_symbol 增量刷新 + analyze_code 大文件实证命中 [BigService.cs:1503]）、数据闭环机制工作（L0.5 写任务降级 small 按真实历史调权）。**弱**——模型工具组合能力（大文件"定位→offset 读→edit_file"全链路 30B 不采纳指引，批 6 已承认边界；情况 A 工具循环无强制写检查；LLM HttpClient 600s 对 large 多轮不足）。**边界（已承认）**——①大文件符号定位→精确读取→修改超出当前模型能力（三通道拒绝消息/命中行号/操作指引已铺，模型不采纳即诚实失败）；②30B Executor 增量修改纪律弱（P-D 拦截消息附类型清单+动作指引后仍整体重写，安全层恒定兜底）；③ShippingService 类任务标注模型能力边界（E2E 3/4 基线固化）。**待推进（按序）**：3B 自动调权（routing_decisions 数据积累达标后启用）→ 情况 A 强制写（有依据才加）→ LLM 超时调大 → 性能组（num_ctx 动态/蒸馏，待确认）。**给开发者**：完整维护文档见 `docs/DEVELOPER.md`（模块地图/路由详解/工具清单/安全机制/测试体系/开发工作流/已知边界）。
 > **10-04 增量引导收尾 + E2E 断言语义校准 + #66 判定完成（按用户建议顺序 ①②③ 推进）：** ①**E2E incremental 断言语义校准**（`scripts/e2e/e2e.ps1` 三态细分）：原把"安全拦截但模型能力失败"（P-D 拒后模型不换路、dotnet run 验证旧代码假完成）与"侧路假完成漏洞"（模型在工程根外建项目文件）混为一标——改为三态：`[安全拦截生效-模型未接入]` / `[安全拦截]`（无拦截信号但完成且 demo 未动=疑似漏洞）/ `[工程未接入]`。run10=3/4 验证。②**增量修改引导（#65）**：P-D 拦截消息从"不能做什么"升级为"不能做什么 + 下一步动作"（数据驱动）：`TypeConflictDetector.BuildExistingTypesHint` 增加 `targetRelative/targetExists`——目标已存在 → 附"请先 read_file {target} 查看当前内容，再用 edit_file 局部修改（不要 write_file 整体重写）"；目标是新文件 → 附"本文件只应定义清单之外的新类型；若需修改已有类型请在其所在文件内 edit_file 局部编辑"。WriteFileTool/EditFileTool 传目标文件状态。tests 308→**311/311**（+3）。**构建坑（字节级定性）**：run11/12 新引导不生效根因 = `dotnet build <项目> --no-incremental` 只重建 CLI 自身，**依赖项目 Agent.Infrastructure.dll 未被复制更新**（CLI bin DLL 旧）；`dotnet build LocalAiWorkbench.slnx --no-incremental` 全量重建后才更新。验证方法：python 字节级搜索 UTF-16LE 字面量（`是新建文件`=b'\x2f\x66\xb0\x65\xfa\x5e\x87\x65\xf6\x4e'，UTF-16 解码搜索曾误报 False——字符串编码细节不可靠，字节搜索为准）。**run13 实证**：拦截消息已含完整两段引导（工程已有类型清单 + read_file/edit_file 动作指引）——但**模型仍不换路**（看到引导后依然 write_file 整体重写被 P-D 拦）= 30B Executor 增量能力上限，非安全漏洞（安全层恒定兜底）。③**#66 多文件规划引导判定完成**：探查结论——Planner 阶段工程图谱引导**已由 10-03 #41 工程图谱增强（BuildEngineeringGraphBlock 注入已有文件清单+类型分布+影响面）+ CheckIncrementalPlanConflicts 计划校验完整落地且已生效**（run13 实证：增量任务已走 Orchestrator、Planner 输出合规=新增 1 + 接入 1、计划校验放行合规形态）；剩余失败集中在 Executor 生成环节（30B 收到拦截消息后仍整体重写），无新增代码空间，**基线固化：E2E 3/4 + 安全拦截恒定，ShippingService 类任务标注为已知模型能力边界**（用户确认方案 A）。提交：282bf8d（①）、e9b6fbd（②）。
 > **10-03 改进批次：显存卸载实验 + 工程增量计划校验（用户确认顺序 2→1）：** ①**显存卸载实验**（请求级 num_gpu 基准 4/8/12：生成速度 16.6→18.2→18.8 tok/s 仅 +10-13%，瓶颈在 CPU 层；显存 2381→3939→5475MB，12 层余量 <700MB 有 OOM 风险）→ **Modelfile num_gpu 4→8**（+10% 速度、显存余 2.2GB、CPU 层减 4 缓解编译抢算力；blob 复用重建秒级，已 ollama create 生效）。②**工程增量计划校验**（`Orchestrator.CheckIncrementalPlanConflicts` 静态方法）：ProjectIncremental 特征任务 Plan 中"已有文件 ≥2"判定整体重写倾向 → **Planner 阶段拒绝**（走规划失败升级链，早拦截避免 Executor 白写一轮）——合法形态（新增 1 + 接入 1）已有 ≤1 放行；确定性集合运算非提示词。tests 294→**298/298**（+4：3 已有冲突/1 接入放行/全新增放行/大小写分隔符归一化）。ShippingService 复测：三层拦截网全链路验证通过（P-D 100% 拦截整体重写 + D2 重试校准 + 回滚干净），任务本身仍失败（30B 写幻觉字段）——能力边界已接受。
 > **10-03 改进批次二：备份生命周期 + 记忆注入过滤（用户确认顺序 4/5）：** ③**备份生命周期**（`BackupService.PruneBackups(workspace, keepLastN=8)`）：任务结束后保留最近 8 个任务备份目录、删除更早的（防 .backup 无限增长；手动 rollback 仍覆盖最近 8 任务）；CLI 每任务收尾统一挂点。④**记忆注入特征过滤**（任务 5）：agent_memory 表新增 `feature` 列（TaskFeatureClassifier 特征类，兼容 ALTER）；ArchiveTask 归档 + RememberTool 决策写入时打特征标签；`Search(input, limit, feature)`——kind=task 归档记忆跨特征类**剔除**（强特征相关防污染）、kind=model 决策记忆跨类**降权**保留（score-1，决策可能跨任务复用）；`LoadRelevantMemory` 按输入特征类过滤注入。tests 298→**304/304**（+2 Prune + 4 记忆过滤）。E2E 脚本 `scripts/e2e/e2e.ps1`（UTF-8 BOM 必须，PS5.1 读无 BOM 会按 GBK 乱码）——4 用例（工程增量/单文件/多文件/读查）逐用例工程副本隔离 + 断言 + 汇总，落 `workspace\e2e\e2e_<ts>.log`。
@@ -70,7 +71,7 @@
 
 ## 0. 一句话摘要
 
-本地优先（Local-first）的 AI 编码 Agent 工作台：.NET 10 控制台应用，用户在 CLI 输入自然语言需求，系统在**本地 Ollama 四模型（classifier/small/agent_pro/large，全部本地推理）**之间做智能路由，自动完成「规划 → 生成代码 → 写文件 → 运行验证 → 出错自动修复」的闭环，并用 SQLite 记录会话、任务指标与跨任务记忆。
+本地优先（Local-first）的 AI 编码 Agent 工作台：.NET 10 控制台应用，用户在 CLI 输入自然语言需求，系统在**本地 Ollama 单模型三角色（law-unified 30B 一模型承载 small/large/agent_pro，Modelfile + 请求级温度区分；classifier 独立 qwen2.5:1.5b，全部本地推理）**之间做智能路由，自动完成「规划 → 生成代码 → 写文件 → 运行验证 → 出错自动修复」的闭环，并用 SQLite 记录会话、任务指标、跨任务记忆与工程符号索引。
 
 
 
@@ -137,13 +138,16 @@
 | `Orchestration/ExecutorService.cs` | 逐文件生成 / 修复代码（§14-3g 生成/修复消息附加 plan.EnvironmentConstraint；§14-3l 修复输出相同升级链）                                | 571   |
 | `Orchestration/TaskClassifier.cs`  | 纯规则判断走编排还是 ReAct                                                            | 103   |
 | `Routing/ExternalTaskDetector.cs`  | **外部数据任务识别**（确定性词表：天气/IP 定位/汇率等 → 环境约束数据块，§14-3g）                    | 46    |
-| `Routing/`                         | 三层漏斗路由（ModelRouter / RuleEngine / IntentClassifier / RoutingRules.json）     | \~480 |
-| `Tools/`                           | 6 个工具（list\_dir/read\_file/write\_file/edit\_file/create\_dir/run\_command） | \~630 |
-| `Quality/PythonLintService.cs`     | ruff 优先，py\_compile 降级；F821/F811 阻断                                         | 189   |
-| `Metrics/`                         | SqliteMetricsCollector + AgentLoop/Orchestrator 两个装饰器                       | \~500 |
+| `Routing/`                         | 三层漏斗路由（L0 查询词/L0.5 写直连 large/L0.5b 读数据闭环/L1 规则引擎/L2 意图覆盖/L3 分发 + RoutingIntelligence 数据闭环 + TaskFeatureClassifier/TaskMetricsAggregator D1/D2 归因） | \~1500 |
+| `Project/`                         | 工程感知全套：ProjectScanner 只读扫描 / ProjectContextStore 签名缓存 / BackupService taskId 隔离回滚 / SymbolIndexer+Store 符号索引 / DependencyAnalyzer 依赖边 / TypeConflictDetector P-D / TestProjectDetector+TestRunnerService / CheckIncrementalPlanConflicts | \~2000 |
+| `Tools/`                           | 10 个工具：list_dir/read_file(分页+重定向)/write_file(P-D+熔断)/edit_file(冲突检测)/create_dir/run_command(白名单+超时双轨)/analyze_code/find_symbol/analyze_deps/remember + PyCodeGuard 守卫 | \~1600 |
+| `Metrics/`                         | SqliteMetricsCollector 三表（task_metrics+routing_decisions+tool_rejections）+ FailureCategorizer 失败归类 + ToolRejectionStore + 2 装饰器 + 时代隔离 | \~900 |
+| `Memory/`                          | AgentMemoryStore（去重/治理/特征过滤）+ MemoryPromptBuilder（失败教训注入）+ TaskMemoryExtractor（任务归档） | \~600 |
+| `Quality/OutputVerifier.cs`        | **run_command 输出判定公共验证器**（凭据/stderr 剥离/结构/通用失败+双容错/占位；agent+orchestrator 双路径共用**单一来源**，根治双路径不一致，§14-3e） | 236   |
+| `Quality/PythonLintService.cs`     | ruff 优先，py_compile 降级；F821/F811 阻断                                         | 189   |
 | `Session/SqliteSessionStore.cs`    | turns 表存对话历史                                                                | 108   |
-| `KernelFactory.cs`                 | 注册 4 个命名 ChatCompletion 服务                                                  | 72    |
-| `DependencyInjection.cs`           | `AddAgent(options, workspaceRoot, dbPath)` 一站式装配                            | 126   |
+| `KernelFactory.cs`                 | 注册命名 ChatCompletion 服务（三角色同 tag + classifier）                          | 72    |
+| `DependencyInjection.cs`           | `AddAgent(options, workspaceRoot, dbPath, ...)` 一站式装配（工具工厂注入 taskId/rejectionStore 等） | 200   |
 | `RetryHelper.cs`                   | 指数退避重试（1s,2s,4s…）                                                           | 68    |
 
 ### 1.3 Agent.Cli
