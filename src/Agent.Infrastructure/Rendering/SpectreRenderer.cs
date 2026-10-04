@@ -1,22 +1,18 @@
 // ============================================================
 // Rendering / SpectreRenderer.cs
 // 交互态渲染器（真实终端，非管道/重定向）：
-//   · 启动横幅 / 配置块 → Panel 状态卡
-//   · 任务执行 → 【P1】LiveDisplay 实时刷新区（事件 Channel + 后台渲染线程）
+//   · 启动横幅 / 配置块 → Panel 状态卡（AnsiConsole.Write 一次性输出，四边完整）
+//   · 任务事件 → 【追加输出流】每收到一个事件直接 Write（关键事件=标题 Panel；
+//     高频工具事件=彩色行）——不重绘、无帧叠加、无边框残留
 //   · 命令块面板（stats/memory/rollback）→ Program.cs 交互分支调用（P2）
 // 构造不碰 AnsiConsole——保证非终端环境可构造可测（RendererFactory.Create(true) 可测）。
 //
-// 【P1 实时刷新区实现（已落地，替代 P0 的 Panel+事件流）】
-//   Spectre 0.49 LiveDisplay 为回调阻塞式 API（StartAsync 必须在回调内自驱动工作）。
-//   本实现：RenderEventAsync 把事件投进 Channel<AgentEvent>（unbounded）后立即返回，
-//   不阻塞事件循环；后台线程跑 LiveDisplay.StartAsync，回调内 ReadAllAsync 消费队列并
-//   刷新（滚动保留最近 N 条）；收到 FinalAnswer/Error 时 TryComplete 关闭 Channel →
-//   回调读完剩余事件后返回 → LiveDisplay 区域结束；随后最终答案/错误经 AnsiConsole
-//   输出到滚动缓冲区（LiveDisplay 区域结束后其内容不可见，必须留痕）。
-//   失败安全：LiveDisplay 启动/刷新异常 → 捕获并回退为 P0 彩色事件流直出；等待 live
-//   线程加入带超时（5s），防非终端环境死锁。
+// 【10-04 架构决策·诚实记录】LiveDisplay 已弃用：
+//   任务事件是单向追加流（一条一条吐），不是"原地刷新的进度条"。Live 每次 Refresh
+//   重绘整块区域，在 Windows 控制台下产生前后帧叠加——实测残留：漂浮竖线、绿框缺底边、
+//   "任务完成"分隔线有起点无终点。对比证据：AnsiConsole.Write(Panel) 一次性输出
+//   （LocalAI 横幅、配置框）四边完整无残留。→ 改用追加输出：一个事件一个渲染入口。
 // ============================================================
-using System.Threading.Channels;
 using Agent.Core.Models;
 using Spectre.Console;
 
@@ -24,13 +20,6 @@ namespace Agent.Infrastructure.Rendering;
 
 public sealed class SpectreRenderer : RendererBase
 {
-    // ── P1：实时刷新区状态 ──
-    private Channel<AgentEvent>? _eventChannel;
-    private Task? _liveTask;
-    private bool _liveActive; // 当前是否有 LiveDisplay 在跑
-    private readonly object _liveLock = new();
-    private const int MaxVisibleLines = 15; // 实时区滚动保留条数
-
     // ── 启动横幅：Panel 状态卡 ──
     public override void Banner(string workspace, string dbPath)
     {
@@ -61,130 +50,47 @@ public sealed class SpectreRenderer : RendererBase
         Console.WriteLine();
     }
 
-    // ── P1：事件渲染（LiveDisplay 实时区 + 结束留痕） ──
+    // ── 事件渲染：追加输出流（一个事件一个渲染入口，无重绘无残留） ──
     public override Task RenderEventAsync(AgentEvent evt)
     {
-        // 任务开始（首个事件且非结束事件）：启动实时区
-        if (!_liveActive)
+        switch (evt)
         {
-            lock (_liveLock)
-            {
-                if (!_liveActive && evt is not (AgentEvent.FinalAnswer or AgentEvent.Error))
-                {
-                    _eventChannel = Channel.CreateUnbounded<AgentEvent>(new UnboundedChannelOptions
-                    {
-                        SingleReader = true,
-                        SingleWriter = false,
-                    });
-                    _liveActive = true;
-                    _liveTask = Task.Run(() => LiveLoopAsync(_eventChannel));
-                }
-            }
+            case AgentEvent.Routing:
+                WriteEventPanel(evt, "路由", Color.Yellow);
+                break;
+            case AgentEvent.PlanGenerated:
+                WriteEventPanel(evt, "规划", Color.Yellow);
+                break;
+            case AgentEvent.FileWritten:
+                WriteEventPanel(evt, "写入", Color.Aqua);
+                break;
+            case AgentEvent.ToolCall:
+                // 高频事件：精简彩色行（不叠框，避免刷屏）
+                AnsiConsole.MarkupLine($"[cyan]{Markup.Escape(FormatEvent(evt))}[/]");
+                break;
+            case AgentEvent.ToolResultEvent tr:
+                AnsiConsole.MarkupLine($"[{(tr.Success ? "grey" : "red")}]{Markup.Escape(FormatEvent(evt))}[/]");
+                break;
+            case AgentEvent.FinalAnswer:
+                WriteEventPanel(evt, "任务完成", Color.Green);
+                Console.WriteLine();
+                break;
+            case AgentEvent.Error:
+                WriteEventPanel(evt, "任务失败", Color.Red);
+                Console.WriteLine();
+                break;
         }
-
-        // 结束事件：投递后关闭 Channel（后台读完剩余即退出），并等待实时区收尾
-        var isTerminal = evt is AgentEvent.FinalAnswer or AgentEvent.Error;
-        var channel = _eventChannel;
-        if (channel is not null)
-        {
-            channel.Writer.TryWrite(evt);
-            if (isTerminal)
-            {
-                channel.Writer.TryComplete();
-                // 等待 LiveDisplay 回调退出（带超时防非终端死锁）；失败则回退直出
-                try
-                {
-                    _liveTask?.Wait(TimeSpan.FromSeconds(5));
-                }
-                catch (AggregateException)
-                {
-                    // 后台渲染异常已在 LiveLoopAsync 内捕获并回退，此处忽略
-                }
-                _liveActive = false;
-
-                // 【10-04 微调】省掉重复输出：最终行已由 LiveLoopAsync 写入面板（LiveDisplay
-                // 结束后最后画面保留在屏幕上，用户截图实证边框可见）——不再向滚动缓冲区重复
-                // 输出 [完成]/[错误] 与 Rule。异常回退态（无实时区）仍由下方 else 分支直出兜底。
-            }
-        }
-        else if (isTerminal)
-        {
-            // 无实时区（异常回退态）：P0 直出，保证结束事件可见
-            var line = FormatEvent(evt);
-            var color = evt is AgentEvent.FinalAnswer ? "green" : "red";
-            foreach (var l in line.Split('\n'))
-                AnsiConsole.MarkupLine($"[{color}]{Markup.Escape(l)}[/]");
-        }
-
         return Task.CompletedTask;
     }
 
-    // ── P1：LiveDisplay 后台循环（阻塞回调内消费队列） ──
-    private static async Task LiveLoopAsync(Channel<AgentEvent> channel)
+    /// <summary>关键事件 → 标题 Panel（一次性输出，边框完整）</summary>
+    private static void WriteEventPanel(AgentEvent evt, string title, Color border)
     {
-        try
-        {
-            var lines = new List<string>(MaxVisibleLines);
-            var target = new Panel(new Markup("[grey]等待事件…[/]")).BorderColor(Color.Green);
-
-            await AnsiConsole.Live(target).StartAsync(async ctx =>
-            {
-                await foreach (var evt in channel.Reader.ReadAllAsync())
-                {
-                    var line = FormatEvent(evt);
-                    // 事件加入前的快照：最终视图的灰显区只取 final 之前的事件（防同事件两次出现）
-                    var priorLines = new List<string>(lines);
-                    foreach (var l in line.Split('\n'))
-                        lines.Add(l);
-                    while (lines.Count > MaxVisibleLines)
-                        lines.RemoveAt(0);
-
-                    // 实时区渲染：滚动事件流 + 当前状态
-                    var isTerminalEvt = evt is AgentEvent.FinalAnswer or AgentEvent.Error;
-                    var color = evt switch
-                    {
-                        AgentEvent.Routing => "yellow",
-                        AgentEvent.PlanGenerated => "yellow",
-                        AgentEvent.FileWritten => "cyan",
-                        AgentEvent.ToolCall => "cyan",
-                        AgentEvent.ToolResultEvent tr => tr.Success ? "grey" : "red",
-                        AgentEvent.FinalAnswer => "green",
-                        AgentEvent.Error => "red",
-                        _ => "default",
-                    };
-
-                    Panel panel;
-                    if (isTerminalEvt)
-                    {
-                        // 【10-04 微调】最终视图：面板内带最终行——final 之前的最近事件灰显 + 分隔 + 最终行高亮
-                        // （tail 取 priorLines：不含 final 行，一个事件只渲染一次）
-                        var tail = priorLines.Skip(Math.Max(0, priorLines.Count - 4)).ToList();
-                        var body = new List<string>();
-                        foreach (var l in tail)
-                            body.Add($"[grey]{Markup.Escape(l)}[/]");
-                        body.Add("[grey]──────────[/]");
-                        foreach (var l in line.Split('\n'))
-                            body.Add($"[bold {color}]{Markup.Escape(l)}[/]");
-                        panel = new Panel(new Markup(string.Join('\n', body)))
-                            .Header(evt is AgentEvent.FinalAnswer ? "任务完成" : "任务失败", Justify.Left)
-                            .BorderColor(evt is AgentEvent.FinalAnswer ? Color.Green : Color.Red);
-                    }
-                    else
-                    {
-                        var markup = new Markup(string.Join('\n', lines.Select(l => $"[{color}]{Markup.Escape(l)}[/]")));
-                        panel = new Panel(markup)
-                            .Header("任务执行中", Justify.Left)
-                            .BorderColor(Color.Green);
-                    }
-                    ctx.UpdateTarget(panel);
-                    ctx.Refresh();
-                }
-            });
-        }
-        catch (Exception)
-        {
-            // 非终端 / LiveDisplay 不可用：静默放弃实时区（事件仍由 RenderEventAsync 直出留痕）
-        }
+        var panel = new Panel(new Markup(Markup.Escape(FormatEvent(evt))))
+            .Header(title, Justify.Left)
+            .BorderColor(border)
+            .Padding(1, 0, 1, 0);
+        AnsiConsole.Write(panel);
     }
 
     // ═══════════ P2：命令块面板（交互态专用；无头路径不动，仍走旧 Console 文本） ═══════════
