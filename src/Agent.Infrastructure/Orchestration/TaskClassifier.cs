@@ -3,6 +3,8 @@
 // 判断一个任务应该走 Orchestrator（三阶段编排）还是 AgentLoop（单模型 ReAct）。
 // ============================================================
 
+using System.Text.RegularExpressions;
+
 namespace Agent.Infrastructure.Orchestration;
 
 /// <summary>
@@ -10,6 +12,16 @@ namespace Agent.Infrastructure.Orchestration;
 /// </summary>
 public static class TaskClassifier
 {
+    /// <summary>
+    /// 文件引用正则（公共单一来源，ReadOnlyGuard 复用，消双路径漂移）：
+    /// 捕获组取文件名（不含尾部边界字符）；lookahead 边界（空白/结尾/路径分隔符）不消耗字符——
+    /// 与历史版 `[\w\-\.]+\.[a-z]{1,5}(\s|$|/|\\)` 的 IsMatch 语义完全等价，
+    /// 且 m.Groups[1].Value 为干净文件名（尾部空格/斜杠不进 Value）。
+    /// 注意：后缀限 1-5 字母（cs/py/js/txt…）；csproj（6 字母）天然不匹配——与历史行为一致。
+    /// </summary>
+    public static readonly Regex FileReferencePattern = new(
+        @"([\w\-\.]+\.[a-z]{1,5})(?=\s|$|/|\\)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
     /// <summary>
     /// 明确的多文件/项目级关键词。
     /// 【优先级最高】命中则直接走编排。
@@ -110,9 +122,7 @@ public static class TaskClassifier
         // 5.5 文件引用检查——任务明确引用具体文件（含扩展名路径）时走 AgentLoop
         // （工程模式任务天然带长路径：修改/读取具体文件由 read_file/edit_file 工具处理，
         //   不需要 orchestrator 的多文件规划；避免长度规则把带路径任务误拉入编排卡死）
-        if (System.Text.RegularExpressions.Regex.IsMatch(input,
-            @"[\w\-\.]+\.[a-z]{1,5}(\s|$|/|\\)",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        if (FileReferencePattern.IsMatch(input))
         {
             return false;
         }

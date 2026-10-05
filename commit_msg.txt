@@ -1,0 +1,7 @@
+﻿10-05 只读工程组合边界（ReadOnlyGuard）：必然失败的 use 不带 --write 写工程任务前置阻断
+
+- 新增 Project/ReadOnlyGuard.cs：工程模式 + 未授权写 + 写任务引用工程内文件 → CLI 主循环前置阻断
+- 公共文件引用正则抽取 TaskClassifier.FileReferencePattern（捕获组+lookahead，消双路径漂移）
+- CLI 接线：任务启动前拦截（不建 DI 容器、不跑任务），引导 use --write / 重述需求
+- tests 440→450（+10 断言）；CLI 冒烟实证拦截生效、零模型执行痕迹
+- 文档同步：HANDOVER date-line + DEVELOPER 流程图画线

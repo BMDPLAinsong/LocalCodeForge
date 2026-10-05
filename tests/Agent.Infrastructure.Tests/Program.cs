@@ -2324,5 +2324,48 @@ Console.WriteLine("== 批次1：显式写授权（explicitWriteRoots）+ 敏感�
     Directory.Delete(baseTmp, true);
 }
 
+Console.WriteLine("== 只读工程组合边界（ReadOnlyGuard） ==");
+{
+    // 迷你工程：OrderService.cs / Order.cs / Program.cs + src/App.cs（同名双目录场景）
+    var baseTmp = Path.Combine(TestTmp, "tests_rog");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    var proj = Path.Combine(baseTmp, "demo");
+    Directory.CreateDirectory(proj);
+    Directory.CreateDirectory(Path.Combine(proj, "src"));
+    File.WriteAllText(Path.Combine(proj, "OrderService.cs"), "class OrderService {}");
+    File.WriteAllText(Path.Combine(proj, "Order.cs"), "class Order {}");
+    File.WriteAllText(Path.Combine(proj, "Program.cs"), "class Program {}");
+    File.WriteAllText(Path.Combine(proj, "src", "App.cs"), "class App {}");
+
+    bool Block(string input, bool writeEnabled) =>
+        Agent.Infrastructure.Project.ReadOnlyGuard.ShouldBlock(input, proj, writeEnabled, out _);
+
+    Check("只读+写任务+引用工程内文件 → 拦截",
+        Block("给 OrderService.cs 的 Method1500 加一行注释", false));
+    Check("只读+写任务+无文件引用 → 不拦",
+        !Block("写一个待办事项项目", false));
+    Check("只读+写任务+引用工程外文件 → 不拦",
+        !Block("在 X:\\test.txt 创建文件", false));
+    Check("只读+读任务+引用工程内文件 → 不拦",
+        !Block("读取 OrderService.cs 的内容", false));
+    Check("只读+显式写目标在工程外 → 放行",
+        !Block("在 X:\\notes.txt 写入 你好", false));
+    Check("工程可写+写任务+引用工程内文件 → 不拦",
+        !Block("给 OrderService.cs 加注释", true));
+    Check("沙箱（projectRoot=null）→ 不触发",
+        !Agent.Infrastructure.Project.ReadOnlyGuard.ShouldBlock("给 OrderService.cs 加注释", null, false, out _));
+    Check("同名文件命中（src/App.cs 亦属工程文件）",
+        Block("给 App.cs 加一个方法", false));
+    // 正则边界回归：csproj 6 字母后缀不截断 → OrderSystem.csproj（工程外/不存在）不误命
+    File.WriteAllText(Path.Combine(proj, "Demo.csproj"), "<Project />");
+    Check("csproj 后缀不截断（OrderSystem.csproj 不误命）",
+        !Block("给 OrderSystem.csproj 改 TargetFramework", false));
+    // FindExistingProjectFileRef 大小写归一（输入小写 → 命中工程内 OrderService.cs）
+    Check("文件引用大小写归一",
+        Agent.Infrastructure.Project.ReadOnlyGuard.FindExistingProjectFileRef("修改 orderservice.cs 的内容", proj) is string h
+        && h.Equals("OrderService.cs", StringComparison.OrdinalIgnoreCase));
+    Directory.Delete(baseTmp, true);
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

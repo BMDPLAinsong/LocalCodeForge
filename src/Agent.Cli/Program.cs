@@ -481,6 +481,17 @@ internal class Program
             }
 
             // ═══════════ 【自动分发】 ═══════════
+            // 【只读工程组合边界】工程模式 + 未授权写（use 不带 --write）+ 写任务引用工程内文件
+            // → 必然失败。在 Orchestrator/AgentLoop 启动前阻断（不建 DI 容器、不跑任务），
+            // 避免空跑 10-15 分钟后才被写白名单拒绝。
+            if (ReadOnlyGuard.ShouldBlock(input, options.ProjectRoot, options.ProjectWriteEnabled, out var hitFile))
+            {
+                renderer.Warn($"[只读工程] 任务引用了工程内文件 {hitFile}，但当前为只读模式（use 未带 --write），无法修改。");
+                renderer.Info($"  如需修改工程：请先执行  use --write {options.ProjectRoot}");
+                renderer.Info($"  如需在任务目录创建：请重述需求（不提及工程内文件）——注意工程上下文仍可能引导模型触碰工程文件，存在失败可能。");
+                continue;
+            }
+
             // 【方案 A·run 级工作目录】一次 CLI 运行 = 一个工作空间：
             // 工具根直接用 run 根（workspace），任务间共享产物——
             // "接着更改上一个脚本"可 read_file 到前一任务写入的文件。
