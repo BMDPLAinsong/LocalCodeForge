@@ -409,6 +409,32 @@ public sealed class AgentLoop : IAgentLoop
                         var sig = BuildCycleSignature(cleanName, argsJson, condensed);
                         if (!_toolSignatures.Add(sig))
                         {
+                            // 【批次1·B】完成门优先（H2/H4 之前）：
+                            // 显式目标已落地 → 直接放行收尾（验证命令失败不误伤——t2 实证：
+                            // write_file X:/notes.txt 成功但 type X:/notes.txt cmd 正斜杠失败，
+                            // 目标已达成，H2 却判失败）；
+                            // 目标缺失 / 写被拒未重试 → 判失败（诚实失败）。
+                            var fuseGate = Project.CompletionGate.Evaluate(
+                                isWriteTask: IntentOverride.IsWriteTask(request.Input),
+                                wroteAny: _everWroteFile,
+                                writeRejected: _writeRejected,
+                                target: _writeTarget,
+                                targetIsFile: _writeTargetIsFile);
+                            if (fuseGate is not null)
+                            {
+                                _logger.LogWarning("[完成门·熔断] {Message}", fuseGate.message);
+                                yield return new AgentEvent.Error(fuseGate.message);
+                                yield break;
+                            }
+                            if (_writeTarget is not null)
+                            {
+                                _logger.LogWarning("[熔断] 显式写目标已落地（{Target}），以工具验证结果收尾。", _writeTarget);
+                                var targetText = $"任务完成：显式写目标 {_writeTarget} 已落地。最后验证：{TruncateForAnswer(condensed)}";
+                                await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", targetText), ct);
+                                yield return new AgentEvent.FinalAnswer(targetText);
+                                yield break;
+                            }
+
                             // 【H2】熔断收尾的证据门槛：写过文件但最近一次 run_command 未通过
                             // （如 read_file 重复导致的熔断）→ 验证不足，判失败而非假成功。
                             if (_everWroteFile && !_lastRunCommandOk)
@@ -425,20 +451,6 @@ public sealed class AgentLoop : IAgentLoop
                             {
                                 _logger.LogWarning("[熔断] 写任务但未产生任何写入（只读循环），判失败防假完成。");
                                 yield return new AgentEvent.Error("任务要求修改文件但未产生任何写入（仅循环读取），熔断终止。可重试或改用 find_symbol/analyze_code 定位后编辑。");
-                                yield break;
-                            }
-
-                            // 【批次1·B】熔断收尾也过目标达成门：写了文件但用户显式目标不存在 → 判失败
-                            var fuseGate = Project.CompletionGate.Evaluate(
-                                isWriteTask: IntentOverride.IsWriteTask(request.Input),
-                                wroteAny: _everWroteFile,
-                                writeRejected: _writeRejected,
-                                target: _writeTarget,
-                                targetIsFile: _writeTargetIsFile);
-                            if (fuseGate is not null)
-                            {
-                                _logger.LogWarning("[完成门·熔断] {Message}", fuseGate.message);
-                                yield return new AgentEvent.Error(fuseGate.message);
                                 yield break;
                             }
 
@@ -851,6 +863,30 @@ public sealed class AgentLoop : IAgentLoop
             // 真正交付
             await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", text), ct);
             yield return new AgentEvent.FinalAnswer(text);
+            yield break;
+        }
+
+        // 【批次1·验证层总盘点】最大步数收尾也过完成门：
+        // 显式写目标已落地 → 放行收尾（模型反复验证命令失败循环达上限，但目标已达成——t2 复测实证）；
+        // 目标缺失 / 写被拒未重试 → 判失败（诚实失败，与收尾/熔断三处一致）。
+        var maxGate = Project.CompletionGate.Evaluate(
+            isWriteTask: IntentOverride.IsWriteTask(request.Input),
+            wroteAny: _everWroteFile,
+            writeRejected: _writeRejected,
+            target: _writeTarget,
+            targetIsFile: _writeTargetIsFile);
+        if (maxGate is not null)
+        {
+            _logger.LogWarning("[完成门·最大步数] {Message}", maxGate.message);
+            yield return new AgentEvent.Error(maxGate.message);
+            yield break;
+        }
+        if (_writeTarget is not null)
+        {
+            var landed = $"任务完成：显式写目标 {_writeTarget} 已落地（达到最大步数 {_options.MaxSteps}，但目标达成）。";
+            await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", landed), ct);
+            _logger.LogWarning("[完成门·最大步数] 目标已落地，放行收尾。");
+            yield return new AgentEvent.FinalAnswer(landed);
             yield break;
         }
 

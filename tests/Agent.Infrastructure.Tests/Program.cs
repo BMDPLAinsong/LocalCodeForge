@@ -2209,9 +2209,11 @@ Console.WriteLine("== 批次1：完成门（CompletionGate） ==");
     Check("完成门：写被拒且无任何写成功 → 判失败",
         c is not null && c.shouldFail && !c.isSuspicious);
     // B：目标未达成 → 失败 + 可疑（写了别处 ≠ 目标）
-    var b = Agent.Infrastructure.Project.CompletionGate.Evaluate(true, true, false, @"X:\test.txt", true);
+    var missingTarget = Path.Combine(TestTmp, "tests_b1_gate_missing", "never.txt");
+    if (Directory.Exists(Path.GetDirectoryName(missingTarget))) Directory.Delete(Path.GetDirectoryName(missingTarget), true);
+    var b = Agent.Infrastructure.Project.CompletionGate.Evaluate(true, true, false, missingTarget, true);
     Check("完成门：写了文件但显式目标不存在 → 判失败+可疑",
-        b is not null && b.shouldFail && b.isSuspicious && b.message.Contains("X:\\test.txt"));
+        b is not null && b.shouldFail && b.isSuspicious && b.message.Contains("never.txt"));
     // 目标存在 → 放行
     var baseTmp = Path.Combine(TestTmp, "tests_b1_gate");
     if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
