@@ -38,6 +38,14 @@ public static class FailureCategorizer
         if (ContainsAny(s, "超时", "timeout", "退出码：124", "退出码: 124"))
             return "timeout";
 
+        // 严格校验不一致（退出码 0 但输出与计划预期不符，P0-2 严格模式）
+        if (ContainsAny(s, "输出与计划预期不完全一致"))
+            return "validator_mismatch";
+
+        // 修复无改进：模型修复输出与原文相同（修复机制失败信号，与错误类型无关）
+        if (ContainsAny(s, "模型输出与原文相同"))
+            return "repair_unimproved";
+
         // 写任务熔断：写了文件但验证未通过（H2，防假成功误伤态——目标可能已落地）
         if (ContainsAny(s, "写入文件但验证未通过"))
             return "write_unverified";

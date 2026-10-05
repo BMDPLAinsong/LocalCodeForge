@@ -1120,6 +1120,16 @@ Console.WriteLine("== 3 FailureCategorizer 失败类别归类 ==");
     Check("类别：写被拒未落地 → tool_rejected", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("写入被拒绝且本轮未成功写入任何文件（写目标未落地）。可检查路径是否越界/敏感，或改用工程内路径后重试。") == "tool_rejected");
     Check("类别：验证失败 → validator_failed", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("任务未通过验证（重试 2 次）。最后错误：退出码：1") == "validator_failed");
     Check("类别：回填标注 → validator_failed", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("任务未通过验证 [父任务未通过验证（回填：顶层 orchestrator 失败）]") == "validator_failed");
+    Check("类别：严格校验不一致 → validator_mismatch", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("任务未通过验证（重试 0 次）。最后错误：退出码：0\n--- stdout ---\n订单总金额: 103\n[检测] 输出与计划预期不完全一致（严格模式：预期每一行须在输出中精确出现）。") == "validator_mismatch");
+    Check("类别：修复输出相同 → repair_unimproved", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("修复失败：模型输出与原文相同。错误信息：退出码：0\n--- stdout ---\n城市: Kunming\n天气状况: Light rain shower") == "repair_unimproved");
+
+    // 批次3·B：ExtractMissingType 类型缺失提取（弯/直引号）
+    Check("提取：弯引号 CS0117 → Order", Agent.Infrastructure.Orchestration.Orchestrator.ExtractMissingType("Program.cs(11,13): error CS0117: “Order”未包含“Items”的定义") == "Order");
+    Check("提取：直引号 CS0117 → Order", Agent.Infrastructure.Orchestration.Orchestrator.ExtractMissingType("Program.cs(11,13): error CS0117: \"Order\"未包含\"Items\"的定义") == "Order");
+    Check("提取：CS0246 → Order", Agent.Infrastructure.Orchestration.Orchestrator.ExtractMissingType("DiscountService.cs(5,37): error CS0246: 未能找到类型或命名空间名“Order”(是否缺少 using 指令)") == "Order");
+    Check("提取：CS1061 → Order", Agent.Infrastructure.Orchestration.Orchestrator.ExtractMissingType("OrderService.cs(15,15): error CS1061: “Order”未包含“TotalAmount”的定义") == "Order");
+    Check("提取：无类型缺失 → null", Agent.Infrastructure.Orchestration.Orchestrator.ExtractMissingType("error CS5001: 程序不包含适合于入口点的静态 Main 方法") is null);
+    Check("提取：空输入 → null", Agent.Infrastructure.Orchestration.Orchestrator.ExtractMissingType("") is null);
 
     // SqliteMetricsCollector 落库 failure_category
     var fcDir = Path.Combine(TestTmp, "fc_" + Guid.NewGuid().ToString("N")[..6]);

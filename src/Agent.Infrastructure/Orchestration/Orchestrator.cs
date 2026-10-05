@@ -215,6 +215,7 @@ public sealed class Orchestrator : IOrchestrator
         string lastError = "";
         string? lastErrorSig = null;   // 批次4：修复重试错误签名（相同=无进展熔断）
         bool success = false;
+        bool typeDefInjected = false;  // 【批次3·B】类型缺失定义注入：每任务只注入一次（避免污染）
 
         // 【D2】重试上限数据校准：特征类历史成功率低（样本 ≥3 且 <50%）→ 收紧到 1 次修复。
         // 数据依据（D1 归因）：工程增量类任务历史 0 成功（30B 能力边界），3 次重试纯浪费 CPU 推理
@@ -495,11 +496,37 @@ public sealed class Orchestrator : IOrchestrator
             string? fixedContent = null;
             string? fixError = null;
 
+            // 【批次3·B 类型缺失定义注入】错误含"类型未包含成员/找不到类型" → 从 fileContents
+            // 找该类型定义文件，把【完整定义内容】注入修复上下文（不是位置指引——E2E 已实证
+            // 30B 不会跟着位置去 read_file，必须让定义直接出现在修复依据里）。
+            // 约束：只在修复阶段触发；每任务只注入一次；只注入第一个命中的类型。
+            string? typeDefContext = null;
+            if (!typeDefInjected)
+            {
+                var missingType = ExtractMissingType(runOutput);
+                if (missingType is not null)
+                {
+                    var defKv = fileContents.FirstOrDefault(kv =>
+                        kv.Key.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
+                        kv.Value.Contains($"class {missingType}", StringComparison.OrdinalIgnoreCase));
+                    if (defKv.Key is not null)
+                    {
+                        typeDefContext =
+                            $"\n\n目标类型 {missingType} 的当前定义如下（文件 {defKv.Key} 完整内容）：\n```\n{defKv.Value}\n```";
+                        typeDefInjected = true;
+                        _logger.LogInformation(
+                            "类型缺失 {Type}：注入完整定义（{File}，{Len} 字符）。",
+                            missingType, defKv.Key, defKv.Value.Length);
+                    }
+                }
+            }
+
             try
             {
                 // 把全项目文件内容传进去，让模型能看到其它文件的接口
+                var fixInput = typeDefContext is null ? runOutput : runOutput + typeDefContext;
                 fixedContent = await _executor.FixFileAsync(
-                    spec, currentContent, runOutput, plan, fileContents, ct);
+                    spec, currentContent, fixInput, plan, fileContents, ct);
 
                 // 修复成功后，同步更新 fileContents
                 if (fixedContent is not null)
@@ -808,6 +835,28 @@ public sealed class Orchestrator : IOrchestrator
         foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(output, @"\bline\s+(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
             sb.Append(m.Groups[1].Value).Append(';');
         return sb.Length == 0 ? null : sb.ToString();
+    }
+
+    /// <summary>
+    /// 【批次3·B】从编译错误输出里提取"类型缺失"的目标类型名（确定性匹配，不靠模型）。
+    /// 命中模式（支持弯/直引号）：
+    ///   “X”未包含“Y”的定义   → 查 X（CS0117/CS1061 成员缺失）
+    ///   未能找到类型或命名空间名“X” → 查 X（CS0246）
+    ///   找不到类型“X”         → 查 X（兜底）
+    /// 只返回第一个命中的类型（约束：只注入 1 个符号）。
+    /// </summary>
+    public static string? ExtractMissingType(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output)) return null;
+        var m = System.Text.RegularExpressions.Regex.Match(output,
+            @"[“""]([A-Za-z_][A-Za-z0-9_]*)[”""]未包含[“""]([A-Za-z_][A-Za-z0-9_]*)[”""]的定义");
+        if (m.Success) return m.Groups[1].Value;
+        m = System.Text.RegularExpressions.Regex.Match(output,
+            @"未能找到类型或命名空间名[“""]([A-Za-z_][A-Za-z0-9_]*)[”""]");
+        if (m.Success) return m.Groups[1].Value;
+        m = System.Text.RegularExpressions.Regex.Match(output,
+            @"找不到类型[“""]([A-Za-z_][A-Za-z0-9_]*)[”""]");
+        return m.Success ? m.Groups[1].Value : null;
     }
 
     /// 支持 C# 和 Python 两种错误格式。
