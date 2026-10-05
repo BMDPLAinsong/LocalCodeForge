@@ -210,7 +210,8 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 - **完成门（批次1，H2/H4 扩展）**：收尾区 + 熔断区双接线——`_writeRejected`（写工具被拒未重试且无写成功）→ 判失败（非可疑）；`_writeTarget`（提取到显式目标但目标不存在）→ 判失败 + isSuspicious=true。模板 Error 消息含"未真正实现"→ 装饰器落 is_suspicious。
 - 循环熔断：`BuildCycleSignature`（工具名+首参+输出指纹）同一签名二次成功 = 重复无进展 → 以工具验证结果收尾或诚实失败。
 - **修复重试无进展熔断（批次4 后续）**：`ExtractErrorSignature`（CS\d+ / [A-Za-z]+Error / 文件(行号 / line N 指纹）；循环内 `newSig==lastErrorSig && retries>0` → 提前终止（3 条"重试 3 次"实证同错误反复修复无效）。
-- **类型缺失定义注入（批次3·B）**：修复循环内 `ExtractMissingType`（确定性正则：`“X”未包含“Y”的定义`/`未能找到类型或命名空间名“X”`/`找不到类型“X”`，弯直引号兼容）命中 → 从 fileContents 找含 `class X` 的文件，**把完整定义内容注入修复上下文**（`目标类型 X 的当前定义如下：{完整文件} `），**不是位置指引**——E2E 已实证 30B 不会跟着符号位置去 read_file（大文件定位 6 轮失败），必须让定义直接出现在修复依据里。约束：只在修复阶段触发、每任务只注入一次（typeDefInjected）、只注入第一个命中的类型。
+- **类型缺失定义注入（批次3·B）**：修复循环内 `ExtractMissingType`（确定性正则：`“X”未包含“Y”的定义`/`未能找到类型或命名空间名“X”`/`找不到类型“X”`，弯直引号兼容）命中 → 找 `class X` 定义文件（注入源：① fileContents 计划文件；② 工程根扫 .cs 排除 bin/obj——工程已有类型如 Order.cs 不在 fileContents，必须回退②，否则永不触发）→ **把完整定义内容注入修复上下文**（`目标类型 X 的当前定义如下：{完整文件} `），**不是位置指引**。约束：只在修复阶段触发、每任务只注入一次（typeDefInjected）、只注入第一个命中的类型。**验证结论（批次3 终）**：机制两次 E2E 实证触发（注入日志出现），但 30B 拿到定义仍不修正幻觉成员（修复升级链"输出与原文相同"全灭）——**30B 边界，承认**；代码保留（未来换强模型可复用）。
+- **防 Planner 幻觉 csproj 名（批次3 终）**：阶段 3.2 工程模式下，run_command 的 csproj 一律用工程根实际存在的 .csproj（Directory.GetFiles 排除 bin/obj）；若 run_command 已含 `--project 幻觉名` → 正则替换为实际名。E2E 实证：Planner 幻觉 OrderSystem.csproj → run 卡死重试 3 次、修复路径永不触达编译阶段。
 
 ---
 

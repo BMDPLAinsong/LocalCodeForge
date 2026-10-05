@@ -422,6 +422,31 @@ public sealed class Orchestrator : IOrchestrator
                 var csprojFile = plan.Files.FirstOrDefault(f =>
                     f.Path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
 
+                // 【批次3 续·防 Planner 幻觉 csproj 名】工程模式下，csproj 一律用工程根
+                // 实际存在的文件（E2E 实证：Planner 幻觉 OrderSystem.csproj → run_command
+                // 卡死重试 3 次，B 注入等修复路径根本没机会跑到编译阶段）。
+                if (_options.ProjectRoot is not null && Directory.Exists(_options.ProjectRoot))
+                {
+                    var realCsproj = Directory.GetFiles(_options.ProjectRoot, "*.csproj",
+                        SearchOption.TopDirectoryOnly)
+                        .FirstOrDefault(p =>
+                            !p.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar) &&
+                            !p.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar));
+                    if (realCsproj is not null)
+                    {
+                        csprojFile = new Agent.Core.Models.FileSpec { Path = Path.GetFileName(realCsproj) };
+                        if (plan.RunCommand.Contains("--project", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // Planner 已写死幻觉项目名 → 替换为实际名
+                            effectiveRunCommand = System.Text.RegularExpressions.Regex.Replace(
+                                effectiveRunCommand,
+                                @"--project\s+[\w\.\\/]+",
+                                $"--project {Path.GetFileName(realCsproj)}",
+                                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        }
+                    }
+                }
+
                 if (csprojFile is not null)
                 {
                     if (!effectiveRunCommand.Contains("--project") &&
@@ -496,9 +521,11 @@ public sealed class Orchestrator : IOrchestrator
             string? fixedContent = null;
             string? fixError = null;
 
-            // 【批次3·B 类型缺失定义注入】错误含"类型未包含成员/找不到类型" → 从 fileContents
-            // 找该类型定义文件，把【完整定义内容】注入修复上下文（不是位置指引——E2E 已实证
-            // 30B 不会跟着位置去 read_file，必须让定义直接出现在修复依据里）。
+            // 【批次3·B 类型缺失定义注入】错误含"类型未包含成员/找不到类型" → 找该类型定义
+            // 文件，把【完整定义内容】注入修复上下文（不是位置指引——E2E 已实证 30B 不会跟着
+            // 位置去 read_file，必须让定义直接出现在修复依据里）。
+            // 注入源：① 计划文件 fileContents；② 工程根扫描（工程已有类型如 Order.cs 不在
+            // fileContents，E2E 实证——必须回退读工程根文件，否则 B 永不触发）。
             // 约束：只在修复阶段触发；每任务只注入一次；只注入第一个命中的类型。
             string? typeDefContext = null;
             if (!typeDefInjected)
@@ -506,17 +533,44 @@ public sealed class Orchestrator : IOrchestrator
                 var missingType = ExtractMissingType(runOutput);
                 if (missingType is not null)
                 {
+                    string? defFilePath = null;
+                    string? defContent = null;
                     var defKv = fileContents.FirstOrDefault(kv =>
                         kv.Key.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
                         kv.Value.Contains($"class {missingType}", StringComparison.OrdinalIgnoreCase));
                     if (defKv.Key is not null)
                     {
+                        defFilePath = defKv.Key;
+                        defContent = defKv.Value;
+                    }
+                    else if (_options.ProjectRoot is not null && Directory.Exists(_options.ProjectRoot))
+                    {
+                        // 工程已有类型：扫工程根 .cs 文件（排除 bin/obj）找 class 定义
+                        foreach (var cs in Directory.GetFiles(_options.ProjectRoot, "*.cs",
+                                     SearchOption.TopDirectoryOnly))
+                        {
+                            if (cs.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar) ||
+                                cs.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar))
+                                continue;
+                            var text = await ReadFileAsync(cs, ct);
+                            if (text is not null &&
+                                text.Contains($"class {missingType}", StringComparison.OrdinalIgnoreCase))
+                            {
+                                defFilePath = Path.GetFileName(cs);
+                                defContent = text;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (defFilePath is not null && defContent is not null)
+                    {
                         typeDefContext =
-                            $"\n\n目标类型 {missingType} 的当前定义如下（文件 {defKv.Key} 完整内容）：\n```\n{defKv.Value}\n```";
+                            $"\n\n目标类型 {missingType} 的当前定义如下（文件 {defFilePath} 完整内容）：\n```\n{defContent}\n```";
                         typeDefInjected = true;
                         _logger.LogInformation(
                             "类型缺失 {Type}：注入完整定义（{File}，{Len} 字符）。",
-                            missingType, defKv.Key, defKv.Value.Length);
+                            missingType, defFilePath, defContent.Length);
                     }
                 }
             }
