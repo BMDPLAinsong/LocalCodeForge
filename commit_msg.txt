@@ -1,0 +1,9 @@
+﻿批次2：失败类别补洞（数据驱动）
+
+- FailureCategorizer 补 4 组词（只补 metrics 实证存在的消息模式）：
+  write_unverified（H2 熔断）/ write_not_attempted（H4 只读循环）/
+  target_mismatch（完成门目标不符）/ tool_rejected 增词（完成门 C 写被拒）
+- 优先级放 timeout 后 max_steps 前（H2/H4 原被"任务终止"误归 max_steps）
+- tests 418→422（+4 断言）
+- 历史一次性迁移：null 53 条 + other 15 条重算（纯未知 other 保持）→ 0 null
+- 迁移后失败分布：compile 17 / empty 12 / max_steps 9 / other 8 / write_unverified 6 / write_not_attempted 4 / timeout 4 / not_found 3 / runtime 1

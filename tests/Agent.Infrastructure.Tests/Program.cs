@@ -1113,6 +1113,11 @@ Console.WriteLine("== 3 FailureCategorizer 失败类别归类 ==");
     Check("类别：空响应", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("模型连续返回空答案，任务终止") == "empty_response");
     Check("类别：其他兜底", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("未知错误 XYZ") == "other");
     Check("类别：成功不归类（空入参）", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("") == "other");
+    // 批次2 数据驱动补洞：熔断/完成门实证消息
+    Check("类别：写文件但验证未通过 → write_unverified", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("任务写入文件但验证未通过（run_command 未成功），熔断终止，防假成功。") == "write_unverified");
+    Check("类别：写任务未产生写入 → write_not_attempted", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("任务要求修改文件但未产生任何写入（仅循环读取），熔断终止。可重试或改用 find_symbol/analyze_code 定位后编辑。") == "write_not_attempted");
+    Check("类别：目标不存在 → target_mismatch", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("任务要求写入 X:\\a\\b.txt，但该目标不存在（本轮写入位置与用户指定不符）。") == "target_mismatch");
+    Check("类别：写被拒未落地 → tool_rejected", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("写入被拒绝且本轮未成功写入任何文件（写目标未落地）。可检查路径是否越界/敏感，或改用工程内路径后重试。") == "tool_rejected");
 
     // SqliteMetricsCollector 落库 failure_category
     var fcDir = Path.Combine(TestTmp, "fc_" + Guid.NewGuid().ToString("N")[..6]);

@@ -38,10 +38,23 @@ public static class FailureCategorizer
         if (ContainsAny(s, "超时", "timeout", "退出码：124", "退出码: 124"))
             return "timeout";
 
-        // 工具拒绝：拦截类（白名单/越界/P-D 类型冲突/只读/空内容/交互/项目文件）
+        // 写任务熔断：写了文件但验证未通过（H2，防假成功误伤态——目标可能已落地）
+        if (ContainsAny(s, "写入文件但验证未通过"))
+            return "write_unverified";
+
+        // 写任务熔断：要求写但未产生任何写入（H4 只读循环）
+        if (ContainsAny(s, "未产生任何写入"))
+            return "write_not_attempted";
+
+        // 完成门：显式目标不存在（写了别处 ≠ 用户目标，假完成嫌疑）
+        if (ContainsAny(s, "但该目标不存在", "与用户指定不符"))
+            return "target_mismatch";
+
+        // 工具拒绝：拦截类（白名单/越界/P-D 类型冲突/只读/空内容/交互/项目文件/完成门写被拒）
         if (ContainsAny(s, "不在白名单", "白名单", "路径越界", "类型重复定义",
             "只读模式", "内容为空", "交互输入", "交互", "项目文件", "退出码：127",
-            "退出码: 127", "退出码：126", "退出码: 126"))
+            "退出码: 127", "退出码：126", "退出码: 126",
+            "写入被拒绝", "写目标未落地"))
             return "tool_rejected";
 
         // 文件/对象未找到
