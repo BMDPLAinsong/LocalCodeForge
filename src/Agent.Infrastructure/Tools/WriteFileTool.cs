@@ -21,13 +21,17 @@ public sealed class WriteFileTool : AgentToolBase
     // 【C】工具拒绝事件落库（可空：tests 直接构造不传 → 静默跳过；DI 传真实 store）
     private readonly ToolRejectionStore? _rejections;
 
+    // 【批次1·E】显式写目标授权：本次任务临时白名单（CLI 层解析"X盘根目录 test.txt"注入）。
+    // 敏感区在授权入口已源头拒绝；写工具再叠加 SensitivePathGuard 兜底（防漏网路径）。
+    private readonly List<string> _explicitWriteRoots;
+
     // 【B】P-D 熔断语义化：同文件被 P-D 类型冲突拒绝的次数（per-task 实例，无跨任务污染）。
     // 实证：模型被 P-D 拒后不换 edit_file、反复 write_file → 3 连拒熔断白跑。
     // 第 2 次拒绝即返回确定性指令（数据驱动引导，非提示词）。
     private readonly Dictionary<string, int> _pdRejectionCounts = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>构造函数。</summary>
-    public WriteFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null)
+    public WriteFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null, IEnumerable<string>? explicitWriteRoots = null)
     {
         // 规范化
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
@@ -35,6 +39,10 @@ public sealed class WriteFileTool : AgentToolBase
         _projectWriteEnabled = projectWriteEnabled;
         _taskId = string.IsNullOrWhiteSpace(taskId) ? "default" : taskId;
         _rejections = rejections;
+        _explicitWriteRoots = explicitWriteRoots?
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Select(Path.GetFullPath)
+            .ToList() ?? new List<string>();
     }
 
     /// <summary>记录一次拒绝事件（fail-safe：记录失败不影响工具主流程）。</summary>
@@ -140,15 +148,25 @@ public sealed class WriteFileTool : AgentToolBase
         // 完整路径
         var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
 
-        // 【写白名单 · 双根保护】WriteRoots = {workspaceRoot} ∪ {projectRoot(工程可写)}；
+        // 【写白名单 · 双根保护】WriteRoots = {workspaceRoot} ∪ {projectRoot(工程可写)} ∪ {explicitWriteRoots(批次1·E 显式授权)}；
         // PathBoundary 逐段比较根治 StartsWith 前缀假阳性（X:\proj2 不再被 X:\proj 放行）
         var insideWorkspace = PathBoundary.IsInside(_workspaceRoot, fullPath);
         var insideProject = _projectWriteEnabled && _projectRoot is not null
             && PathBoundary.IsInside(_projectRoot, fullPath);
-        if (!insideWorkspace && !insideProject)
+        var insideExplicit = _explicitWriteRoots.Any(r => PathBoundary.IsInside(r, fullPath));
+        if (!insideWorkspace && !insideProject && !insideExplicit)
         {
             var err = "错误：路径越界。";
             await RecordRejectionAsync("out_of_bounds", relative, err, ct);
+            return err;
+        }
+
+        // 【批次1·E】敏感区源头兜底：白名单通过但路径命中敏感区（授权入口已滤，此处防漏网）
+        // —— 敏感内容物理不进 chatHistory/SQLite/记忆库。
+        if (SensitivePathGuard.IsDenied(fullPath))
+        {
+            var err = "错误：路径属于敏感区（系统/凭据），拒绝写入。";
+            await RecordRejectionAsync("sensitive", relative, err, ct);
             return err;
         }
 

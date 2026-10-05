@@ -2163,5 +2163,109 @@ Console.WriteLine("== 双根保护：ProjectPathDetector 输入路径自动识�
     Directory.Delete(baseTmp, true);
 }
 
+// 批次1·验证层总盘点：写目标提取（TryGetWriteTarget）+ 完成门（CompletionGate）+ 显式授权（explicitWriteRoots）
+// ═══════════════════════════════════════════════════════════════
+Console.WriteLine("== 批次1：写目标提取（TryGetWriteTarget） ==");
+{
+    // 通道 2：自然语言盘符 + 文件名（x盘根目录 test.txt → X:\test.txt）
+    Check("写目标：X盘根目录+文件名 → 文件级",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget("在x盘根目录，新建一下test.txt文件", out var t1, out var f1)
+        && f1 && t1.Equals(@"X:\test.txt", StringComparison.OrdinalIgnoreCase));
+    Check("写目标：X盘下+大写盘符 → 归一化",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget("在X盘下新建 report.md", out var t2, out _)
+        && t2.Equals(@"X:\report.md", StringComparison.OrdinalIgnoreCase));
+    // 无文件名 → 目录级
+    Check("写目标：X盘根目录无文件名 → 目录级",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget("保存到x盘根目录", out var t3, out var f3)
+        && !f3 && t3.Equals(@"X:\", StringComparison.OrdinalIgnoreCase));
+    // 通道 1：完整绝对路径（已存在文件或形似文件）
+    var baseTmp = Path.Combine(TestTmp, "tests_b1_target");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    Directory.CreateDirectory(baseTmp);
+    var realFile = Path.Combine(baseTmp, "data.txt");
+    File.WriteAllText(realFile, "x");
+    Check("写目标：完整路径（已存在文件）→ 文件级",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget($"把新内容写入 {realFile}", out var t4, out var f4)
+        && f4 && t4.Equals(Path.GetFullPath(realFile), StringComparison.OrdinalIgnoreCase));
+    Check("写目标：完整路径（不存在但形似文件）→ 文件级",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget($"创建 {Path.Combine(baseTmp, "new.log")} 文件", out var t5, out var f5)
+        && f5 && t5.Equals(Path.GetFullPath(Path.Combine(baseTmp, "new.log")), StringComparison.OrdinalIgnoreCase));
+    Check("写目标：完整路径（目录）→ 目录级",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget($"把文件保存到 {baseTmp} 目录", out var t6, out var f6)
+        && !f6 && t6.Equals(Path.GetFullPath(baseTmp), StringComparison.OrdinalIgnoreCase));
+    // 无写语境 → 不触发
+    Check("写目标：读语境（无写词）→ 不触发",
+        !Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget("读取一下 X:\\data 的内容", out _, out _));
+    Directory.Delete(baseTmp, true);
+}
+
+Console.WriteLine("== 批次1：完成门（CompletionGate） ==");
+{
+    // 非写任务 → 不过门
+    Check("完成门：非写任务 → 放行",
+        Agent.Infrastructure.Project.CompletionGate.Evaluate(false, false, false, null, false) is null);
+    // C：写被拒未重试 → 失败
+    var c = Agent.Infrastructure.Project.CompletionGate.Evaluate(true, false, true, null, false);
+    Check("完成门：写被拒且无任何写成功 → 判失败",
+        c is not null && c.shouldFail && !c.isSuspicious);
+    // B：目标未达成 → 失败 + 可疑（写了别处 ≠ 目标）
+    var b = Agent.Infrastructure.Project.CompletionGate.Evaluate(true, true, false, @"X:\test.txt", true);
+    Check("完成门：写了文件但显式目标不存在 → 判失败+可疑",
+        b is not null && b.shouldFail && b.isSuspicious && b.message.Contains("X:\\test.txt"));
+    // 目标存在 → 放行
+    var baseTmp = Path.Combine(TestTmp, "tests_b1_gate");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    Directory.CreateDirectory(baseTmp);
+    var f = Path.Combine(baseTmp, "ok.txt");
+    File.WriteAllText(f, "ok");
+    Check("完成门：目标文件存在 → 放行",
+        Agent.Infrastructure.Project.CompletionGate.Evaluate(true, true, false, Path.GetFullPath(f), true) is null);
+    // 目录级目标存在 → 放行
+    Check("完成门：目录目标存在 → 放行",
+        Agent.Infrastructure.Project.CompletionGate.Evaluate(true, true, false, Path.GetFullPath(baseTmp), false) is null);
+    Directory.Delete(baseTmp, true);
+}
+
+Console.WriteLine("== 批次1：显式写授权（explicitWriteRoots）+ 敏感兜底 ==");
+{
+    var baseTmp = Path.Combine(TestTmp, "tests_b1_auth");
+    if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+    var ws = Path.Combine(baseTmp, "task");
+    Directory.CreateDirectory(ws);
+    var authRoot = Path.Combine(baseTmp, "auth");
+    Directory.CreateDirectory(authRoot);
+
+    string W2(Agent.Infrastructure.Tools.AgentToolBase tool, string path, string content)
+    {
+        var json = $"{{\"path\":{JsonSerializer.Serialize(path)},\"content\":{JsonSerializer.Serialize(content)}}}";
+        var args = JsonSerializer.Deserialize<JsonElement>(json);
+        return tool.InvokeAsync(args, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    // 授权根内绝对路径 → 放行（模拟"X盘根目录 test.txt"授权）
+    var wAuth = new Agent.Infrastructure.Tools.WriteFileTool(ws, explicitWriteRoots: new[] { authRoot });
+    var target = Path.Combine(authRoot, "test.txt");
+    Check("显式授权：授权根内 → 放行",
+        W2(wAuth, target, "你好").Contains("已写入") && File.Exists(target));
+    // 授权根外 → 拒
+    var outside = Path.Combine(baseTmp, "other.txt");
+    Check("显式授权：授权根外 → 越界拒",
+        W2(wAuth, outside, "x").Contains("越界"));
+    // 敏感兜底：白名单通过但路径命中敏感区 → 拒（不真写，只验证拒绝信号）
+    var wSens = new Agent.Infrastructure.Tools.WriteFileTool(ws, explicitWriteRoots: new[] { @"C:\Windows" });
+    Check("显式授权：敏感区兜底 → 拒绝",
+        W2(wSens, @"C:\Windows\evil.txt", "x").Contains("敏感"));
+    // EditFileTool 授权一致（edit 需 old_string/new_string）
+    var target2 = Path.Combine(authRoot, "test2.txt");
+    File.WriteAllText(target2, "old");
+    var eAuth = new Agent.Infrastructure.Tools.EditFileTool(ws, explicitWriteRoots: new[] { authRoot });
+    var ejson = $"{{\"path\":{JsonSerializer.Serialize(target2)},\"old_string\":\"old\",\"new_string\":\"new\"}}";
+    var eargs = JsonSerializer.Deserialize<JsonElement>(ejson);
+    var eres = eAuth.InvokeAsync(eargs, CancellationToken.None).GetAwaiter().GetResult();
+    Check("显式授权：EditFileTool 授权根内 → 放行",
+        eres.Contains("已修改") && File.ReadAllText(target2).Contains("new"));
+    Directory.Delete(baseTmp, true);
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

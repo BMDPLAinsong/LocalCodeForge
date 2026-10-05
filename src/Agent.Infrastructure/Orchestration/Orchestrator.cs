@@ -548,8 +548,16 @@ public sealed class Orchestrator : IOrchestrator
         }
         else
         {
+            // 【批次1·B】顶层失败增强：用户显式写目标不存在 → 失败归因可读（"目标未落地"而非泛化验证失败）
+            var targetNote = "";
+            if (Project.ProjectPathDetector.TryGetWriteTarget(userInput, out var wt, out var wf))
+            {
+                var exists = wf ? File.Exists(wt) : Directory.Exists(wt);
+                if (!exists)
+                    targetNote = $"\n[目标未落地] 用户显式写目标 {wt} 不存在（写入位置与用户指定不符）。";
+            }
             yield return new AgentEvent.Error(
-                $"任务未通过验证（重试 {retries} 次）。最后错误：\n{Truncate(lastError, 500)}");
+                $"任务未通过验证（重试 {retries} 次）。最后错误：\n{Truncate(lastError, 500)}{targetNote}");
         }
     }
 

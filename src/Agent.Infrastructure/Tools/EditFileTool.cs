@@ -24,14 +24,21 @@ public sealed class EditFileTool : AgentToolBase
     // 【C】工具拒绝事件落库（可空：tests 直接构造不传 → 静默跳过；DI 传真实 store）
     private readonly ToolRejectionStore? _rejections;
 
+    // 【批次1·E】显式写目标授权（CLI 层注入；敏感区源头兜底）
+    private readonly List<string> _explicitWriteRoots;
+
     /// <summary>构造函数。</summary>
-    public EditFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null)
+    public EditFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null, IEnumerable<string>? explicitWriteRoots = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
         _projectWriteEnabled = projectWriteEnabled;
         _taskId = string.IsNullOrWhiteSpace(taskId) ? "default" : taskId;
         _rejections = rejections;
+        _explicitWriteRoots = explicitWriteRoots?
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Select(Path.GetFullPath)
+            .ToList() ?? new List<string>();
     }
 
     /// <summary>记录一次拒绝事件（fail-safe：记录失败不影响工具主流程）。</summary>
@@ -99,15 +106,24 @@ public sealed class EditFileTool : AgentToolBase
         var baseRoot = _projectWriteEnabled && _projectRoot is not null ? _projectRoot : _workspaceRoot;
         var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
 
-        // 【写白名单 · 双根保护】WriteRoots = {workspaceRoot} ∪ {projectRoot(工程可写)}；
+        // 【写白名单 · 双根保护】WriteRoots = {workspaceRoot} ∪ {projectRoot(工程可写)} ∪ {explicitWriteRoots(批次1·E)}；
         // PathBoundary 逐段比较根治 StartsWith 前缀假阳性（X:\proj2 不再被 X:\proj 放行）
         var insideWorkspace = PathBoundary.IsInside(_workspaceRoot, fullPath);
         var insideProject = _projectWriteEnabled && _projectRoot is not null
             && PathBoundary.IsInside(_projectRoot, fullPath);
-        if (!insideWorkspace && !insideProject)
+        var insideExplicit = _explicitWriteRoots.Any(r => PathBoundary.IsInside(r, fullPath));
+        if (!insideWorkspace && !insideProject && !insideExplicit)
         {
             var err = "错误：路径越界。";
             await RecordRejectionAsync("out_of_bounds", relative, err, ct);
+            return err;
+        }
+
+        // 【批次1·E】敏感区源头兜底（授权入口已滤，此处防漏网）
+        if (SensitivePathGuard.IsDenied(fullPath))
+        {
+            var err = "错误：路径属于敏感区（系统/凭据），拒绝编辑。";
+            await RecordRejectionAsync("sensitive", relative, err, ct);
             return err;
         }
 

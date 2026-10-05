@@ -42,7 +42,8 @@ public static class DependencyInjection
         string dbPath,
         string? projectRoot = null,
         bool projectWriteEnabled = false,
-        string? taskId = null)
+        string? taskId = null,
+        IEnumerable<string>? explicitWriteRoots = null)
     {
         // ─────────── 配置 ───────────
         services.AddSingleton(options);
@@ -110,9 +111,9 @@ public static class DependencyInjection
         });
         services.AddSingleton<IAgentTool>(sp => new ListDirTool(workspaceRoot, projectRoot));
         services.AddSingleton<IAgentTool>(sp => new ReadFileTool(workspaceRoot, projectRoot));
-        services.AddSingleton<IAgentTool>(sp => new WriteFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>()));
-        services.AddSingleton<IAgentTool>(sp => new EditFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>()));    // ← 新增
-        services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot, projectRoot, projectWriteEnabled));   // ← 新增
+        services.AddSingleton<IAgentTool>(sp => new WriteFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots));
+        services.AddSingleton<IAgentTool>(sp => new EditFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots));    // ← 新增
+        services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot, projectRoot, projectWriteEnabled, explicitWriteRoots));   // ← 新增
         services.AddSingleton<IAgentTool>(_ => new RunCommandTool(workspaceRoot, projectRoot));
         services.AddSingleton<IAgentTool>(_ => new RememberTool(_.GetRequiredService<AgentMemoryStore>()));   // ← P3：模型级记忆
         services.AddSingleton<IAgentTool>(_ => new CodeAnalyzerTool(workspaceRoot, projectRoot));            // ← 工程理解专项：符号索引

@@ -18,13 +18,18 @@ public sealed class CreateDirTool : AgentToolBase
     private readonly string _workspaceRoot;
     private readonly string? _projectRoot;
     private readonly bool _projectWriteEnabled;
+    private readonly List<string> _explicitWriteRoots;
 
     /// <summary>构造函数。</summary>
-    public CreateDirTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false)
+    public CreateDirTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, IEnumerable<string>? explicitWriteRoots = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
         _projectWriteEnabled = projectWriteEnabled;
+        _explicitWriteRoots = explicitWriteRoots?
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Select(Path.GetFullPath)
+            .ToList() ?? new List<string>();
     }
 
     /// <summary>工具名。</summary>
@@ -58,12 +63,17 @@ public sealed class CreateDirTool : AgentToolBase
         var baseRoot = _projectWriteEnabled && _projectRoot is not null ? _projectRoot : _workspaceRoot;
         var fullPath = Path.GetFullPath(Path.Combine(baseRoot, relative));
 
-        // 【写白名单 · 双根保护】WriteRoots = {workspaceRoot} ∪ {projectRoot(工程可写)}；逐段比较根治前缀假阳性
+        // 【写白名单 · 双根保护】WriteRoots = {workspaceRoot} ∪ {projectRoot(工程可写)} ∪ {explicitWriteRoots(批次1·E)}；逐段比较根治前缀假阳性
         var insideWorkspace = PathBoundary.IsInside(_workspaceRoot, fullPath);
         var insideProject = _projectWriteEnabled && _projectRoot is not null
             && PathBoundary.IsInside(_projectRoot, fullPath);
-        if (!insideWorkspace && !insideProject)
+        var insideExplicit = _explicitWriteRoots.Any(r => PathBoundary.IsInside(r, fullPath));
+        if (!insideWorkspace && !insideProject && !insideExplicit)
             return Task.FromResult("错误：路径越界。");
+
+        // 【批次1·E】敏感区源头兜底（授权入口已滤，此处防漏网）
+        if (SensitivePathGuard.IsDenied(fullPath))
+            return Task.FromResult("错误：路径属于敏感区（系统/凭据），拒绝创建。");
 
         // 创建（幂等）
         Directory.CreateDirectory(fullPath);

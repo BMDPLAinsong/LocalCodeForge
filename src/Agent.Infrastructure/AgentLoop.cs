@@ -44,6 +44,12 @@ public sealed class AgentLoop : IAgentLoop
     private bool _everWroteFile;
     private bool _lastRunCommandOk;
 
+    // 【批次1·验证层总盘点】写被拒记录 + 显式写目标（完成门 B/C 判定输入）。
+    // _writeTarget：CLI 已授权或输入解析出的用户显式写目标（"X盘根目录 test.txt" → X:\test.txt）。
+    private bool _writeRejected;
+    private string? _writeTarget;
+    private bool _writeTargetIsFile;
+
     public AgentLoop(
         Kernel kernel,
         IToolRegistry tools,
@@ -130,6 +136,18 @@ public sealed class AgentLoop : IAgentLoop
         _lastToolName = null;
         _everWroteFile = false;
         _lastRunCommandOk = false;
+        _writeRejected = false;
+
+        // 【批次1·A】显式写目标提取（完成门 B 判定输入；CLI 已授权路径经 AgentRequest 传入）
+        _writeTarget = request.ExplicitWriteTarget;
+        _writeTargetIsFile = request.ExplicitWriteTargetIsFile;
+        if (_writeTarget is null)
+        {
+            _writeTarget = Project.ProjectPathDetector.TryGetWriteTarget(request.Input, out var t, out var f)
+                ? t
+                : null;
+            _writeTargetIsFile = _writeTarget is not null && f;
+        }
 
         // 【记忆治理收尾】任务启动时自动清理过期记忆（30 天未用且 0 命中自动删除）
         try
@@ -372,6 +390,9 @@ public sealed class AgentLoop : IAgentLoop
                     // 【H2】写/改文件成功 → 记录；run_command 结果 → 记录最近验证状态
                     if (ok && (cleanName is "write_file" or "edit_file" or "append_file"))
                         _everWroteFile = true;
+                    // 【批次1·C】写工具被拒 → 记录（完成门判"被拒未重试 → 失败"）
+                    if (!ok && (cleanName is "write_file" or "edit_file" or "append_file" or "create_dir"))
+                        _writeRejected = true;
                     if (cleanName == "run_command")
                         _lastRunCommandOk = ok;
 
@@ -406,6 +427,21 @@ public sealed class AgentLoop : IAgentLoop
                                 yield return new AgentEvent.Error("任务要求修改文件但未产生任何写入（仅循环读取），熔断终止。可重试或改用 find_symbol/analyze_code 定位后编辑。");
                                 yield break;
                             }
+
+                            // 【批次1·B】熔断收尾也过目标达成门：写了文件但用户显式目标不存在 → 判失败
+                            var fuseGate = Project.CompletionGate.Evaluate(
+                                isWriteTask: IntentOverride.IsWriteTask(request.Input),
+                                wroteAny: _everWroteFile,
+                                writeRejected: _writeRejected,
+                                target: _writeTarget,
+                                targetIsFile: _writeTargetIsFile);
+                            if (fuseGate is not null)
+                            {
+                                _logger.LogWarning("[完成门·熔断] {Message}", fuseGate.message);
+                                yield return new AgentEvent.Error(fuseGate.message);
+                                yield break;
+                            }
+
                             _logger.LogWarning("[熔断] 工具序列重复无进展（{Sig}），以工具验证结果收尾。", sig);
                             var closeText = $"任务完成：工具已验证（{cleanName}）。最后验证：{TruncateForAnswer(condensed)}";
                             await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", closeText), ct);
@@ -648,8 +684,9 @@ public sealed class AgentLoop : IAgentLoop
                         if (forceContinueCount >= 3)
                         {
                             await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", text), ct);
+                            // 【批次1·D】消息含"未真正实现"→ AgentLoopMetricsDecorator 标 is_suspicious=1
                             yield return new AgentEvent.Error(
-                                "任务未真正完成：输出只是 Hello World 模板，未实现用户需求。");
+                                "任务未真正实现：输出只是 Hello World 模板，未实现用户需求。");
                             yield break;
                         }
 
@@ -793,6 +830,22 @@ public sealed class AgentLoop : IAgentLoop
                             : "测试未通过，请根据结果修复代码后重新验证；若确实无法通过请在最终回答中说明。"));
                     continue;
                 }
+            }
+
+            // 【批次1·验证层总盘点】完成门：写任务收尾前查"写被拒未重试"+"目标达成"。
+            // 让"写了文件"升级为"写到了用户要求的目标"（X盘根目录 test.txt 实证：写了别处 ≠ 达成）。
+            var gateVerdict = Project.CompletionGate.Evaluate(
+                isWriteTask: IntentOverride.IsWriteTask(request.Input),
+                wroteAny: _everWroteFile,
+                writeRejected: _writeRejected,
+                target: _writeTarget,
+                targetIsFile: _writeTargetIsFile);
+            if (gateVerdict is not null)
+            {
+                await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", text), ct);
+                _logger.LogWarning("[完成门] {Message}", gateVerdict.message);
+                yield return new AgentEvent.Error(gateVerdict.message);
+                yield break;
             }
 
             // 真正交付

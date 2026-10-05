@@ -27,7 +27,7 @@
 | 核心依赖 | Microsoft.SemanticKernel 1.80.1 + SK OpenAI Connector（走 Ollama `/v1` 兼容端点，全本地）+ Microsoft.Data.Sqlite |
 | 模型 | Ollama：classifier=`qwen2.5:1.5b`；small/large/agent_pro 三角色全部 = `law-unified`（30B Qwen3-Coder-A3B，同 tag 单驻，请求级 temperature 区分：small 0.3 / agent_pro 0.5 / large 0.7） |
 | 版本控制 | 本机 git 仓库（main，91+ commits，无远端） |
-| 测试 | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，372/372，`dotnet run --project` 一键回归） |
+| 测试 | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，418/418，`dotnet run --project` 一键回归） |
 | 数据落盘 | `workspace/`：sessions.db、runs/、project_context.db、agent_memory.db、symbol_index.db、test-tmp/、e2e/ |
 
 ### 1.1 三层项目结构
@@ -198,6 +198,8 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 | **路径边界** | PathBoundary.cs | **逐路径分段比较**（OrdinalIgnoreCase + 分隔符归一）：root 自身/子目录=true，`X:\proj2` 对 `X:\proj`=false（StartsWith 前缀假阳性根治），`..` 跳脱经 GetFullPath 归一后必越界。**写白名单共用**（WriteFile/EditFile/CreateDir 的 WriteRoots = workspaceRoot ∪ projectRoot） |
 | **敏感源头拒** | SensitivePathGuard.cs | **读=黑名单排除**：内置系统区 4 + 凭据区 9 + 用户 denylist（workspace\sensitive_denylist.txt，# 注释/空行跳过/幂等）；**源头拒绝**（读取动作前判定，内容不进 chatHistory/SQLite/记忆库）。四条判定线：①长名逐段匹配 ②8.3 短名双向展开（GetLongPathNameW/GetShortPathNameW P/Invoke）③符号链接/junction **逐段** ResolveLinkTarget（reparse point 在目录段，只解析整路径会漏）④UNC `\\?\` 前缀剥除。模式分档：工程模式读放开+黑名单硬拒；沙箱模式读仍限 workspaceRoot。`FindWriteRootOverlaps` 启动自检（工程根命中 denylist → WARN）。已知边界：脚本内敏感读不做（用户意图即授权，下一轮做写入内容扫描） |
 | **输入路径自动识别** | ProjectPathDetector.cs | "给路径就干活"：CLI 任务执行前检测输入含"存在绝对目录路径 + 读/分析语境（非写）"→ 自动只读 use。分片正则（**不含 ':'，盘符冒号是路径一部分**）+ Directory.Exists 校验 + 尾部 CJK 语境词剥离（≤3 次，有效路径空格段不误剥）+ 写词表优先 + `SensitivePathGuard.IsDenied` 敏感源头不触发。CLI 侧 `ApplyUse` 与 use 命令共用 |
+| **写目标提取 + 完成门** | ProjectPathDetector.cs + CompletionGate.cs（批次1） | `TryGetWriteTarget`（通道1 绝对路径分片 + 通道2 自然语言"X盘根目录"→`X:\` + 文件名正则 **ASCII 类**——.NET \w 默认含 Unicode 中文会吞掉"新建一下test.txt"，CJK 是天然边界）；`CompletionGate.Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFile)`——写被拒且无写成功 → 判失败；提取到目标但目标不存在 → 判失败 + **isSuspicious=true**（"写了别处"=假完成嫌疑）。AgentLoop 收尾区 + 熔断区（H2/H4 之后）双接线 |
+| **显式写授权** | AgentRequest.cs + 写三工具 + Agent.Cli/Program.cs（批次1） | CLI 分发区解析输入写目标 → 非敏感即注入 `ExplicitWriteTarget` + `explicitWriteRoots`（写工具越界判定并入集）；**敏感区兜底**：SensitivePathGuard.IsDenied 白名单通过也拒（敏感内容不进持久层）。日志 `[显式授权] 检测到写目标 {wt}`；Orchestrator 顶层失败加 `[目标未落地]` 标注 |
 
 ### 防假完成防线（AgentLoop）
 
@@ -205,6 +207,7 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 - **H2**：熔断收尾加完成门槛——写任务未写过文件 → 判失败。
 - **H3**：工程模式默认严格校验（StrictOutputVerification || ProjectRoot 非空）。
 - **H4**：熔断收尾——写任务"写过文件但最近 run_command 未成功" → 判失败（防假成功）。
+- **完成门（批次1，H2/H4 扩展）**：收尾区 + 熔断区双接线——`_writeRejected`（写工具被拒未重试且无写成功）→ 判失败（非可疑）；`_writeTarget`（提取到显式目标但目标不存在）→ 判失败 + isSuspicious=true。模板 Error 消息含"未真正实现"→ 装饰器落 is_suspicious。
 - 循环熔断：`BuildCycleSignature`（工具名+首参+输出指纹）同一签名二次成功 = 重复无进展 → 以工具验证结果收尾或诚实失败。
 
 ---
@@ -315,4 +318,4 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 | `src/Agent.Infrastructure/Memory/AgentMemoryStore.cs` | 记忆存储（去重/治理） |
 | `src/Agent.Infrastructure/Memory/MemoryPromptBuilder.cs` | 失败教训注入格式 |
 | `src/Agent.Cli/Program.cs` | CLI 入口：命令分发/BOM 清理/健康检查/归档 |
-| `tests/Agent.Infrastructure.Tests/Program.cs` | 353 断言 harness |
+| `tests/Agent.Infrastructure.Tests/Program.cs` | 418 断言 harness |

@@ -190,9 +190,10 @@ internal class Program
             // 【A-补强】统一剥离 BOM（U+FEFF）——PS 5.1 管道注入 UTF-8 BOM 到首行时
             // StartsWith("use ")/StartsWith("plan ") 等全部不命中、命令被当任务执行。
             // 原 370 行仅 use 分支 trim；此处提到主循环入口，覆盖所有命令分支。
-            input = input?.TrimStart('\uFEFF');
+            // 【批次1·补充】Trim() 防 "exit "（管道/尾随空白）漏判被当任务执行（实测现象）。
+            input = input?.TrimStart('\uFEFF')?.Trim();
 
-            if (string.IsNullOrWhiteSpace(input) || input.Equals("exit", StringComparison.OrdinalIgnoreCase))
+            if (input is null || input.Length == 0 || input.Equals("exit", StringComparison.OrdinalIgnoreCase))
                 break;
 
             if (input.Equals("new", StringComparison.OrdinalIgnoreCase))
@@ -490,9 +491,23 @@ internal class Program
 
             renderer.Info($"[工作目录] {Path.GetFileName(workspace)}（任务归属 task_{taskId}）");
 
+            // 【批次1·E】显式写目标授权：解析用户写目标（"X盘根目录 test.txt" → X:\test.txt），
+            // 敏感区源头拒绝（授权入口即拦，敏感内容物理不进白名单/持久层）；本次任务临时白名单。
+            string? writeTarget = null;
+            var writeTargetIsFile = false;
+            var explicitWriteRoots = new List<string>();
+            if (Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget(input, out var wt, out var wf)
+                && !Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(wt))
+            {
+                writeTarget = wt;
+                writeTargetIsFile = wf;
+                explicitWriteRoots.Add(wt);
+                renderer.Info($"[显式授权] 检测到写目标 {wt}，本次任务临时白名单。");
+            }
+
             // 【关键修复】为每个任务创建独立 DI 容器（工具绑定 run 根）——P-B 工具层注入 taskId 隔离备份
             var taskServices = new ServiceCollection();
-            taskServices.AddAgent(options, workspace, dbPath, options.ProjectRoot, options.ProjectWriteEnabled, taskId);
+            taskServices.AddAgent(options, workspace, dbPath, options.ProjectRoot, options.ProjectWriteEnabled, taskId, explicitWriteRoots);
             var taskProvider = taskServices.BuildServiceProvider();
 
             if (TaskClassifier.ShouldOrchestrate(input))
@@ -521,7 +536,7 @@ internal class Program
             {
                 // 走原有 AgentLoop
                 var taskLoop = taskProvider.GetRequiredService<IAgentLoop>();
-                var request = new AgentRequest(sessionId, input, workspace);
+                var request = new AgentRequest(sessionId, input, workspace, writeTarget, writeTargetIsFile);
 
                 var loopErrors = new List<string>();
                 string? loopAnswer = null;

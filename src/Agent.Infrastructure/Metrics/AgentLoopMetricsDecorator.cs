@@ -89,6 +89,12 @@ public sealed class AgentLoopMetricsDecorator : IAgentLoop
                 case AgentEvent.Error e:
                     success = false;
                     errorSummary = e.Message;
+                    // 【批次1·D】可疑信号扩展：模板未实现 / 完成门目标不符 → 标可疑（需求未达成）
+                    if (e.Message.Contains("未真正实现") ||
+                        e.Message.Contains("与用户指定不符"))
+                    {
+                        isSuspicious = true;
+                    }
                     break;
             }
 
