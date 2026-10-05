@@ -213,6 +213,7 @@ public sealed class Orchestrator : IOrchestrator
 
         var retries = 0;
         string lastError = "";
+        string? lastErrorSig = null;   // 批次4：修复重试错误签名（相同=无进展熔断）
         bool success = false;
 
         // 【D2】重试上限数据校准：特征类历史成功率低（样本 ≥3 且 <50%）→ 收紧到 1 次修复。
@@ -445,6 +446,19 @@ public sealed class Orchestrator : IOrchestrator
             }
 
             lastError = runOutput;
+
+            // 【批次4 发现】修复重试无进展熔断：错误签名未变化 → 提前终止（不等满 3 次）。
+            // 数据实证：3 条"任务未通过验证（重试 3 次）"同错误反复修复无效；
+            // 错误签名 = 编译错误码 + 文件行号 指纹，签名相同 = 修复未推进。
+            var newSig = ExtractErrorSignature(runOutput);
+            if (newSig is not null && newSig == lastErrorSig && retries > 0)
+            {
+                _logger.LogWarning("修复重试无进展：错误签名未变化（{Sig}），提前终止。", newSig);
+                yield return new AgentEvent.Error(
+                    $"修复重试无进展：错误签名未变化（{Truncate(runOutput, 120)}），判失败。");
+                yield break;
+            }
+            lastErrorSig = newSig;
 
             if (retries >= maxRetries)
                 break;
@@ -779,6 +793,23 @@ public sealed class Orchestrator : IOrchestrator
 
     /// <summary>
     /// 从编译/运行错误输出里定位出错的文件。
+    /// <summary>提取编译/运行错误的指纹（错误码 + 文件行号），用于修复重试无进展判定。
+    /// C#：`File.cs(10,13): error CS1002` → CS1002 + 10；Python：`line 5` + 错误名。</summary>
+    public static string? ExtractErrorSignature(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output)) return null;
+        var sb = new System.Text.StringBuilder();
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(output, @"\bCS\d+\b"))
+            sb.Append(m.Value).Append(';');
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(output, @"\b[A-Z][A-Za-z]+Error\b"))
+            sb.Append(m.Value).Append(';');
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(output, @"\.(?:cs|py|js|ts|go|java)\((\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            sb.Append(m.Groups[1].Value).Append(';');
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(output, @"\bline\s+(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            sb.Append(m.Groups[1].Value).Append(';');
+        return sb.Length == 0 ? null : sb.ToString();
+    }
+
     /// 支持 C# 和 Python 两种错误格式。
     /// </summary>
     private static string? LocateErrorFile(string output, Plan plan)

@@ -1186,6 +1186,19 @@ Console.WriteLine("== 工程增量计划校验（CheckIncrementalPlanConflicts�
         new[] { "order.cs", "src\\order.cs" }, existing);
     Check("大小写/分隔符归一化（order.cs → 冲突）",
         caseIns.Count == 1 && caseIns[0] == "order.cs");
+
+    // 批次4：修复重试无进展错误签名
+    var sigCs = Agent.Infrastructure.Orchestration.Orchestrator.ExtractErrorSignature(
+        "X:\\a\\Program.cs(10,13): error CS1002: ; expected");
+    Check("错误签名：C# CS码+行号", sigCs is not null && sigCs.Contains("CS1002") && sigCs.Contains("10"));
+    var sigPy = Agent.Infrastructure.Orchestration.Orchestrator.ExtractErrorSignature(
+        "File \"x.py\", line 5\nNameError: name 'a' is not defined");
+    Check("错误签名：Python line+NameError", sigPy is not null && sigPy.Contains("NameError") && sigPy.Contains("5"));
+    var sigSame = Agent.Infrastructure.Orchestration.Orchestrator.ExtractErrorSignature(
+        "X:\\a\\Program.cs(10,13): error CS1002: ; expected\nmore output");
+    Check("错误签名：相同错误输出 → 相同指纹", sigCs == sigSame);
+    var sigNone = Agent.Infrastructure.Orchestration.Orchestrator.ExtractErrorSignature("hello world");
+    Check("错误签名：无错误输出 → null", sigNone is null);
 }
 
 // ── 工程完成门 + 编辑冲突诊断 ──
