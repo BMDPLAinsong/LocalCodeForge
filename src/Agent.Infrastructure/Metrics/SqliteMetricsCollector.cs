@@ -208,6 +208,33 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         return await ReadAllAsync(cmd, ct);
     }
 
+    /// <summary>
+    /// 【批次3·C 父失败回填】顶层 orchestrator 失败时，把本任务窗口内（FinishedAt ≥ since、
+    /// UserInput 匹配前缀）的 Executor 子记录成功回填为失败并附父失败说明。
+    /// 匹配用前缀（子记录 UserInput 被 Truncate 500，顶层可能更长），时间窗隔离同输入的历史任务。
+    /// </summary>
+    public async Task<int> BackfillFailedSubMetricsAsync(string userInput, DateTimeOffset since, string note, CancellationToken ct)
+    {
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE task_metrics
+            SET success = 0,
+                failure_category = 'validator_failed',
+                error_summary = substr(error_summary || ' [' || $note || ']', 1, 500)
+            WHERE routing_tier = 'OrchestratorExecutor'
+              AND success = 1
+              AND finished_at >= $since
+              AND (user_input = substr($u, 1, 500) OR user_input LIKE substr($u, 1, 500) || '%')
+            """;
+        cmd.Parameters.AddWithValue("$since", since.ToUnixTimeSeconds());
+        cmd.Parameters.AddWithValue("$u", userInput);
+        cmd.Parameters.AddWithValue("$note", note);
+        return await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     /// <summary>查询最近的失败记录。</summary>
     public async Task<IReadOnlyList<TaskMetric>> GetRecentFailuresAsync(int take, CancellationToken ct)
     {

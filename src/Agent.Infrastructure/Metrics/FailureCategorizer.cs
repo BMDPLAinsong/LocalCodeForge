@@ -50,6 +50,10 @@ public static class FailureCategorizer
         if (ContainsAny(s, "但该目标不存在", "与用户指定不符"))
             return "target_mismatch";
 
+        // 验证失败（Orchestrator 阶段 3 run_command 未通过 / 父失败回填标注）
+        if (ContainsAny(s, "未通过验证", "父任务未通过验证"))
+            return "validator_failed";
+
         // 工具拒绝：拦截类（白名单/越界/P-D 类型冲突/只读/空内容/交互/项目文件/完成门写被拒）
         if (ContainsAny(s, "不在白名单", "白名单", "路径越界", "类型重复定义",
             "只读模式", "内容为空", "交互输入", "交互", "项目文件", "退出码：127",

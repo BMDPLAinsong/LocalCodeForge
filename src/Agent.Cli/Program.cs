@@ -1047,6 +1047,22 @@ internal class Program
             Console.WriteLine($"    - Validator: {summary.AvgValidatorMs:F0} ms");
         }
 
+        // 【批次3·A 展示标注】Executor 子指标 = 生成成功率（≠ 任务成功率）。
+        // orchestrator_sub 的 Executor 记录衡量"模型生成能力"；顶层失败已回填（C），
+        // 该数字反映验证门后的真实达成，与顶层"任务成功率"区分展示，消除 100% 误读。
+        var execStats = await metrics.GetServiceStatsAsync("small", "OrchestratorExecutor", 50, CancellationToken.None);
+        if (execStats is not null && execStats.TotalCount > 0)
+        {
+            Console.Write($"  Executor 生成成功率: ");
+            var execRate = (double)execStats.SuccessCount / execStats.TotalCount;
+            var erColor = execRate >= 0.8 ? ConsoleColor.Green
+                       : execRate >= 0.5 ? ConsoleColor.Yellow : ConsoleColor.Red;
+            Console.ForegroundColor = erColor;
+            Console.Write($"{execRate:P0}");
+            Console.ResetColor();
+            Console.WriteLine($"  ({execStats.SuccessCount}/{execStats.TotalCount})  ← orchestrator_sub 子指标（父失败已回填），≠ 任务成功率");
+        }
+
         // 【D2】特征类归因：按任务特征类展示历史成功率 + 失败主因（D1 报表系统化）
         if (featureAggregator is not null)
         {

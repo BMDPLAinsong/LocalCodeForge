@@ -77,6 +77,21 @@ public sealed class OrchestratorMetricsDecorator : IOrchestrator
                 case AgentEvent.Error e:
                     success = false;
                     errorSummary = e.Message;
+
+                    // 【批次3·C 父失败回填】顶层 orchestrator 失败 → 回填本任务窗口内的
+                    // Executor 子记录为失败（成功不反映真实达成——阶段 3 验证未通过）。
+                    try
+                    {
+                        var n = await _metrics.BackfillFailedSubMetricsAsync(
+                            userInput, startedAt,
+                            "父任务未通过验证（回填：顶层 orchestrator 失败）", ct);
+                        if (n > 0)
+                            _logger.LogInformation("父失败回填 {Count} 条 Executor 子记录。", n);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug("父失败回填失败（容忍）: {Msg}", ex.Message);
+                    }
                     break;
             }
 

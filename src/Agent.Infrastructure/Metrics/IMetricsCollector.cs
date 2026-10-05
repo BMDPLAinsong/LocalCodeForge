@@ -39,6 +39,12 @@ public interface IMetricsCollector
 
     /// <summary>【失败类别】失败任务按 failure_category 分布（供 stats 面板 / 3B 按类别调权）。</summary>
     Task<IReadOnlyList<(string Category, int Count)>> GetFailureBreakdownAsync(CancellationToken ct);
+
+    /// <summary>
+    /// 【批次3·C 父失败回填】顶层 orchestrator 失败时，把本任务窗口内（FinishedAt ≥ since 且
+    /// UserInput 匹配）的 Executor 子记录成功回填为失败，附父失败说明——让子指标反映真实达成。
+    /// </summary>
+    Task<int> BackfillFailedSubMetricsAsync(string userInput, DateTimeOffset since, string note, CancellationToken ct);
 }
 
 /// <summary>

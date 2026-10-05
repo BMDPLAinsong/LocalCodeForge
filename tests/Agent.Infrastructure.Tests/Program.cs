@@ -1118,6 +1118,8 @@ Console.WriteLine("== 3 FailureCategorizer 失败类别归类 ==");
     Check("类别：写任务未产生写入 → write_not_attempted", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("任务要求修改文件但未产生任何写入（仅循环读取），熔断终止。可重试或改用 find_symbol/analyze_code 定位后编辑。") == "write_not_attempted");
     Check("类别：目标不存在 → target_mismatch", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("任务要求写入 X:\\a\\b.txt，但该目标不存在（本轮写入位置与用户指定不符）。") == "target_mismatch");
     Check("类别：写被拒未落地 → tool_rejected", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("写入被拒绝且本轮未成功写入任何文件（写目标未落地）。可检查路径是否越界/敏感，或改用工程内路径后重试。") == "tool_rejected");
+    Check("类别：验证失败 → validator_failed", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("任务未通过验证（重试 2 次）。最后错误：退出码：1") == "validator_failed");
+    Check("类别：回填标注 → validator_failed", Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("任务未通过验证 [父任务未通过验证（回填：顶层 orchestrator 失败）]") == "validator_failed");
 
     // SqliteMetricsCollector 落库 failure_category
     var fcDir = Path.Combine(TestTmp, "fc_" + Guid.NewGuid().ToString("N")[..6]);
@@ -1161,6 +1163,31 @@ Console.WriteLine("== 3 FailureCategorizer 失败类别归类 ==");
         .Where(m => m.IsSuspicious && m.Success).ToList();
     Check("可疑成功落库 → GetRecentAsync 可过滤出明细",
         susRecent.Count == 1 && susRecent[0].TaskId == "fc_sus_1");
+
+    // 批次3·C 父失败回填：顶层失败 → Executor 子记录成功回填为失败
+    var bfMetrics = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(
+        Path.Combine(fcDir, "backfill.db"));
+    var bfNow = DateTimeOffset.UtcNow;
+    Agent.Core.Models.TaskMetric MkSub(string tid, bool ok, DateTimeOffset at) => new Agent.Core.Models.TaskMetric
+    {
+        TaskId = tid, SessionId = "", UserInput = "做一个 C# 项目", Mode = "orchestrator_sub",
+        RoutingTier = "OrchestratorExecutor", ServiceId = "small", RoutingReason = "orchestrator 内部调用（子指标）",
+        Success = ok, IsSuspicious = false, RetryCount = 0,
+        TotalMs = 10, PlannerMs = 0, ExecutorMs = 0, ValidatorMs = 0,
+        LintBlockingErrors = 0, LintWarningErrors = 0,
+        ErrorSummary = "", StartedAt = at, FinishedAt = at
+    };
+    bfMetrics.RecordAsync(MkSub("bf_win", true, bfNow), ctNone3).Wait();
+    bfMetrics.RecordAsync(MkSub("bf_fail", false, bfNow), ctNone3).Wait();
+    bfMetrics.RecordAsync(MkSub("bf_old", true, bfNow.AddMinutes(-10)), ctNone3).Wait();
+    var bfCount = bfMetrics.BackfillFailedSubMetricsAsync("做一个 C# 项目", bfNow.AddSeconds(-5), "父任务未通过验证（回填）", ctNone3).Result;
+    Check("父失败回填：窗口内成功 Executor 子记录 1 条被回填", bfCount == 1);
+    var bfWin = bfMetrics.GetRecentAsync(50, ctNone3).Result.First(m => m.TaskId == "bf_win");
+    Check("回填后 success=0 + validator_failed", !bfWin.Success && bfWin.ErrorSummary.Contains("父任务未通过验证"));
+    var bfOld = bfMetrics.GetRecentAsync(50, ctNone3).Result.First(m => m.TaskId == "bf_old");
+    Check("窗口外历史记录不被回填", bfOld.Success);
+    var bfFail = bfMetrics.GetRecentAsync(50, ctNone3).Result.First(m => m.TaskId == "bf_fail");
+    Check("原本失败的记录不受影响", !bfFail.Success);
 }
 
 // ── 任务1：工程增量计划校验（Plan vs 已有文件冲突） ──
