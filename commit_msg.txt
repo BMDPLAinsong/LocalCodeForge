@@ -1,7 +1,10 @@
-﻿10-05 只读工程组合边界（ReadOnlyGuard）：必然失败的 use 不带 --write 写工程任务前置阻断
+﻿详细开发文档：新增 docs/DEVELOPER_DETAILED.md（410 行，15 章）
 
-- 新增 Project/ReadOnlyGuard.cs：工程模式 + 未授权写 + 写任务引用工程内文件 → CLI 主循环前置阻断
-- 公共文件引用正则抽取 TaskClassifier.FileReferencePattern（捕获组+lookahead，消双路径漂移）
-- CLI 接线：任务启动前拦截（不建 DI 容器、不跑任务），引导 use --write / 重述需求
-- tests 440→450（+10 断言）；CLI 冒烟实证拦截生效、零模型执行痕迹
-- 文档同步：HANDOVER date-line + DEVELOPER 流程图画线
+- 以任务输入→交付完整链路为主线，源码级逐步展开
+- 覆盖：CLI 主循环/AgentLoop ReAct/Orchestrator 三阶段逐步流程、
+  路由三层漏斗 + RoutingRules 8 规则全文 + 数据闭环调权算法、
+  10 工具 schema 与边界、工程感知 14 机制实现细节、
+  6 张数据表完整 schema、AgentOptions 全字段、law-unified Modelfile、
+  OutputVerifier/FailureCategorizer 信号词表全文、
+  12 条已知边界、调试速查、模块文件索引（关键方法级）
+- DEVELOPER.md 头部加一行指向详细版
