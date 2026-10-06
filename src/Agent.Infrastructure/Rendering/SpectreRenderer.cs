@@ -20,6 +20,17 @@ namespace Agent.Infrastructure.Rendering;
 
 public sealed class SpectreRenderer : RendererBase
 {
+    /// <summary>
+    /// 任务状态前缀（交互态增强 10-07）：Program.cs 任务循环维护，格式 "[N步|service|秒] "。
+    /// 渲染到高频工具事件行前，让"当前任务进度"随事件流始终可见（追加式终端内最接近常驻状态栏；
+    /// 真常驻需全屏 TUI，Live 已实证失败不做）。PlainText 无头路径不使用。
+    /// </summary>
+    public string TaskPrefix { get; set; } = "";
+
+    /// <summary>verbose 开关（--verbose 启动参数）：工具结果输出全文（默认截断 300，防刷屏）。</summary>
+    public bool Verbose { get; set; } = false;
+
+    private string Prefix() => string.IsNullOrEmpty(TaskPrefix) ? "" : $"[grey]{Markup.Escape(TaskPrefix)}[/] ";
     // ── 启动横幅：Panel 状态卡 ──
     public override void Banner(string workspace, string dbPath)
     {
@@ -63,13 +74,17 @@ public sealed class SpectreRenderer : RendererBase
                 AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(FormatEvent(evt))}[/]");
                 break;
             case AgentEvent.FileWritten:
-                AnsiConsole.MarkupLine($"[aqua]{Markup.Escape(FormatEvent(evt))}[/]");
+                AnsiConsole.MarkupLine($"{Prefix()}[aqua]{Markup.Escape(FormatEvent(evt))}[/]");
                 break;
             case AgentEvent.ToolCall:
-                AnsiConsole.MarkupLine($"[cyan]{Markup.Escape(FormatEvent(evt))}[/]");
+                AnsiConsole.MarkupLine($"{Prefix()}[cyan]{Markup.Escape(FormatEvent(evt))}[/]");
                 break;
             case AgentEvent.ToolResultEvent tr:
-                AnsiConsole.MarkupLine($"[{(tr.Success ? "grey" : "red")}]{Markup.Escape(FormatEvent(evt))}[/]");
+                // verbose：输出结果全文（多行）；默认：截断 300 单行（防刷屏）
+                if (Verbose && !string.IsNullOrEmpty(tr.Output))
+                    AnsiConsole.MarkupLine($"{Prefix()}[{(tr.Success ? "grey" : "red")}][工具结果] {Markup.Escape(tr.Name)}:\n{Markup.Escape(tr.Output)}[/]");
+                else
+                    AnsiConsole.MarkupLine($"{Prefix()}[{(tr.Success ? "grey" : "red")}]{Markup.Escape(FormatEvent(evt))}[/]");
                 break;
             case AgentEvent.FinalAnswer:
                 WriteEventPanel(evt, "任务完成", Color.Green);

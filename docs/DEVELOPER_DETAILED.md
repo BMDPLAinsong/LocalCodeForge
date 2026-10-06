@@ -610,7 +610,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 | `src/Agent.Infrastructure/Memory/AgentMemoryStore.cs` | 记忆存储（去重/治理） | Add / Search / Forget / Prune / Deduplicate |
 | `src/Agent.Infrastructure/Memory/MemoryPromptBuilder.cs` | 失败教训注入格式 | BuildMemoryBlock |
 | `src/Agent.Infrastructure/Memory/TaskMemoryExtractor.cs` | 任务归档提炼 | Extract |
-| `src/Agent.Infrastructure/Rendering/` | 渲染层 | IRenderer / RendererBase.FormatEvent / SpectreRenderer / PlainTextRenderer / RendererFactory.Create |
+| `src/Agent.Infrastructure/Rendering/` | 渲染层 | IRenderer / RendererBase.FormatEvent / SpectreRenderer（+TaskPrefix 任务状态前缀 / +Verbose 全文输出，10-07）/ PlainTextRenderer / RendererFactory.Create |
 | `src/Agent.Infrastructure/Tools/` | 10 工具 | 见 §7.1 |
 | `tests/Agent.Infrastructure.Tests/Program.cs` | 450 断言 harness | Check / 各分组 |
 | `scripts/e2e/e2e.ps1` + `runner.py` | E2E | 4 用例三态断言 |

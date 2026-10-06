@@ -144,6 +144,8 @@ internal class Program
             options.ProjectWriteEnabled = true;
             Console.WriteLine("工程可写模式已开启（改动前自动备份，可用 rollback 恢复）。");
         }
+        // 【终端增强 10-07】--verbose：交互态工具结果输出全文（默认截断 300）
+        var verbose = args.Any(a => a.Equals("--verbose", StringComparison.OrdinalIgnoreCase));
 
         // ─────────── 构建 DI 容器 ───────────
         var services = new ServiceCollection();
@@ -174,6 +176,8 @@ internal class Program
         // 真实终端 → SpectreRenderer（Panel 横幅 + LiveDisplay 任务实时区）。
         var renderer = RendererFactory.Create(
             !Console.IsInputRedirected && !Console.IsOutputRedirected);
+        if (renderer is Agent.Infrastructure.Rendering.SpectreRenderer sp0)
+            sp0.Verbose = verbose;
 
         // ─────────── 打印欢迎 ───────────
         renderer.Banner(workspace, dbPath);
@@ -183,6 +187,53 @@ internal class Program
 
         // ─────────── 本地模型健康检查 ───────────
         await CheckLocalModelsAsync(options);
+
+        // ─────────── 任务事件流消费（终端增强 10-07） ───────────
+        // 统一消费 Orchestrator / AgentLoop 事件流：交互态维护任务状态前缀（[N步|service|秒]）、
+        // 响应 q 取消（OperationCanceledException）、任务结束打印汇总行。
+        // 取消任务不归档（不污染成功率指标）；无头路径（sp==null）行为与旧版逐字节一致。
+        async Task<(List<string> errors, string? answer, bool cancelled)> ConsumeTaskAsync(
+            IAsyncEnumerable<AgentEvent> events,
+            Agent.Infrastructure.Rendering.SpectreRenderer? sp,
+            CancellationToken ct)
+        {
+            var errors = new List<string>();
+            string? answer = null;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var step = 0;
+            var svc = "?";
+            var cancelled = false;
+            try
+            {
+                await foreach (var evt in events.WithCancellation(ct))
+                {
+                    if (evt is AgentEvent.Error e) errors.Add(e.Message);
+                    if (evt is AgentEvent.FinalAnswer fa) answer = fa.Text;
+                    if (evt is AgentEvent.Routing r) svc = r.ServiceId;
+                    if (evt is AgentEvent.ToolCall) step++;
+                    if (sp is not null) sp.TaskPrefix = $"[{step}步|{svc}|{sw.Elapsed.TotalSeconds:0}s]";
+                    await renderer.RenderEventAsync(evt);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled = true;
+            }
+            finally
+            {
+                sw.Stop();
+                if (sp is not null) sp.TaskPrefix = "";
+            }
+            // 汇总/取消行仅交互态输出——无头路径输出与旧版逐字节一致（E2E 断言依赖）
+            if (sp is not null)
+            {
+                if (cancelled)
+                    renderer.Warn($"[已取消] 任务已停止（{step} 步 / {sw.Elapsed.TotalSeconds:0}s / {svc}）");
+                else
+                    renderer.Info($"[任务汇总] {step} 步 / {sw.Elapsed.TotalSeconds:0}s / {svc}");
+            }
+            return (errors, answer, cancelled);
+        }
 
         // ─────────── 主循环 ───────────
         while (true)
@@ -514,72 +565,103 @@ internal class Program
 
             renderer.Info($"[工作目录] {Path.GetFileName(workspace)}（任务归属 task_{taskId}）");
 
-            // 【批次1·E】显式写目标授权：解析用户写目标（"X盘根目录 test.txt" → X:\test.txt），
-            // 敏感区源头拒绝（授权入口即拦，敏感内容物理不进白名单/持久层）；本次任务临时白名单。
-            string? writeTarget = null;
-            var writeTargetIsFile = false;
-            var explicitWriteRoots = new List<string>();
-            if (Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget(input, out var wt, out var wf)
-                && !Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(wt))
+            // 【终端增强 10-07】q 停当前任务（仅交互态）：
+            // 任务期间 ReadLine 不可用（主循环 await 事件流），后台轮询 KeyAvailable；
+            // 按 q → 取消任务令牌（Orchestrator 在阶段间 ThrowIfCancellationRequested 响应）。
+            // 监听随任务收尾（finally）停止；无头路径（sp==null）不启用。
+            var sp = renderer as Agent.Infrastructure.Rendering.SpectreRenderer;
+            var taskCts = new CancellationTokenSource();
+            var listenCts = new CancellationTokenSource();
+            if (sp is not null)
             {
-                writeTarget = wt;
-                writeTargetIsFile = wf;
-                explicitWriteRoots.Add(wt);
-                renderer.Info($"[显式授权] 检测到写目标 {wt}，本次任务临时白名单。");
-            }
-
-            // 【关键修复】为每个任务创建独立 DI 容器（工具绑定 run 根）——P-B 工具层注入 taskId 隔离备份
-            var taskServices = new ServiceCollection();
-            taskServices.AddAgent(options, workspace, dbPath, options.ProjectRoot, options.ProjectWriteEnabled, taskId, explicitWriteRoots);
-            var taskProvider = taskServices.BuildServiceProvider();
-
-            if (TaskClassifier.ShouldOrchestrate(input))
-            {
-                // 走三阶段编排
-                renderer.Notice($"[自动编排] 任务复杂，启用 Planner-Executor");
-
-                var orchestrator = taskProvider.GetRequiredService<IOrchestrator>();
-                var orchErrors = new List<string>();
-                string? orchAnswer = null;
-                await foreach (var evt in orchestrator.RunAsync(input, workspace, CancellationToken.None))
+                _ = Task.Run(() =>
                 {
-                    if (evt is AgentEvent.Error e) orchErrors.Add(e.Message);
-                    if (evt is AgentEvent.FinalAnswer fa) orchAnswer = fa.Text;
-                    await renderer.RenderEventAsync(evt);
-                }
-                ArchiveTask(taskProvider, input, taskId, "orchestrator", orchErrors, orchAnswer);
-                // 【P0-1】工程可写模式任务失败 → 自动回滚工程改动（P-B：仅回滚本任务）
-                if (orchAnswer is null && options.ProjectRoot is not null)
-                    AutoRollbackOnFailure(workspace, options.ProjectRoot, taskId, renderer);
-                // 【P-B】成功收尾清理本任务备份与 .new 标记（防跨任务残留误删）
-                else if (options.ProjectRoot is not null)
-                    BackupService.ClearNewMarkers(workspace, taskId);
+                    try
+                    {
+                        while (!listenCts.IsCancellationRequested)
+                        {
+                            if (Console.KeyAvailable)
+                            {
+                                var k = Console.ReadKey(true);
+                                if (k.Key == ConsoleKey.Q)
+                                {
+                                    sp.Notice("[取消请求] 正在停止当前任务（q）...");
+                                    taskCts.Cancel();
+                                }
+                            }
+                            Thread.Sleep(50);
+                        }
+                    }
+                    catch { /* 无控制台/输入重定向时忽略 */ }
+                });
+                renderer.Info($"[任务] 开始 {DateTime.Now:HH:mm:ss}（按 q 可停止当前任务）");
             }
-            else
+            try
             {
-                // 走原有 AgentLoop
-                var taskLoop = taskProvider.GetRequiredService<IAgentLoop>();
-                var request = new AgentRequest(sessionId, input, workspace, writeTarget, writeTargetIsFile);
-
-                var loopErrors = new List<string>();
-                string? loopAnswer = null;
-                await foreach (var evt in taskLoop.RunAsync(request, CancellationToken.None))
+                // 【批次1·E】显式写目标授权：解析用户写目标（"X盘根目录 test.txt" → X:\test.txt），
+                // 敏感区源头拒绝（授权入口即拦，敏感内容物理不进白名单/持久层）；本次任务临时白名单。
+                string? writeTarget = null;
+                var writeTargetIsFile = false;
+                var explicitWriteRoots = new List<string>();
+                if (Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget(input, out var wt, out var wf)
+                    && !Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(wt))
                 {
-                    if (evt is AgentEvent.Error e) loopErrors.Add(e.Message);
-                    if (evt is AgentEvent.FinalAnswer fa) loopAnswer = fa.Text;
-                    await renderer.RenderEventAsync(evt);
+                    writeTarget = wt;
+                    writeTargetIsFile = wf;
+                    explicitWriteRoots.Add(wt);
+                    renderer.Info($"[显式授权] 检测到写目标 {wt}，本次任务临时白名单。");
                 }
-                ArchiveTask(taskProvider, input, taskId, "agent", loopErrors, loopAnswer);
-                // 【P0-1】工程可写模式任务失败 → 自动回滚工程改动（P-B：仅回滚本任务）
-                if (loopAnswer is null && options.ProjectRoot is not null)
-                    AutoRollbackOnFailure(workspace, options.ProjectRoot, taskId, renderer);
-                // 【P-B】成功收尾清理本任务备份与 .new 标记（防跨任务残留误删）
-                else if (options.ProjectRoot is not null)
-                    BackupService.ClearNewMarkers(workspace, taskId);
+
+                // 【关键修复】为每个任务创建独立 DI 容器（工具绑定 run 根）——P-B 工具层注入 taskId 隔离备份
+                var taskServices = new ServiceCollection();
+                taskServices.AddAgent(options, workspace, dbPath, options.ProjectRoot, options.ProjectWriteEnabled, taskId, explicitWriteRoots);
+                var taskProvider = taskServices.BuildServiceProvider();
+
+                if (TaskClassifier.ShouldOrchestrate(input))
+                {
+                    // 走三阶段编排
+                    renderer.Notice($"[自动编排] 任务复杂，启用 Planner-Executor");
+
+                    var orchestrator = taskProvider.GetRequiredService<IOrchestrator>();
+                    var (orchErrors, orchAnswer, cancelled) = await ConsumeTaskAsync(
+                        orchestrator.RunAsync(input, workspace, taskCts.Token), sp, taskCts.Token);
+                    if (!cancelled)
+                        ArchiveTask(taskProvider, input, taskId, "orchestrator", orchErrors, orchAnswer);
+                    if (options.ProjectRoot is not null)
+                    {
+                        // 【P0-1】失败/取消 → 自动回滚工程改动（P-B：仅回滚本任务）；成功 → 清理本任务 .new 标记
+                        if (cancelled || orchAnswer is null)
+                            AutoRollbackOnFailure(workspace, options.ProjectRoot, taskId, renderer);
+                        else
+                            BackupService.ClearNewMarkers(workspace, taskId);
+                    }
+                }
+                else
+                {
+                    // 走原有 AgentLoop
+                    var taskLoop = taskProvider.GetRequiredService<IAgentLoop>();
+                    var request = new AgentRequest(sessionId, input, workspace, writeTarget, writeTargetIsFile);
+
+                    var (loopErrors, loopAnswer, cancelled) = await ConsumeTaskAsync(
+                        taskLoop.RunAsync(request, taskCts.Token), sp, taskCts.Token);
+                    if (!cancelled)
+                        ArchiveTask(taskProvider, input, taskId, "agent", loopErrors, loopAnswer);
+                    if (options.ProjectRoot is not null)
+                    {
+                        if (cancelled || loopAnswer is null)
+                            AutoRollbackOnFailure(workspace, options.ProjectRoot, taskId, renderer);
+                        else
+                            BackupService.ClearNewMarkers(workspace, taskId);
+                    }
+                }
+                // 【任务4 备份生命周期】每任务结束后保留最近 8 个任务备份，清理更早的（防 .backup 增长）
+                if (options.ProjectRoot is not null)
+                    BackupService.PruneBackups(workspace, 8);
             }
-            // 【任务4 备份生命周期】每任务结束后保留最近 8 个任务备份，清理更早的（防 .backup 增长）
-            if (options.ProjectRoot is not null)
-                BackupService.PruneBackups(workspace, 8);
+            finally
+            {
+                listenCts.Cancel();
+            }
         }
     }
 

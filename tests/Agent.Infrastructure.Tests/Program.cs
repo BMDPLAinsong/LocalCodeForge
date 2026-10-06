@@ -2036,6 +2036,11 @@ Console.WriteLine("== Spectre P0 渲染器（Rendering/） ==");
     Check("无头 → PlainTextRenderer", plain is Agent.Infrastructure.Rendering.PlainTextRenderer);
     Check("交互 → SpectreRenderer（构造不抛）", spectre is Agent.Infrastructure.Rendering.SpectreRenderer);
 
+    // ── 1b. 终端增强（10-07）：TaskPrefix / Verbose 默认值与类型（交互态专用，PlainText 不受影响）──
+    var sp = (Agent.Infrastructure.Rendering.SpectreRenderer)spectre;
+    Check("Spectre TaskPrefix 默认空", sp.TaskPrefix == "");
+    Check("Spectre Verbose 默认 false", sp.Verbose == false);
+
     // ── 2. FormatEvent 七事件映射（与旧 RenderEvent 文本格式逐字节一致）──
     var rt1 = new Agent.Core.Models.AgentEvent.Routing("large", "L0.5", "写任务", "写任务");
     Check("Routing 带意图", Agent.Infrastructure.Rendering.RendererBase.FormatEvent(rt1) == "[路由] L0.5 [写任务] → large");
