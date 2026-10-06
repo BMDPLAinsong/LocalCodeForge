@@ -31,6 +31,13 @@ public interface IMetricsCollector
         string serviceId, string routingTier, int take, CancellationToken ct);
 
     /// <summary>
+    /// 【P2 调权地基】数据闭环的时代过滤版：只统计 started_at ≥ since 的样本（30B 时代真实表现）。
+    /// 供路由自动调权使用——4B 历史样本（agent_pro 35%）不再污染 30B 能力判定（93.8%）。
+    /// </summary>
+    Task<Agent.Infrastructure.Routing.ServiceStats> GetServiceStatsSinceAsync(
+        string serviceId, string routingTier, DateTimeOffset since, int take, CancellationToken ct);
+
+    /// <summary>
     /// 【时代隔离】按时代边界拆分某服务的表现（当前时代 = started_at ≥ epoch，历史时代 = 之前）。
     /// 用于如实反映模型切换后的能力（如 agent_pro：30B 时代 vs 4B 历史，避免被旧样本污染）。
     /// </summary>

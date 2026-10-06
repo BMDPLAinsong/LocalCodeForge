@@ -38,6 +38,19 @@ public sealed class ModelRouter : IModelRouter
         _decisions = decisions;
     }
 
+    /// <summary>
+    /// 【P2 调权地基】取调权用历史表现：时代边界已配置（LawUnifiedEpoch 非空）→ 只统计 30B 时代样本
+    /// （4B 历史不再污染 agent_pro/small 的能力判定）；未配置 → 全量（兼容旧行为）。
+    /// </summary>
+    private async Task<ServiceStats> GetTuningStatsAsync(
+        string serviceId, string routingTier, int take, CancellationToken ct)
+    {
+        var epoch = _options.LawUnifiedEpoch;
+        return epoch is not null
+            ? await _metrics.GetServiceStatsSinceAsync(serviceId, routingTier, epoch.Value, take, ct)
+            : await _metrics.GetServiceStatsAsync(serviceId, routingTier, take, ct);
+    }
+
     /// <summary>路由决策落库（fail-safe：记录失败不影响主流程）。</summary>
     private async Task RecordDecisionAsync(RoutingDecision d, string input, CancellationToken ct)
     {
@@ -89,9 +102,9 @@ public sealed class ModelRouter : IModelRouter
             // 查询失败/数据不足 → 保持 large。
             try
             {
-                var smallStats = await _metrics.GetServiceStatsAsync(
+                var smallStats = await GetTuningStatsAsync(
                     RoutingDecision.Small, RoutingTier.Rule.ToString(), 10, ct);
-                var largeStats = await _metrics.GetServiceStatsAsync(
+                var largeStats = await GetTuningStatsAsync(
                     RoutingDecision.Large, RoutingTier.Rule.ToString(), 10, ct);
 
                 if (RoutingIntelligence.TrySuggestDowngrade(
@@ -134,9 +147,9 @@ public sealed class ModelRouter : IModelRouter
             {
                 try
                 {
-                    var smallStats = await _metrics.GetServiceStatsAsync(
+                    var smallStats = await GetTuningStatsAsync(
                         RoutingDecision.Small, RoutingTier.Rule.ToString(), 10, ct);
-                    var proStats = await _metrics.GetServiceStatsAsync(
+                    var proStats = await GetTuningStatsAsync(
                         RoutingDecision.AgentPro, RoutingTier.Rule.ToString(), 10, ct);
 
                     if (RoutingIntelligence.TrySuggestReadTier(
@@ -205,6 +218,32 @@ public sealed class ModelRouter : IModelRouter
             IntentType.Unknown => RoutingDecision.Large,
             _ => RoutingDecision.Large
         };
+
+        // ── 【P2】ComplexReason → agent_pro 自动调权 ──
+        // 默认 ComplexToPro=true 走 agent_pro；若时代过滤历史表明 agent_pro 该层表现差
+        // （样本 ≥5 且成功率 <0.5），自动降级 large（数据不足/表现好 → 保持，保守不冒险）。
+        if (serviceId == RoutingDecision.AgentPro)
+        {
+            try
+            {
+                var proStats = await GetTuningStatsAsync(
+                    RoutingDecision.AgentPro, RoutingTier.SmallModel.ToString(), 10, ct);
+                if (RoutingIntelligence.TrySuggestDropAgentPro(
+                    proStats, minSamples: 5, minSuccessRate: 0.5, out var dropReason))
+                {
+                    _logger.LogInformation("[数据闭环] P2 ComplexReason 降级 large（{Reason}）", dropReason);
+                    serviceId = RoutingDecision.Large;
+                }
+                else
+                {
+                    _logger.LogDebug("ComplexReason 保持 agent_pro：{Reason}", dropReason);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[数据闭环] agent_pro 调权查询失败，保持 agent_pro。");
+            }
+        }
 
         // 记录日志
         _logger.LogInformation(

@@ -1719,6 +1719,48 @@ Console.WriteLine("== 时代隔离：GetEpochBreakdownAsync ==");
     Check("4B 历史 1 成功", leg.SuccessCount == 1);
 }
 
+// ── 【P2】agent_pro 自动调权：时代过滤闭环查询 + ComplexReason 降级判定 ──
+Console.WriteLine("== P2 自动调权：GetServiceStatsSinceAsync + TrySuggestDropAgentPro ==");
+{
+    var mdb = Path.Combine(TestTmp, "metrics_tune_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db");
+    var mc = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(mdb);
+    var epoch = new DateTimeOffset(2026, 10, 2, 15, 0, 0, TimeSpan.FromHours(8));
+    var legacyAt = new DateTimeOffset(2026, 10, 1, 10, 0, 0, TimeSpan.FromHours(8));
+    var currentAt = new DateTimeOffset(2026, 10, 3, 10, 0, 0, TimeSpan.FromHours(8));
+
+    Agent.Core.Models.TaskMetric Msg(string id, bool ok, DateTimeOffset at) => new()
+    {
+        TaskId = id, SessionId = "s", UserInput = "P2 调权测试", Mode = "agent",
+        RoutingTier = "Rule", ServiceId = "agent_pro", RoutingReason = "test",
+        Success = ok, TotalMs = 1000, StartedAt = at, FinishedAt = at
+    };
+    // 4B 历史 2 条（1 成功）——应被时代过滤排除
+    mc.RecordAsync(Msg("old1", true, legacyAt), CancellationToken.None).GetAwaiter().GetResult();
+    mc.RecordAsync(Msg("old2", false, legacyAt), CancellationToken.None).GetAwaiter().GetResult();
+    // 30B 时代 2 条（2 成功）——应被保留
+    mc.RecordAsync(Msg("new1", true, currentAt), CancellationToken.None).GetAwaiter().GetResult();
+    mc.RecordAsync(Msg("new2", true, currentAt), CancellationToken.None).GetAwaiter().GetResult();
+
+    var since = mc.GetServiceStatsSinceAsync("agent_pro", "Rule", epoch, 10, CancellationToken.None).GetAwaiter().GetResult();
+    Check("P2 时代过滤：仅 30B 2 条", since.TotalCount == 2);
+    Check("P2 时代过滤：2 成功", since.SuccessCount == 2);
+    var all = mc.GetServiceStatsAsync("agent_pro", "Rule", 10, CancellationToken.None).GetAwaiter().GetResult();
+    Check("P2 对照全量：4 条", all.TotalCount == 4);
+    Check("P2 对照全量：3 成功（含 4B）", all.SuccessCount == 3);
+
+    // TrySuggestDropAgentPro 三态
+    Check("P2 样本不足(<5)保持 agent_pro",
+        !Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDropAgentPro(
+            new Agent.Infrastructure.Routing.ServiceStats(4, 2, 1000), 5, 0.5, out _));
+    Check("P2 成功率 0.4 <0.5 → 降级 large",
+        Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDropAgentPro(
+            new Agent.Infrastructure.Routing.ServiceStats(5, 2, 1000), 5, 0.5, out var r1)
+        && r1.Contains("降级 large"));
+    Check("P2 成功率 0.6 ≥0.5 → 保持 agent_pro",
+        !Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDropAgentPro(
+            new Agent.Infrastructure.Routing.ServiceStats(5, 3, 1000), 5, 0.5, out _));
+}
+
 // ── 工程图谱增强：依赖分析（符号引用 → 文件依赖边） ──
 Console.WriteLine("== 工程图谱增强：依赖分析 ==");
 {

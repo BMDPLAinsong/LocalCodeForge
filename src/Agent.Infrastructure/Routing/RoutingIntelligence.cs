@@ -109,4 +109,34 @@ public static class RoutingIntelligence
         reason = $"small 读成功率 {smallRate:P0}（{small.SuccessCount}/{small.TotalCount}）偏低，agent_pro {proRate:P0} 且省时";
         return true;
     }
+
+    /// <summary>
+    /// 【P2】L3 分发调权：ComplexReason 默认 → agent_pro。
+    /// 若历史（时代过滤）表明 agent_pro 该层表现差，则建议降级 large。
+    /// 保守条件：样本 ≥ minSamples 且成功率 < minSuccessRate 才降级（数据不足不冒险，保持 agent_pro）。
+    /// </summary>
+    public static bool TrySuggestDropAgentPro(
+        ServiceStats pro,
+        int minSamples,
+        double minSuccessRate,
+        out string? reason)
+    {
+        reason = null;
+
+        if (pro.TotalCount < minSamples)
+        {
+            reason = $"agent_pro 样本不足（{pro.TotalCount}/{minSamples}），保持 agent_pro";
+            return false;
+        }
+
+        var rate = (double)pro.SuccessCount / pro.TotalCount;
+        if (rate >= minSuccessRate)
+        {
+            reason = $"agent_pro 成功率 {rate:P0} ≥ {minSuccessRate:P0}，保持 agent_pro";
+            return false;
+        }
+
+        reason = $"agent_pro 历史 {pro.TotalCount} 条成功率 {rate:P0} < {minSuccessRate:P0}，降级 large";
+        return true;
+    }
 }

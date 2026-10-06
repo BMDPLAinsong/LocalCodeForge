@@ -333,6 +333,41 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
             AvgTotalMs: reader.IsDBNull(2) ? 0 : reader.GetDouble(2));
     }
 
+    /// <summary>【P2 调权地基】时代过滤版闭环查询：只统计 started_at ≥ since 的最近 N 条。</summary>
+    public async Task<Agent.Infrastructure.Routing.ServiceStats> GetServiceStatsSinceAsync(
+        string serviceId, string routingTier, DateTimeOffset since, int take, CancellationToken ct)
+    {
+        var sinceUnix = since.ToUnixTimeSeconds();
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS ok_count,
+                   AVG(total_ms) AS avg_ms
+            FROM (
+                SELECT * FROM task_metrics
+                WHERE service_id = $service AND routing_tier = $tier AND started_at >= $since
+                ORDER BY started_at DESC
+                LIMIT $take
+            );
+        """;
+        cmd.Parameters.AddWithValue("$service", serviceId);
+        cmd.Parameters.AddWithValue("$tier", routingTier);
+        cmd.Parameters.AddWithValue("$since", sinceUnix);
+        cmd.Parameters.AddWithValue("$take", take);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return new Agent.Infrastructure.Routing.ServiceStats(0, 0, 0);
+
+        return new Agent.Infrastructure.Routing.ServiceStats(
+            TotalCount: reader.IsDBNull(0) ? 0 : reader.GetInt32(0),
+            SuccessCount: reader.IsDBNull(1) ? 0 : reader.GetInt32(1),
+            AvgTotalMs: reader.IsDBNull(2) ? 0 : reader.GetDouble(2));
+    }
+
     /// <summary>【时代隔离】按时代边界拆分某服务的表现（当前时代 ≥ epoch vs 历史时代 < epoch）。</summary>
     public async Task<(Agent.Infrastructure.Routing.ServiceStats Current, Agent.Infrastructure.Routing.ServiceStats Legacy)> GetEpochBreakdownAsync(
         string serviceId, DateTimeOffset epoch, CancellationToken ct)

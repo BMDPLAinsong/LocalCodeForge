@@ -323,6 +323,8 @@ CompletionGate.Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFi
 
 **数据源**：task_metrics（service_id/routing_tier/success/total_ms）+ routing_decisions（每次决策落库）。
 
+**【P2】时代过滤（10-07）**：三处闭环判定全部走 `GetTuningStatsAsync`——`options.LawUnifiedEpoch` 非空 → `GetServiceStatsSinceAsync`（SQL 加 `started_at >= epochUnix`，只统计 30B 时代样本，4B 历史不再污染判定）；null → 全量（兼容）。**TrySuggestDropAgentPro（L3 ComplexReason → agent_pro 自动调权）**：样本 ≥5 且成功率 <0.5 才降级 large，数据不足/表现好保持 agent_pro（保守不冒险）。
+
 ### 6.5 词表漂移（重点维护项，历史多次踩坑）
 
 同一功能逻辑在**多处有硬编码词表**，改词表必须**一次改齐**并补 tests：
@@ -586,7 +588,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 | `src/Agent.Infrastructure/Routing/ModelRouter.cs` | 三层漏斗路由 | RouteAsync |
 | `src/Agent.Infrastructure/Routing/RuleEngine.cs` | L1 规则引擎 | Evaluate |
 | `src/Agent.Infrastructure/Routing/IntentOverride.cs` | 写/读动词词表（唯一权威） | IsWriteTask / IsReadTask / Apply |
-| `src/Agent.Infrastructure/Routing/RoutingIntelligence.cs` | 数据闭环调权 | TrySuggestDowngrade / TrySuggestReadTier |
+| `src/Agent.Infrastructure/Routing/RoutingIntelligence.cs` | 数据闭环调权 | TrySuggestDowngrade / TrySuggestReadTier / TrySuggestDropAgentPro（P2） |
 | `src/Agent.Infrastructure/Routing/TaskFeatureClassifier.cs` | D1/D2 特征归因 | Classify / FeatureName |
 | `src/Agent.Infrastructure/Routing/TaskMetricsAggregator.cs` | 特征类聚合（30s 缓存） | GetFeatureStats / 重试上限校准 |
 | `src/Agent.Infrastructure/Routing/RoutingDecisionStore.cs` | 路由决策落库 | RecordAsync |
