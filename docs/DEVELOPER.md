@@ -59,7 +59,7 @@
 | 核心依赖 | Microsoft.SemanticKernel 1.80.1 + SK OpenAI Connector（走 Ollama `/v1` 兼容端点，全本地）+ Microsoft.Data.Sqlite                                                               |
 | 模型   | Ollama：classifier=`qwen2.5:1.5b`；small/large/agent\_pro 三角色全部 = `law-unified`（30B Qwen3-Coder-A3B，同 tag 单驻，请求级 temperature 区分：small 0.3 /agent\_pro 0.5 /large 0.7） |
 | 版本控制 | 本机 git 仓库（main，91+ commits，无远端）                                                                                                                                     |
-| 测试   | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，418/418，`dotnet run --project` 一键回归）                                                                           |
+| 测试   | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，459/459，`dotnet run --project` 一键回归）                                                                           |
 | 数据落盘 | `workspace/`：sessions.db、runs/、project\_context.db、agent\_memory.db、symbol\_index.db、test-tmp/、e2e/                                                                 |
 
 ### 1.1 三层项目结构
@@ -101,6 +101,7 @@ CLI 常用命令（交互式输入）：
 | -------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
 | 普通文本                                                                                               | 作为任务交给 Agent（路由 → AgentLoop 或 Orchestrator）      |
 | `use <路径>`                                                                                         | 进入工程模式（只读感知）；`use --write <路径>` 可写模式（改动前自动备份）    |
+| `help` / `?`                                                                                        | 命令表速查（一行式，10-07 新增）            |
 | `plan <需求>`                                                                                        | 只跑 Planner，看规划 JSON（不带模型执行）                      |
 | `orch <需求>`                                                                                        | 强制走 Orchestrator 编排路径                            |
 | `stats`                                                                                            | 任务指标汇总（成功率 / 失败类别 / 特征归因 / 时代隔离 / 可疑成功明细 / 工具拒绝） |
@@ -381,7 +382,7 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 
 4. **情况 A 工具循环无强制写 / 目标聚焦检查**：模型持续工具调用绕过强制写（批 5 记录，用户确认 "有依据才加"）。
 
-5. **run\_command 白名单无 grep**：模型想用 grep 被拒（已知，需时加）。
+5. **run_command 白名单已含 grep/Select-String（10-07 解决）**：模型可用正则检索工程内容，不再被迫全量 read_file。剩余白名单外命令仍拒（需要时再加 token + 测试）。
 
 6. **PS5.1 编码**：读无 BOM 文件按 GBK 乱码；写文件默认 UTF-16LE/ANSI—— 一律显式 `-Encoding utf8`（BOM 场景）或 `[IO.File]::WriteAllText`（无 BOM 场景）。
 

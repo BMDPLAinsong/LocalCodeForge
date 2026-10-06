@@ -22,7 +22,8 @@ public sealed class RunCommandTool : AgentToolBase
         "python", "python3", "pip", "pip3",
         "dotnet", "node", "npm", "npx",
         "git", "dir", "ls", "type", "cat",
-        "tree", "find", "findstr", "where"
+        "tree", "find", "findstr", "where",
+        "grep", "Select-String"
     };
 
     // 单次命令超时（秒）：普通模式 30s；工程模式放宽 90s（dotnet build 大工程 / 长测试常 >30s 被误杀）
@@ -45,7 +46,7 @@ public sealed class RunCommandTool : AgentToolBase
 
     /// <summary>工具描述。</summary>
     public override string Description =>
-        "在工作区内执行一条命令并返回输出。只允许白名单内的命令（python/pip/dotnet/node/npm/git/dir/ls/type/cat）。";
+        "在工作区内执行一条命令并返回输出。只允许白名单内的命令（python/pip/dotnet/node/npm/git/dir/ls/type/cat/find/findstr/where/grep/Select-String）。";
 
     /// <summary>参数 Schema。</summary>
     protected override string SchemaJson => """

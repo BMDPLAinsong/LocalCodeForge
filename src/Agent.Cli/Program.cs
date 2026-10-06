@@ -154,6 +154,8 @@ internal class Program
         _ = provider.GetRequiredService<IMetricsCollector>();
         // 【3A】显式解析 RoutingDecisionStore，触发 routing_decisions 表建表
         _ = provider.GetRequiredService<Agent.Infrastructure.Routing.RoutingDecisionStore>();
+        // 【C】路由决策表生命周期清理：启动时删除 90 天前明细（防无限增长；调权仅用近 10 条）
+        provider.GetRequiredService<Agent.Infrastructure.Routing.RoutingDecisionStore>().PruneOlderThan(90);
         // 【C】显式解析 ToolRejectionStore，触发 tool_rejections 表建表
         _ = provider.GetRequiredService<Agent.Infrastructure.Metrics.ToolRejectionStore>();
 
@@ -200,6 +202,16 @@ internal class Program
             {
                 sessionId = Guid.NewGuid().ToString("N");
                 renderer.System("[系统] 已开启新会话。");
+                continue;
+            }
+
+            // ═══════════ help 命令（命令表速查） ═══════════
+            if (input.Equals("help", StringComparison.OrdinalIgnoreCase) || input == "?")
+            {
+                renderer.System(
+                    "命令：use [--write] <路径>（工程模式/可写） | stats [failures|recent] | " +
+                    "memory [list [N]|stats|forget <topic>|prune|dedup] | rollback [--dry-run] | " +
+                    "plan <需求> | orch <需求> | new（新会话） | exit（退出） | help");
                 continue;
             }
 

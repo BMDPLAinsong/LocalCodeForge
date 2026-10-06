@@ -1,10 +1,9 @@
-﻿详细开发文档：新增 docs/DEVELOPER_DETAILED.md（410 行，15 章）
+﻿轻度优化批次：run_command 白名单补 grep + CLI help + routing_decisions 90 天清理 + 配置结构自检
 
-- 以任务输入→交付完整链路为主线，源码级逐步展开
-- 覆盖：CLI 主循环/AgentLoop ReAct/Orchestrator 三阶段逐步流程、
-  路由三层漏斗 + RoutingRules 8 规则全文 + 数据闭环调权算法、
-  10 工具 schema 与边界、工程感知 14 机制实现细节、
-  6 张数据表完整 schema、AgentOptions 全字段、law-unified Modelfile、
-  OutputVerifier/FailureCategorizer 信号词表全文、
-  12 条已知边界、调试速查、模块文件索引（关键方法级）
-- DEVELOPER.md 头部加一行指向详细版
+- A: RunCommandTool 白名单 +grep/Select-String（正则检索工程内容，Description 同步）
+- B: Program.cs 主循环 +help/? 命令（renderer.System 一行命令表）
+- C: RoutingDecisionStore.PruneOlderThan(days) + 启动接线（90 天前明细清理，防表无限增长）
+- D: tests +9 配置结构自检（RoutingRules.json 可解析/规则数/无重名/target/priority/type/regex 可编译/keywords）
+- E: 取消（memory list 已有默认 20 + N 参数）
+- 文档：HANDOVER 顶部批记录 + DEVELOPER/DEVELOPER_DETAILED 同步（命令表/测试数 459/边界5）
+- 验证：构建 0 错误；tests 459/459；CLI 冒烟 help 正常（Start-Process 文件重定向）

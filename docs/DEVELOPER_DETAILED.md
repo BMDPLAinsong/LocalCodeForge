@@ -115,6 +115,7 @@ SQLite 数据层（§9）：sessions/metrics/project_context/agent_memory/symbol
 | `plan <需求>` | 206 行 | 只跑 Planner 看规划 JSON |
 | `orch <需求>` | 248 行 | 强制走 Orchestrator |
 | `exit` / `new` | — | 退出 / 新会话 |
+| `help` / `?` | — | 命令表速查（一行式，10-07 新增） |
 | 其他文本 | 483 行 | 作为任务自动分发 |
 
 ### 3.3 自动分发（483-571 行，核心接线）
@@ -350,7 +351,7 @@ CompletionGate.Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFi
 | `write_file` | path, content | **写白名单**（WriteRoots=workspaceRoot ∪ projectRoot(工程可写)）；**P-D 类型冲突拦截**（新内容含工程已有类型名 → 拒绝 + 类型清单 + 动作指引）；P-D 熔断（同路径被拒≥2 次 → 强制 edit_file 指令）；工程可写自动备份 + MarkNewFile；.py 强制 HTTP timeout=8；项目名幻觉校验；tool_rejections 落库；explicitWriteRoots 临时授权并集 |
 | `edit_file` | path, old_string, new_string | 精确替换；old_string 未命中 → 查备份漂移诊断；P-D 拦截；备份；写白名单同 write_file |
 | `create_dir` | path | 建目录；写白名单同 write_file |
-| `run_command` | command | **白名单**：python/pip/dotnet/node/npm/git/dir/ls/type/cat（首 token 匹配）；**敏感路径源头拒**（命令串先展开环境变量 → 正则提取路径 token → IsDenied）；工程模式路径边界（..\ / 盘符绝对路径越界拒绝）；cwd=工程根（工程模式）；**超时双轨**（沙箱 30s / 工程 90s，工程模式自动放宽）；交互拦截（PyCodeGuard）；项目名幻觉校验（.csproj 名必须存在于工程根） |
+| `run_command` | command | **白名单**：python/pip/dotnet/node/npm/git/dir/ls/type/cat/find/findstr/where/grep/Select-String（首 token 匹配，含正则检索；10-07 补 grep）；**敏感路径源头拒**（命令串先展开环境变量 → 正则提取路径 token → IsDenied）；工程模式路径边界（..\ / 盘符绝对路径越界拒绝）；cwd=工程根（工程模式）；**超时双轨**（沙箱 30s / 工程 90s，工程模式自动放宽）；交互拦截（PyCodeGuard）；项目名幻觉校验（.csproj 名必须存在于工程根） |
 | `analyze_code` | path | 代码符号地图（class/方法/属性+行号，行级正则不进上下文）；支持大文件（200KB→5MB）；非代码文件降级提示 |
 | `find_symbol` | symbol | 符号定位（symbol_index.db）；**Find 前增量刷新**（mtime 对比只重扫变更文件）；命中返回 [文件:行号] + 操作指引（read_file offset 建议） |
 | `analyze_deps` | path | 文件依赖/反向依赖（改动影响面）；复用 symbol 索引 |
@@ -409,7 +410,7 @@ CompletionGate.Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFi
 | 库 | 表 | 完整字段 |
 | ---- | ---- | ---- |
 | sessions.db | task_metrics | task_id(PK)/session_id/user_input/mode/routing_tier/service_id/routing_reason/success/is_suspicious/retry_count/total_ms/planner_ms/executor_ms/validator_ms/lint_blocking_errors/lint_warning_errors/error_summary/failure_category/started_at/finished_at + 索引 (started_at DESC, success, failure_category)。旧库迁移：is_suspicious/failure_category 缺列 ALTER 补（**索引必须在 ALTER 之后建**，否则旧库 CREATE INDEX 引用不存在列报错） |
-| sessions.db | routing_decisions | id(AI PK)/session_id/user_input/feature/tier/service_id/reason/intent/input_len/created_at + 索引 (created_at DESC, service_id, feature) |
+| sessions.db | routing_decisions | id(AI PK)/session_id/user_input/feature/tier/service_id/reason/intent/input_len/created_at + 索引 (created_at DESC, service_id, feature)。**生命周期**：启动时 PruneOlderThan(90) 删除 90 天前明细（10-07 新增；调权仅用近 10 条，历史无统计价值） |
 | sessions.db | tool_rejections | tool/category/path/task_id/message(截断200)/created_at + 索引 (created_at, category)；类别 10 种：empty_content/interactive/out_of_bounds/project_file/pd_conflict/read_only/bad_args/not_found/drift/old_not_found/not_unique |
 | sessions.db | sessions/turns | 会话与对话历史 |
 | project_context.db | project_context | project_root(PK)/scan_version/overview/context_block/compact_block/file_count/dir_count/total_bytes/max_mtime_ticks/scanned_at（旧库补 compact_block 列） |
@@ -499,6 +500,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 ### 11.3 测试 harness（tests/Agent.Infrastructure.Tests/Program.cs，450 断言）
 
 - **零依赖**：`Check(name, cond)` 累加 pass/fail，末尾 `结果: N 通过 / M 失败` + 退出码。
+- **当前基线 459 断言**（10-07：+9 配置结构自检——RoutingRules.json 可解析/target 合法/无重名/priority>0/type 合法/regex 可编译/keywords 非空；防"重名死规则"回归，改规则表时坏配置在 tests 阶段即暴露）。
 - **反射调用**：`Assembly.Load("Agent.Infrastructure")` + MethodInfo 句柄（OutputVerifier 等静态方法）。
 - **直接引用**：Agent.Infrastructure.Project.PathBoundary 等类型直接调用（测试工程引用 Infrastructure）。
 - **测试临时根**：`workspace\test-tmp\<PID>`（启动时清理 >7 天旧目录，X 盘约定）。
@@ -526,7 +528,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 2. **30B Executor 增量修改纪律弱**：P-D 拦截消息附类型清单 + 动作指引后，模型仍可能整体重写 → P-D 恒定兜底，任务失败即回滚。ShippingService 类任务标注能力边界（E2E 3/4 基线）。
 3. **LLM HttpClient 600s 超时**：large 多轮累积可能超时（待方案调大）。
 4. **情况 A 工具循环无强制写/目标聚焦检查**：模型持续工具调用绕过强制写（用户确认「有依据才加」）。
-5. **run_command 白名单无 grep**：模型想用 grep 被拒（已知，需时加）。
+5. **run_command 白名单已含 grep/Select-String（10-07 解决）**：模型可用正则检索工程内容，不再被迫全量 read_file。剩余白名单外命令仍拒（需要时再加 token + 测试）。
 6. **PS5.1 编码**：读无 BOM 文件按 GBK 乱码；写文件默认 UTF-16LE/ANSI——一律显式 `-Encoding utf8`（BOM 场景）或 `[IO.File]::WriteAllText`（无 BOM 场景）。
 7. **构建 DLL 复制坑**：`dotnet build src\Agent.Cli` 只重建 CLI 自身，Infrastructure.dll 不会被复制更新 → **必须 `dotnet build LocalAiWorkbench.slnx --no-incremental`** 全量重建。
 8. **交互程序挂死**：.py input /.cs Console.ReadLine 写入即被 PyCodeGuard 拒绝——不要放宽（防 30s 挂死防线）。

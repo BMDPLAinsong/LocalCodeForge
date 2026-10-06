@@ -2367,5 +2367,65 @@ Console.WriteLine("== 只读工程组合边界（ReadOnlyGuard） ==");
     Directory.Delete(baseTmp, true);
 }
 
+Console.WriteLine("== 配置结构自检：RoutingRules.json ==");
+{
+    // RoutingRules.json 只复制到 Infrastructure 输出目录（tests 输出无），回溯仓库根读取源文件
+    var rulesJson = Path.Combine(
+        AppContext.BaseDirectory, "..", "..", "..", "..", "..",
+        "src", "Agent.Infrastructure", "Routing", "RoutingRules.json");
+    Check("RoutingRules.json 存在（仓库根回溯）", File.Exists(rulesJson));
+
+    List<RoutingRuleCheck>? rules = null;
+    if (File.Exists(rulesJson))
+    {
+        try
+        {
+            var root = JsonDocument.Parse(File.ReadAllText(rulesJson)).RootElement;
+            rules = JsonSerializer.Deserialize<List<RoutingRuleCheck>>(
+                root.GetProperty("rules").GetRawText(),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch
+        {
+            // 解析失败 → rules 保持 null，下方断言暴露
+        }
+    }
+    Check("JSON 可解析且含 rules 数组", rules is not null);
+    if (rules is not null)
+    {
+        Check("规则数 == 8（当前基线）", rules.Count == 8);
+        Check("target 全合法（small/agent_pro/large）",
+            rules.All(r => r.Target is "small" or "agent_pro" or "large"));
+        Check("无重名规则（防死规则回归）",
+            rules.Select(r => r.Name).Distinct().Count() == rules.Count);
+        Check("priority 全 > 0", rules.All(r => r.Priority > 0));
+        Check("type 全合法",
+            rules.All(r => r.Type is "regex" or "keyword_any" or "prefix_any"
+                or "length_min" or "length_max" or "length" or "after_failure"));
+        Check("regex 规则 Pattern 非空且可编译",
+            rules.Where(r => r.Type == "regex")
+                .All(r => !string.IsNullOrEmpty(r.Pattern) && TryCompileRegex(r.Pattern!)));
+        Check("keyword_any 规则 Keywords 非空",
+            rules.Where(r => r.Type == "keyword_any").All(r => r.Keywords is { Count: > 0 }));
+    }
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;
+
+static bool TryCompileRegex(string pattern)
+{
+    try { _ = new System.Text.RegularExpressions.Regex(pattern); return true; }
+    catch { return false; }
+}
+
+/// <summary>RoutingRules.json 单条规则的最小结构（RuleEngine.RuleDto 为 private，此处独立定义）。</summary>
+sealed class RoutingRuleCheck
+{
+    public string Name { get; set; } = "";
+    public string Type { get; set; } = "regex";
+    public string Target { get; set; } = "small";
+    public int Priority { get; set; }
+    public string? Pattern { get; set; }
+    public List<string>? Keywords { get; set; }
+}

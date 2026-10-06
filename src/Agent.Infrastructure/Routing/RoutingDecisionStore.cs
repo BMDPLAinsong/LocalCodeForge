@@ -98,9 +98,29 @@ public sealed class RoutingDecisionStore
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    /// <summary>聚合摘要：总数 + 按服务/特征类/层级分布（供 stats 展示）。</summary>
-    public async Task<RoutingDecisionSummary> GetSummaryAsync(CancellationToken ct)
+    /// <summary>
+    /// 清理早于指定天数的路由决策明细（防表无限增长；调权仅用近 10 条，历史无统计价值）。
+    /// 失败静默（不影响启动主流程）。
+    /// </summary>
+    public void PruneOlderThan(int days)
     {
+        try
+        {
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM routing_decisions WHERE created_at < $cutoff";
+            cmd.Parameters.AddWithValue("$cutoff", DateTimeOffset.UtcNow.AddDays(-days).ToUnixTimeSeconds());
+            cmd.ExecuteNonQuery();
+        }
+        catch
+        {
+            // 清理失败静默（不阻塞启动）
+        }
+    }
+
+    /// <summary>聚合摘要：总数 + 按服务/特征类/层级分布（供 stats 展示）。</summary>
+    public async Task<RoutingDecisionSummary> GetSummaryAsync(CancellationToken ct)    {
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
 
