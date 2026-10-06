@@ -119,7 +119,7 @@ public sealed class ModelRouter : IModelRouter
                     return d;
                 }
 
-                _logger.LogDebug("保持 large：{Reason}", reason);
+                _logger.LogDebug("保持 large：{Reason}", reason ?? "条件不满足（样本不足/耗时不占优）");
             }
             catch (Exception ex)
             {
@@ -164,7 +164,7 @@ public sealed class ModelRouter : IModelRouter
                         return d;
                     }
 
-                    _logger.LogDebug("读任务保持 small：{Reason}", readReason);
+                    _logger.LogDebug("读任务保持 small：{Reason}", readReason ?? "条件不满足（样本不足/成功率达标）");
                 }
                 catch (Exception ex)
                 {
@@ -236,7 +236,7 @@ public sealed class ModelRouter : IModelRouter
                 }
                 else
                 {
-                    _logger.LogDebug("ComplexReason 保持 agent_pro：{Reason}", dropReason);
+                    _logger.LogDebug("ComplexReason 保持 agent_pro：{Reason}", dropReason ?? "条件不满足（样本不足/成功率达标）");
                 }
             }
             catch (Exception ex)
@@ -250,7 +250,7 @@ public sealed class ModelRouter : IModelRouter
     "[L3-分发] {Intent} → {ServiceId}{Extra}",
             intent,
             serviceId,
-            serviceId == RoutingDecision.AgentPro ? " (AgentPro/本地4B)" : "");
+            serviceId == RoutingDecision.AgentPro ? " (AgentPro/30B)" : "");
 
         // 返回决策，携带意图信息
         var finalD = new RoutingDecision(
