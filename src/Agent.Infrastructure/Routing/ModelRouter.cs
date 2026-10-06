@@ -21,6 +21,13 @@ public sealed class ModelRouter : IModelRouter
     private readonly IMetricsCollector _metrics;   // ← 数据闭环：历史表现回流
     private readonly RoutingDecisionStore _decisions;   // ← 3A：路由决策落库（调权数据地基）
 
+    /// <summary>L0 查询词（只走 small，跳过规则与分类器；词表单处维护）。</summary>
+    private static readonly string[] QueryKeywords =
+    {
+        "看看", "查看", "看一下", "列出", "显示", "有哪些文件", "什么文件"
+        // 删掉 "读一下"、"这个文件" 等，让它们走正常流程
+    };
+
     /// <summary>构造函数。</summary>
     public ModelRouter(
         IRuleEngine rules,
@@ -70,14 +77,8 @@ public sealed class ModelRouter : IModelRouter
     public async Task<RoutingDecision> RouteAsync(RoutingContext context, CancellationToken ct)
     {
 
-        // 【新增】查询类任务直接走 Small，跳过所有规则和分类器
-        var queryKeywords = new[]
-     {
-    "看看", "查看", "看一下", "列出", "显示", "有哪些文件", "什么文件"
-    // 删掉 "读一下"、"这个文件" 等，让它们走正常流程
-};
-
-        if (queryKeywords.Any(k => context.UserInput.Contains(k, StringComparison.OrdinalIgnoreCase)))
+        // 【L0-查询】查询类任务直接走 Small，跳过所有规则和分类器
+        if (QueryKeywords.Any(k => context.UserInput.Contains(k, StringComparison.OrdinalIgnoreCase)))
         {
             _logger.LogInformation("[L0-查询] 命中查询词，直接走本地 small");
             var d = new RoutingDecision(
@@ -253,6 +254,9 @@ public sealed class ModelRouter : IModelRouter
             serviceId == RoutingDecision.AgentPro ? " (AgentPro/30B)" : "");
 
         // 返回决策，携带意图信息
+        // 注意：RoutingTier.SmallModel 在此仅表示"L3 意图分发层"（层标记），
+        // 不代表模型规模——实际角色由 serviceId 决定（agent_pro 的 L3 记录也是此 tier，
+        // 调权查询按 serviceId + SmallModel 区分，勿误读为 small 模型数据）。
         var finalD = new RoutingDecision(
             serviceId,
             RoutingTier.SmallModel,
