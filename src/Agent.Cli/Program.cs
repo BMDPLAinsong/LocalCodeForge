@@ -150,6 +150,8 @@ internal class Program
         // ─────────── 构建 DI 容器 ───────────
         var services = new ServiceCollection();
         services.AddAgent(options, workspace, dbPath, options.ProjectRoot);
+        // 【10-07 Dashboard】事件多播总线（跨任务单例）：渲染器直接消费不变，Dashboard SSE 是第二消费者
+        services.AddSingleton<Agent.Infrastructure.Events.TaskEventHub>();
         var provider = services.BuildServiceProvider();
         // 【关键】启动时显式解析 IMetricsCollector，触发 SQLite 建表
         // 否则 Singleton 工厂不会被调用，metrics.db 不会创建
@@ -160,6 +162,8 @@ internal class Program
         provider.GetRequiredService<Agent.Infrastructure.Routing.RoutingDecisionStore>().PruneOlderThan(90);
         // 【C】显式解析 ToolRejectionStore，触发 tool_rejections 表建表
         _ = provider.GetRequiredService<Agent.Infrastructure.Metrics.ToolRejectionStore>();
+        // 【10-07 Dashboard】事件总线显式解析（主容器单例，任务循环旁路发布 + SSE 订阅）
+        var eventHub = provider.GetRequiredService<Agent.Infrastructure.Events.TaskEventHub>();
 
         // 【D2】启动时加载任务特征类历史聚合（路由数据校准 + stats 归因）
         var featureAggregator = provider.GetRequiredService<Agent.Infrastructure.Routing.TaskMetricsAggregator>();
@@ -213,6 +217,9 @@ internal class Program
                     if (evt is AgentEvent.ToolCall) step++;
                     if (sp is not null) sp.TaskPrefix = $"[{step}步|{svc}|{sw.Elapsed.TotalSeconds:0}s]";
                     await renderer.RenderEventAsync(evt);
+                    // 【10-07 Dashboard】旁路多播：渲染器直接消费不变，hub 是第二消费者
+                    // （SSE 订阅者浏览器后台/JS 卡住时 DropOldest 丢最旧，绝不阻塞任务）
+                    eventHub.Publish(evt);
                 }
             }
             catch (OperationCanceledException)
@@ -236,6 +243,8 @@ internal class Program
         }
 
         // ─────────── 主循环 ───────────
+        // 【10-07 Dashboard】已启动的 dashboard URL（幂等：重复 dashboard 命令只提示不重启）
+        string? dashboardUrl = null;
         while (true)
         {
             renderer.Prompt();
@@ -328,6 +337,31 @@ internal class Program
                 continue;
             }
             // ═══════════ Orchestrator 测试结束 ═══════════
+
+            // ═══════════ dashboard 命令（10-07 真 UI 层·本地 Web Dashboard） ═══════════
+            // 后台启动 Kestrel（127.0.0.1 随机端口，仅本机回环无认证）→ 打印 URL → 不阻塞主循环，
+            // 任务照常执行、浏览器实时看。SSE 只覆盖当前任务；历史走 /api/tasks；Diff 复用引擎模型。
+            if (input.Equals("dashboard", StringComparison.OrdinalIgnoreCase))
+            {
+                // 无头守卫：管道/重定向模式下直接提示（不启动 Kestrel）——保护 E2E 输出逐字节兼容
+                if (Console.IsInputRedirected || Console.IsOutputRedirected)
+                {
+                    Console.WriteLine("dashboard 需交互终端（当前为管道/重定向模式）。");
+                    continue;
+                }
+                if (dashboardUrl is not null)
+                {
+                    Console.WriteLine($"Dashboard 已在运行：{dashboardUrl}（浏览器打开即可查看；Ctrl+C 退出 CLI 时停止）");
+                    continue;
+                }
+                var (url, _) = await Agent.Dashboard.DashboardHost.StartAsync(
+                    new Agent.Dashboard.DashboardOptions(workspace, options.ProjectRoot, options.LawUnifiedEpoch,
+                        provider.GetRequiredService<IMetricsCollector>(), eventHub),
+                    CancellationToken.None);
+                dashboardUrl = url;
+                renderer.Notice($"Dashboard 已启动（仅本机回环）：{url}\n  浏览器打开查看：任务实时流 / stats / 历史任务 / 备份 Diff");
+                continue;
+            }
 
             // ═══════════ stats 命令 ═══════════
             if (input.StartsWith("stats", StringComparison.OrdinalIgnoreCase))
@@ -463,6 +497,44 @@ internal class Program
                 Agent.Infrastructure.Project.ProjectPathDetector.TryGetAutoUsePath(trimmedInput, out var autoProjectPath))
             {
                 ApplyUse(provider, options, autoProjectPath, writeFlag: false, autoSource: trimmedInput);
+            }
+
+            // ═══════════ diff 命令（10-07，Diff 引擎终端通道） ═══════════
+            // diff [taskId]：显示该任务在工程内的备份 vs 当前文件的行级差异（unified hunk 红绿渲染）。
+            // 无 taskId → 最近任务；非工程模式 → 提示。Web Dashboard 的 /api/diff 复用同一引擎（无 DTO）。
+            if (input.Equals("diff", StringComparison.OrdinalIgnoreCase)
+                || input.StartsWith("diff ", StringComparison.OrdinalIgnoreCase))
+            {
+                if (options.ProjectRoot is null)
+                {
+                    Console.WriteLine("diff 需要工程模式（use <路径> 后可用，显示工程改动备份差异）。");
+                    continue;
+                }
+                var diffTaskId = input.Length > 5 ? input[5..].Trim() : lastTaskId;
+                if (string.IsNullOrEmpty(diffTaskId))
+                {
+                    Console.WriteLine("暂无最近任务，无法 diff。");
+                    continue;
+                }
+                var diffBackups = BackupService.ListBackups(workspace)
+                    .Where(b => string.Equals(b.TaskId, diffTaskId, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (diffBackups.Count == 0)
+                {
+                    Console.WriteLine($"任务 {diffTaskId} 没有备份（未改工程文件，或备份已按 8 任务上限清理）。");
+                    continue;
+                }
+                foreach (var b in diffBackups)
+                {
+                    var currentPath = Path.Combine(options.ProjectRoot, b.Rel);
+                    var result = Agent.Infrastructure.Diff.FileDiffService.Compute(b.Full, currentPath);
+                    Console.WriteLine($"[diff] {b.Rel}（task {b.TaskId} @{b.Stamp}）");
+                    if (renderer is Agent.Infrastructure.Rendering.SpectreRenderer spr)
+                        spr.DiffBlock(result);
+                    else
+                        Console.WriteLine(Agent.Infrastructure.Diff.PlainDiffFormatter.Format(result));
+                }
+                continue;
             }
 
             // ═══════════ rollback 命令（工程感知 P1） ═══════════

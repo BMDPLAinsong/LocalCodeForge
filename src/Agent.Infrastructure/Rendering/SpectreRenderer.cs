@@ -142,6 +142,47 @@ public sealed class SpectreRenderer : RendererBase
         Console.WriteLine();
     }
 
+    /// <summary>diff 红绿渲染（10-07，diff 命令）：unified hunk 头黄、删除行红、新增行绿、上下文灰。</summary>
+    public void DiffBlock(Agent.Infrastructure.Diff.DiffResult result)
+    {
+        if (result.TooLarge)
+        {
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(result.TooLargeReason ?? "文件过大，diff 不支持")}[/]");
+            return;
+        }
+        if (result.Hunks.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[grey]无差异[/]");
+            return;
+        }
+        foreach (var h in result.Hunks)
+        {
+            AnsiConsole.MarkupLine($"[yellow]@@ -{h.OldStart},{h.OldCount} +{h.NewStart},{h.NewCount} @@[/]");
+            foreach (var ln in h.Lines)
+            {
+                var sign = ln.Type switch
+                {
+                    Agent.Infrastructure.Diff.DiffLineType.Add => "+",
+                    Agent.Infrastructure.Diff.DiffLineType.Remove => "-",
+                    _ => " "
+                };
+                var color = ln.Type switch
+                {
+                    Agent.Infrastructure.Diff.DiffLineType.Add => "green",
+                    Agent.Infrastructure.Diff.DiffLineType.Remove => "red",
+                    _ => "grey"
+                };
+                var num = ln.Type switch
+                {
+                    Agent.Infrastructure.Diff.DiffLineType.Add => ln.NewNo.ToString(),
+                    Agent.Infrastructure.Diff.DiffLineType.Remove => ln.OldNo.ToString(),
+                    _ => $"{ln.OldNo} {ln.NewNo}"
+                };
+                AnsiConsole.MarkupLine($"[{color}]{sign} {num}| {Markup.Escape(ln.Text)}[/]");
+            }
+        }
+    }
+
     /// <summary>rollback 备份列表 Table（交互态）</summary>
     public void BackupTable(string title, IReadOnlyList<(string TaskId, string Stamp, string Rel)> rows)
     {

@@ -1,0 +1,140 @@
+// ============================================================
+// Agent.Dashboard / DashboardHost.cs
+// 真 UI 层：本地 Web Dashboard（10-07）。
+//   · Kestrel 127.0.0.1 随机端口（仅本机回环，无认证）；随 CLI 进程生命周期。
+//   · 旁路消费：TaskEventHub 多播（渲染器直接消费不变，本宿主是第二消费者）。
+//   · SSE /events 只覆盖当前任务（事件流实时）；历史任务走 /api/tasks 轮询，前端按 taskId 分组。
+//   · /api/diff 直接序列化 FileDiffService.DiffResult（Hunks+Lines），不设 DTO——diff 语义单一来源在引擎。
+//   · index.html 为 EmbeddedResource，GET / 直接读流返回（零静态文件根配置）。
+//   · 无头守卫在 CLI 侧（重定向输入/输出时不启动本宿主）——保护 E2E 输出逐字节兼容。
+// ============================================================
+using System.Reflection;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading.Channels;
+using Agent.Core.Models;
+using Agent.Infrastructure.Diff;
+using Agent.Infrastructure.Events;
+using Agent.Infrastructure.Metrics;
+using Agent.Infrastructure.Project;
+
+namespace Agent.Dashboard;
+
+/// <summary>Dashboard 宿主依赖（由 CLI 组装传入，宿主不碰 Console——可测）。</summary>
+public sealed record DashboardOptions(
+    string WorkspaceRoot,
+    string? ProjectRoot,
+    DateTimeOffset? LawUnifiedEpoch,
+    IMetricsCollector Metrics,
+    TaskEventHub Hub);
+
+public static class DashboardHost
+{
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
+
+    // 持有当前宿主引用：StartAsync 返回后 Kestrel 依赖 app 对象存活（防 GC 停止服务）
+    private static WebApplication? _running;
+
+    /// <summary>启动 Kestrel（127.0.0.1:0 随机端口）。返回 (实际 URL, 停止委托)——Stop() 调用时才停服
+    /// （app.StopAsync() 调用即开始执行，若直接返回其 Task 会在 StartAsync 返回后立刻关闭服务器）。</summary>
+    public static async Task<(string Url, Func<Task> Stop)> StartAsync(DashboardOptions options, CancellationToken ct)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        var app = builder.Build();
+        _running = app;
+        MapEndpoints(app, options);
+        await app.StartAsync(ct);
+        var addr = app.Urls.FirstOrDefault() ?? "http://127.0.0.1:0";
+        return (addr, () => app.StopAsync());
+    }
+
+    private static void MapEndpoints(WebApplication app, DashboardOptions o)
+    {
+        // ── 单页 ──
+        app.MapGet("/", () => Results.Text(ReadEmbeddedPage(), "text/html; charset=utf-8"));
+
+        // ── 统计面板（成功率/耗时/时代隔离/失败类别）──
+        app.MapGet("/api/stats", async (CancellationToken ct) =>
+        {
+            var summary = await o.Metrics.GetSummaryAsync(null, ct);
+            var failures = await o.Metrics.GetFailureBreakdownAsync(ct);
+            EpochBreakdown? epoch = null;
+            if (o.LawUnifiedEpoch is { } e)
+            {
+                var (cur, legacy) = await o.Metrics.GetEpochBreakdownAsync("agent_pro", e, ct);
+                epoch = new EpochBreakdown(cur, legacy);
+            }
+            return Results.Json(new { summary, failures, epoch }, JsonOpts);
+        });
+
+        // ── 历史任务（轮询；SSE 只推当前任务）──
+        app.MapGet("/api/tasks", async (int take, CancellationToken ct) =>
+        {
+            take = take is >= 1 and <= 200 ? take : 50;
+            var tasks = await o.Metrics.GetRecentAsync(take, ct);
+            return Results.Json(tasks, JsonOpts);
+        });
+
+        // ── 备份列表（Diff 数据源定位）──
+        app.MapGet("/api/backups", () => Results.Json(BackupService.ListBackups(o.WorkspaceRoot), JsonOpts));
+
+        // ── Diff：备份 vs 当前（直接序列化引擎模型，无 DTO）──
+        app.MapGet("/api/diff", (string taskId, string rel, CancellationToken ct) =>
+        {
+            if (o.ProjectRoot is null)
+                return Results.BadRequest(new { error = "未设置工程根，diff 不可用。" });
+            (string TaskId, string Stamp, string Rel, string Full)? backup = null;
+            foreach (var b in BackupService.ListBackups(o.WorkspaceRoot))
+            {
+                if (string.Equals(b.TaskId, taskId, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(b.Rel, rel, StringComparison.OrdinalIgnoreCase))
+                {
+                    backup = b;
+                    break;
+                }
+            }
+            if (backup is null)
+                return Results.NotFound(new { error = $"任务 {taskId} 无文件 {rel} 的备份。" });
+            var current = Path.Combine(o.ProjectRoot, backup.Value.Rel);
+            var result = FileDiffService.Compute(backup.Value.Full, current);
+            return Results.Json(result, JsonOpts);
+        });
+
+        // ── SSE：当前任务实时事件流（每订阅者 BoundedChannel 1000 DropOldest）──
+        app.MapGet("/events", async (HttpContext ctx, CancellationToken ct) =>
+        {
+            ctx.Response.Headers.ContentType = "text/event-stream";
+            ctx.Response.Headers.CacheControl = "no-cache";
+            ctx.Response.Headers.Connection = "keep-alive";
+            var (reader, handle) = o.Hub.Subscribe();
+            using (handle)
+            {
+                await foreach (var evt in reader.ReadAllAsync(ct))
+                {
+                    var json = JsonSerializer.Serialize(evt, evt.GetType(), JsonOpts);
+                    await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
+                    await ctx.Response.Body.FlushAsync(ct);
+                }
+            }
+        });
+    }
+
+    private static string ReadEmbeddedPage()
+    {
+        var asm = Assembly.GetExecutingAssembly();
+        using var stream = asm.GetManifestResourceStream("Agent.Dashboard.Pages.index.html")
+            ?? throw new InvalidOperationException("嵌入资源 Agent.Dashboard.Pages.index.html 缺失");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    private sealed record EpochBreakdown(
+        Agent.Infrastructure.Routing.ServiceStats Current,
+        Agent.Infrastructure.Routing.ServiceStats Legacy);
+}

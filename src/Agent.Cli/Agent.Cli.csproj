@@ -2,7 +2,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Agent.Core\Agent.Core.csproj" />
+    <ProjectReference Include="..\Agent.Dashboard\Agent.Dashboard.csproj" />
     <ProjectReference Include="..\Agent.Infrastructure\Agent.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <!-- DashboardHost 使用 WebApplication（Minimal API）→ Cli 需 AspNetCore 框架引用（Web SDK 的 FrameworkReference 不自动传递） -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <PropertyGroup>

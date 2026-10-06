@@ -8,7 +8,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Agent.Dashboard\Agent.Dashboard.csproj" />
     <ProjectReference Include="..\..\src\Agent.Infrastructure\Agent.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <!-- DashboardHost 冒烟（tests 直接起 Kestrel → HttpClient 拉 API）需 AspNetCore 框架引用 -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
 </Project>

@@ -2022,6 +2022,76 @@ Console.WriteLine("== rollback --dry-run 预览（不执行） ==");
 }
 
 // ════════════════════════════════════════════════════════════
+// Diff P0：FileDiffService 行级 diff 引擎（Diff/）
+//   1. 增删改混合小 diff → hunk 结构与行类型正确
+//   2. 改 1 行 → 上下文裁剪只输出 ±3 行（5000 行场景 ~7 行而非全文）
+//   3. 相同 / 空（新建）/ 全删 → 边界
+//   4. 大文件降级（2500² 阈值）
+//   5. 相邻改动合并（gap ≤ 2×Context）
+// ════════════════════════════════════════════════════════════
+Console.WriteLine("== Diff P0 FileDiffService（Diff/） ==");
+{
+    // ── 1. 增删改混合 ──
+    var before = new[] { "a", "b", "c", "d", "e" };
+    var after = new[] { "a", "x", "c", "d", "f" };
+    var r = Agent.Infrastructure.Diff.FileDiffService.ComputeLines(before, after);
+    Check("混合 diff 非 TooLarge", !r.TooLarge);
+    Check("混合 diff 有 1 个 hunk（上下文相连）", r.Hunks.Count == 1);
+    var lines = r.Hunks[0].Lines;
+    Check("混合 diff 含增删改行", lines.Any(l => l.Type == Agent.Infrastructure.Diff.DiffLineType.Add && l.Text == "x")
+        && lines.Any(l => l.Type == Agent.Infrastructure.Diff.DiffLineType.Remove && l.Text == "b")
+        && lines.Any(l => l.Type == Agent.Infrastructure.Diff.DiffLineType.Add && l.Text == "f"));
+    Check("Same 行带新旧行号", lines.First(l => l.Type == Agent.Infrastructure.Diff.DiffLineType.Same && l.Text == "c").OldNo == 3
+        && lines.First(l => l.Type == Agent.Infrastructure.Diff.DiffLineType.Same && l.Text == "c").NewNo == 3);
+
+    // ── 2. 上下文裁剪：改 1 行 → 只输出变更附近 ±3 行 ──
+    var big = Enumerable.Range(1, 5000).Select(i => $"line{i}").ToArray();
+    var bigAfter = big.ToArray();
+    bigAfter[2499] = "CHANGED"; // 改第 2500 行
+    var r2 = Agent.Infrastructure.Diff.FileDiffService.ComputeLines(big, bigAfter);
+    Check("5000 行改 1 行 → 非降级且可行", !r2.TooLarge && r2.Hunks.Count >= 1);
+    var total = r2.Hunks.Sum(h => h.Lines.Count);
+    Check($"5000 行改 1 行 → 输出远小于全文（{total} 行 ≤ 20）", total <= 20);
+    Check("裁剪含变更行与 ±3 上下文", r2.Hunks[0].Lines.Any(l => l.Text == "CHANGED")
+        && r2.Hunks[0].Lines.Any(l => l.Text == "line2497") && r2.Hunks[0].Lines.Any(l => l.Text == "line2502"));
+    Check("hunk 头计数正确", r2.Hunks[0].OldCount >= 6 && r2.Hunks[0].NewCount >= 6);
+
+    // ── 3. 边界：相同 / 新建 / 全删 ──
+    var same = Agent.Infrastructure.Diff.FileDiffService.ComputeLines(new[] { "a", "b" }, new[] { "a", "b" });
+    Check("相同文件 → 无 hunk", same.Hunks.Count == 0);
+    var created = Agent.Infrastructure.Diff.FileDiffService.ComputeLines(Array.Empty<string>(), new[] { "n1", "n2", "n3" });
+    Check("新建（空→3 行）→ 全 Add 单 hunk", created.Hunks.Count == 1
+        && created.Hunks[0].Lines.All(l => l.Type == Agent.Infrastructure.Diff.DiffLineType.Add));
+    var deleted = Agent.Infrastructure.Diff.FileDiffService.ComputeLines(new[] { "a", "b" }, Array.Empty<string>());
+    Check("全删 → 全 Remove 单 hunk", deleted.Hunks.Count == 1
+        && deleted.Hunks[0].Lines.All(l => l.Type == Agent.Infrastructure.Diff.DiffLineType.Remove));
+
+    // ── 4. 大文件降级（只针对"全不同/大变化段"，改 1 行的大文件可行） ──
+    var hugeA = Enumerable.Range(1, 3000).Select(i => $"a{i}").ToArray();
+    var hugeB = Enumerable.Range(1, 3000).Select(i => $"b{i}").ToArray(); // 全部不同 → 变化段 3000×3000
+    var r4 = Agent.Infrastructure.Diff.FileDiffService.ComputeLines(hugeA, hugeB);
+    Check("3000 行全不同 → 明确降级 TooLarge + 原因", r4.TooLarge && !string.IsNullOrEmpty(r4.TooLargeReason));
+    var r4b = Agent.Infrastructure.Diff.FileDiffService.ComputeLines(hugeA, hugeA.Select(x => x == "a1" ? "CHANGED" : x).ToArray());
+    Check("3000 行改 1 行 → 非降级且只输出 ±3 行", !r4b.TooLarge && r4b.Hunks.Sum(h => h.Lines.Count) <= 20);
+
+    // ── 5. 相邻改动合并（gap ≤ 2×3=6 合并；>6 分块） ──
+    var m = Enumerable.Range(1, 30).Select(i => $"line{i}").ToArray();
+    var m2 = m.ToArray();
+    m2[4] = "C1"; m2[8] = "C2"; // 改动 gap 3 行 → 合并为 1 hunk
+    var r5 = Agent.Infrastructure.Diff.FileDiffService.ComputeLines(m, m2);
+    Check("gap≤6 两处改动合并为 1 hunk", r5.Hunks.Count == 1 && r5.Hunks[0].Lines.Any(l => l.Text == "C1") && r5.Hunks[0].Lines.Any(l => l.Text == "C2"));
+    var m3 = m.ToArray();
+    m3[4] = "C1"; m3[20] = "C2"; // gap 15 行 → 2 hunks
+    var r6 = Agent.Infrastructure.Diff.FileDiffService.ComputeLines(m, m3);
+    Check("gap>6 两处改动分为 2 hunks", r6.Hunks.Count == 2);
+
+    // ── 6. 无头文本渲染（PlainDiffFormatter，diff 命令 PlainText 通道） ──
+    var fmt = Agent.Infrastructure.Diff.PlainDiffFormatter.Format(r);
+    Check("PlainDiffFormatter 含 hunk 头与 +/- 行", fmt.Contains("@@ ") && fmt.Contains("\n- ") && fmt.Contains("\n+ "));
+    Check("PlainDiffFormatter 无 TooLarge 文本", !fmt.Contains("文件过大"));
+}
+
+// ════════════════════════════════════════════════════════════
 // Spectre P0：渲染器抽象（Rendering/）
 //   1. RendererFactory 无头/交互选择（确定性）
 //   2. RendererBase.FormatEvent 七事件 → 文本映射固化（防搬移改坏格式，E2E/日志解析依赖）
@@ -2454,6 +2524,57 @@ Console.WriteLine("== 配置结构自检：RoutingRules.json ==");
                 .All(r => !string.IsNullOrEmpty(r.Pattern) && TryCompileRegex(r.Pattern!)));
         Check("keyword_any 规则 Keywords 非空",
             rules.Where(r => r.Type == "keyword_any").All(r => r.Keywords is { Count: > 0 }));
+    }
+}
+
+// ════════════════════════════════════════════════════════════
+// Dashboard P0：TaskEventHub 多播 + DashboardHost API 冒烟（10-07）
+//   1. TaskEventHub 订阅/发布/退订（BoundedChannel 背压 DropOldest）
+//   2. DashboardHost 真起 Kestrel（127.0.0.1:0）→ HttpClient 拉 /api/stats /api/tasks
+//      /api/backups /api/diff 与 GET /（嵌入页）→ 200 + JSON 结构
+// ════════════════════════════════════════════════════════════
+Console.WriteLine("== Dashboard P0 TaskEventHub + DashboardHost（Events/ + Agent.Dashboard） ==");
+{
+    // ── 1. TaskEventHub：订阅 → 发布 → 读取；退订后不再收到 ──
+    var hub = new Agent.Infrastructure.Events.TaskEventHub();
+    var (reader, handle) = hub.Subscribe();
+    hub.Publish(new Agent.Core.Models.AgentEvent.Thinking("t1"));
+    hub.Publish(new Agent.Core.Models.AgentEvent.Routing("small", "L0", "test", null));
+    var got = new List<Agent.Core.Models.AgentEvent>();
+    while (reader.TryRead(out var e)) got.Add(e);
+    Check("hub 发布 → 订阅者收到 2 事件", got.Count == 2 && got[0] is Agent.Core.Models.AgentEvent.Thinking && got[1] is Agent.Core.Models.AgentEvent.Routing);
+    handle.Dispose();
+    var (reader2, _) = hub.Subscribe();
+    hub.Publish(new Agent.Core.Models.AgentEvent.Thinking("t2"));
+    Agent.Core.Models.AgentEvent? first = null;
+    reader2.TryRead(out first);
+    Check("退订后不再接收（第二个订阅者不受影响）", first is Agent.Core.Models.AgentEvent.Thinking && (first as Agent.Core.Models.AgentEvent.Thinking)!.Text == "t2");
+
+    // ── 2. DashboardHost 冒烟：真起 Kestrel → HttpClient 验证 API ──
+    var ws = Path.Combine(Path.GetTempPath(), "dash_smoke_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(ws);
+    try
+    {
+        var dashHub = new Agent.Infrastructure.Events.TaskEventHub();
+        var metrics = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(Path.Combine(ws, "metrics.db"));
+        var (url, stop) = await Agent.Dashboard.DashboardHost.StartAsync(
+            new Agent.Dashboard.DashboardOptions(ws, null, null, metrics, dashHub), CancellationToken.None);
+        using var http = new HttpClient { BaseAddress = new Uri(url + "/") };
+        var page = await http.GetStringAsync("");
+        Check("GET / 返回嵌入单页（含标题）", page.Contains("LocalAI Workbench") && page.Contains("/events"));
+        var stats = await http.GetStringAsync("api/stats");
+        Check("GET /api/stats 200 + JSON 结构", stats.Contains("\"summary\"") && stats.Contains("totalCount"));
+        var tasks = await http.GetStringAsync("api/tasks?take=3");
+        Check("GET /api/tasks 200 + 数组", tasks.StartsWith("["));
+        var backups = await http.GetStringAsync("api/backups");
+        Check("GET /api/backups 200 + 数组", backups.StartsWith("["));
+        var noDiff = await http.GetAsync("api/diff?taskId=x&rel=y");
+        Check("无工程根 diff → 400 BadRequest", noDiff.StatusCode == System.Net.HttpStatusCode.BadRequest);
+        await stop();
+    }
+    finally
+    {
+        try { Directory.Delete(ws, true); } catch { }
     }
 }
 

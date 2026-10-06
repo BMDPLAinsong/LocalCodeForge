@@ -36,13 +36,14 @@
 | 项目 | 职责 | 依赖 |
 | ---- | ---- | ---- |
 | `src/Agent.Core` | 抽象接口（IAgentLoop/IAgentTool/IToolRegistry/ISessionStore）+ 纯模型（AgentOptions/AgentEvent/Plan/TaskMetric/SystemPrompt 等），零依赖 | 无 |
-| `src/Agent.Infrastructure` | **全部实现**：AgentLoop、Orchestration、Routing、Project、Tools、Metrics、Memory、Quality、Session、Rendering | Core + SK + Sqlite |
-| `src/Agent.Cli` | 控制台入口：交互循环、命令分发、事件渲染、健康检查、run 目录清理、任务归档 | Core + Infrastructure |
+| `src/Agent.Infrastructure` | **全部实现**：AgentLoop、Orchestration、Routing、Project、Tools、Metrics、Memory、Quality、Session、Rendering、**Events（TaskEventHub）**、**Diff（FileDiffService）** | Core + SK + Sqlite |
+| `src/Agent.Cli` | 控制台入口：交互循环、命令分发、事件渲染、健康检查、run 目录清理、任务归档 | Core + Infrastructure + **Dashboard**（+ AspNetCore FrameworkReference） |
+| `src/Agent.Dashboard` | **真 UI 层（10-07 新增）**：本地 Web Dashboard——Kestrel 127.0.0.1 随机端口、EmbeddedResource 单页、/api/stats·/api/tasks·/api/backups·/api/diff·/events(SSE) | Infrastructure（+ AspNetCore App，Web SDK 自带） |
 
 ### 1.2 源码规模（改哪里先看这里）
 
 ```
-Agent.Cli/Program.cs                    1104 行   CLI 主循环 + 命令分发 + 归档 + 回滚
+Agent.Cli/Program.cs                    1104+ 行  CLI 主循环 + 命令分发 + 归档 + 回滚 + dashboard/diff 命令
 Agent.Infrastructure/AgentLoop.cs       1129 行   ReAct 主循环 + 防线全家桶
 Agent.Infrastructure/Orchestration/Orchestrator.cs    1046 行   三阶段编排
 Agent.Infrastructure/Orchestration/PlannerService.cs   678 行   Plan JSON 生成
@@ -53,6 +54,10 @@ Agent.Infrastructure/Metrics/SqliteMetricsCollector.cs 379 行   指标三表
 Agent.Infrastructure/Tools/WriteFileTool.cs            368 行   写工具（P-D/白名单/备份）
 Agent.Infrastructure/Tools/RunCommandTool.cs           344 行   命令工具（白名单/敏感拒/超时）
 Agent.Infrastructure/Quality/OutputVerifier.cs         302 行   输出判定单一来源
+Agent.Infrastructure/Diff/FileDiffService.cs           260 行   行级 Diff 引擎（零第三方依赖）
+Agent.Dashboard/DashboardHost.cs                       ~150 行   Kestrel 宿主 + 5 API + SSE
+Agent.Dashboard/DashboardPages/index.html              ~330 行   单页（纯 CSS/JS 零外网）
+Agent.Infrastructure/Events/TaskEventHub.cs            ~70 行   事件多播总线（BoundedChannel 背压）
 其余各文件 <260 行
 ```
 
@@ -116,6 +121,8 @@ SQLite 数据层（§9）：sessions/metrics/project_context/agent_memory/symbol
 | `orch <需求>` | 248 行 | 强制走 Orchestrator |
 | `exit` / `new` | — | 退出 / 新会话 |
 | `help` / `?` | — | 命令表速查（一行式，10-07 新增） |
+| `diff [taskId]` | 主循环 | 工程模式：备份 vs 当前的行级 Diff（无参=最近任务；红绿渲染 / PlainDiffFormatter 无头通道；无备份提示含 8 上限清理说明） |
+| `dashboard` | 主循环 | 真 UI 层：启动本地 Web Dashboard（127.0.0.1 随机端口）；幂等（重复只提示 URL）；**无头守卫**——管道/重定向模式不启动 Kestrel，提示"需交互终端"（保护 E2E 输出） |
 | 其他文本 | 483 行 | 作为任务自动分发 |
 
 ### 3.3 自动分发（483-571 行，核心接线）
@@ -131,6 +138,15 @@ else → AgentLoop 分支（AgentRequest 携带 writeTarget/writeTargetIsFile）
 ```
 
 **改这里注意**：任务级 DI 容器是每次任务新建的（P-B 隔离备份的关键）；任何新「任务前预检」应插在 483 行 ReadOnlyGuard 之后、DI 容器创建之前（参考 ReadOnlyGuard 的接法）。
+
+### 3.4 Diff 与 Dashboard（10-07 新增，交互态能力）
+
+- **`diff [taskId]`**：工程模式专用。数据源 = `.backup\<taskId>\<stamp>\<rel>`（改动前备份）vs `projectRoot + rel`（改动后）→ `FileDiffService.Compute` → Spectre 红绿 Panel（hunk 头黄 / +绿 / -红 / 上下文灰）；无头通道走 `PlainDiffFormatter`。无备份时提示（8 任务上限清理说明）。
+- **`dashboard`**：启动本地 Web Dashboard（Kestrel `127.0.0.1:0` 随机端口，仅本机回环、无认证），打印 URL 后**不阻塞主循环**——任务照常执行，浏览器实时看。幂等（重复命令只提示 URL）。**无头守卫**：`Console.IsInputRedirected || Console.IsOutputRedirected` → 提示"需交互终端"，**不启动 Kestrel**（保护 E2E 管道输出逐字节兼容）。
+- **事件旁路接线（关键架构决策）**：`ConsumeTaskAsync` 内 `renderer.RenderEventAsync(evt)` **之后**调 `eventHub.Publish(evt)`——渲染器直接消费不变，hub 是第二消费者（旁路多播而非发布-订阅）。SSE 订阅者 = 浏览器标签页（BoundedChannel 1000 DropOldest，后台/卡住不占内存）。加第二前端时再考虑重构为发布-订阅。
+- **SSE 语义**：`/events` 只推**当前任务**的事件流（单向追加）；历史任务走 `/api/tasks?take=` 轮询；前端按 taskId 分组。浏览器刷新页面前的事件不重放（SSE 无缓冲回溯）——刷新后历史看任务表、实时从新任务起。
+- **Diff API 无 DTO**：`/api/diff` 直接序列化 `FileDiffService.DiffResult`（camelCase + 枚举转字符串，`JsonStringEnumConverter`）；前端只需 `{lines:[{type:"same|add|remove",oldNo,newNo,text}]}`。**diff 语义单一来源在引擎**（终端 + 浏览器共用），符合"消双路径漂移"原则。
+- **已知坑（实测）**：`app.StopAsync()` 调用即开始执行（非惰性）——`StartAsync` 若直接返回其 Task，宿主会在启动后立刻停服（tests 首版崩溃实证）。**必须返回停止委托 `() => app.StopAsync()`**。另：DashboardHost 用 `_running` 静态字段持 app 引用防 GC 停服。
 
 ---
 
@@ -610,9 +626,13 @@ external_credential → compile_error → runtime_error → timeout → validato
 | `src/Agent.Infrastructure/Memory/AgentMemoryStore.cs` | 记忆存储（去重/治理） | Add / Search / Forget / Prune / Deduplicate |
 | `src/Agent.Infrastructure/Memory/MemoryPromptBuilder.cs` | 失败教训注入格式 | BuildMemoryBlock |
 | `src/Agent.Infrastructure/Memory/TaskMemoryExtractor.cs` | 任务归档提炼 | Extract |
-| `src/Agent.Infrastructure/Rendering/` | 渲染层 | IRenderer / RendererBase.FormatEvent / SpectreRenderer（+TaskPrefix 任务状态前缀 / +Verbose 全文输出，10-07）/ PlainTextRenderer / RendererFactory.Create |
+| `src/Agent.Infrastructure/Rendering/` | 渲染层 | IRenderer / RendererBase.FormatEvent / SpectreRenderer（+TaskPrefix 任务状态前缀 / +Verbose 全文输出 / +DiffBlock，10-07）/ PlainTextRenderer / RendererFactory.Create |
+| `src/Agent.Infrastructure/Events/TaskEventHub.cs` | 事件多播总线（10-07） | Subscribe（BoundedChannel 1000 DropOldest + IDisposable 句柄）/ Publish（无订阅者零开销） |
+| `src/Agent.Infrastructure/Diff/FileDiffService.cs` | 行级 Diff 引擎（10-07，零第三方依赖） | Compute（前缀/后缀剥离 + 中间段 LCS）/ PlainDiffFormatter.Format |
+| `src/Agent.Dashboard/DashboardHost.cs` | 真 UI 层宿主（10-07） | StartAsync（Kestrel 127.0.0.1:0 + 停止委托）/ 5 API + SSE |
+| `src/Agent.Dashboard/DashboardPages/index.html` | Dashboard 单页（10-07，纯 CSS 零外网） | SSE 实时流 / stats 条形 / 任务表 / 备份树 + Diff 查看器 |
 | `src/Agent.Infrastructure/Tools/` | 10 工具 | 见 §7.1 |
-| `tests/Agent.Infrastructure.Tests/Program.cs` | 450 断言 harness | Check / 各分组 |
+| `tests/Agent.Infrastructure.Tests/Program.cs` | 492 断言 harness | Check / 各分组 |
 | `scripts/e2e/e2e.ps1` + `runner.py` | E2E | 4 用例三态断言 |
 | `docs/HANDOVER.md` | 交接与变更史 | 顶部 date-line 倒序 |
 | `docs/DEVELOPER.md` | 速查手册 | — |
