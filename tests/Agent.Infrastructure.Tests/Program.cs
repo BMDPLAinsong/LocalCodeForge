@@ -610,6 +610,21 @@ Console.WriteLine("== 路由层修复 A+B：写任务直连 + 空响应跳层（
     Check("写任务判定稳定", Agent.Infrastructure.Routing.IntentOverride.IsWriteTask("创建一个 hello.txt 文件，内容为 hello"));
 }
 
+Console.WriteLine("== 10-08 真实失败收尾 B：LLM 异常升级兜底 ==");
+{
+    // B：AgentLoop catch 处异常（canceled/超时/连接）→ PromoteService 升级一次；
+    // 最高层（large）无升级目标 → 判失败。Error 统一前缀 "LLM 调用失败："。
+    Check("LLM 调用异常 → llm_error 类别（非 empty_response）",
+        Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("LLM 调用失败：任务已取消") == "llm_error");
+    Check("LLM 调用异常（超时型）→ llm_error 类别",
+        Agent.Infrastructure.Metrics.FailureCategorizer.Categorize("LLM 调用失败：请求超时") == "llm_error");
+    Check("异常升级语义：large 已最高层无升级目标（判失败路径）",
+        Agent.Infrastructure.AgentLoop.PromoteService("large") is null);
+    Check("异常升级语义：small/agent_pro 可升 large（复用空响应链映射）",
+        Agent.Infrastructure.AgentLoop.PromoteService("small") == "large"
+        && Agent.Infrastructure.AgentLoop.PromoteService("agent_pro") == "large");
+}
+
 Console.WriteLine("== 模板检测降级：任务要求输出豁免（方案 1） ==");
 {
     // 任务要求内容为 hello，type 输出 hello → 合法（豁免模板判定）

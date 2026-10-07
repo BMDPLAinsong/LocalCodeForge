@@ -353,6 +353,30 @@ public sealed class AgentLoop : IAgentLoop
 
             if (errorMessage is not null)
             {
+                // 【10-08 方案 B】LLM 调用异常升级兜底：空响应升级链只覆盖"空内容"，
+                // 不覆盖调用异常（TaskCanceledException 偶发中断/HttpClient 超时/连接失败）——
+                // 此前异常直接判失败（68s canceled 与 890s 600s 超时实证）。
+                // 与空响应链同构：异常时按 PromoteService 升级一次（small/agent_pro → large，
+                // large 已在最高层 → 判失败；每任务天然至多升级一次）。
+                var promoted = PromoteService(decision.ServiceId);
+                if (promoted is not null)
+                {
+                    _logger.LogWarning(
+                        "LLM 调用失败（{Msg}），升级服务 {From} → {To} 重试。",
+                        errorMessage, decision.ServiceId, promoted);
+                    decision = new RoutingDecision(
+                        promoted,
+                        RoutingTier.LargeModel,
+                        $"LLM 异常升级（{decision.ServiceId} → {promoted}）");
+                    firstDecision = decision; // 下一轮循环复用升级后的决策
+                    // 与空响应升级同：主动决策，重置 _lastStepFailed，
+                    // 避免下一轮被 recovery 规则（只该响应工具失败）重路由回原层导致白升。
+                    _lastStepFailed = false;
+                    chatHistory.AddUserMessage(
+                        $"上一步模型调用失败（{errorMessage}）。请重新开始：要么调用工具完成用户需求，要么给出明确的最终回答。");
+                    continue;
+                }
+
                 yield return new AgentEvent.Error($"LLM 调用失败：{errorMessage}");
                 yield break;
             }

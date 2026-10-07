@@ -19,6 +19,12 @@ public static class FailureCategorizer
 
         var s = errorSummary;
 
+        // 【10-08】LLM 调用异常（AgentLoop 异常升级后仍失败的统一 Error 前缀）：
+        // 与 empty_response（模型返回空内容）区分——前者是调用层异常（canceled/超时/连接），
+        // 后者是生成为空。升级兜底生效前这些失败落 other，无法聚合审计。
+        if (ContainsAny(s, "LLM 调用失败", "LLM 调用异常"))
+            return "llm_error";
+
         // 外部凭据：401/403/api_key/unauthorized
         if (ContainsAny(s, "401", "403", "api_key", "api key", "unauthorized", "credential", "invalid key"))
             return "external_credential";

@@ -108,9 +108,11 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         }
 
         // 历史回填（幂等：只回填未标记行；每次启动执行，605 行毫秒级）。
-        // 特征：E2E 用例的工程根在 workspace\e2e\case_*（编译错误路径/use 输入），
-        // 或 E2E 专属任务输入（ShippingService/OrderSummary/use --write 冒烟——
-        // 这些是 E2E 用例构造，真实任务从未以此开头）。
+        // 特征必须精确到 E2E 构造措辞——不能靠"类名+动词"宽组合：
+        // 【10-08 教训】宽特征 (OrderService AND (增加/新增)) 曾误标真实任务
+        // "在工程中新增 DiscountService/TaxService 类…并在 OrderService…"
+        // （10-03 项目名幻觉任务的真实输入）。精确特征只匹配 E2E 用例的固定开头：
+        //   "给 OrderService 增加 GetSummary…" / "新增 OrderTotalService.cs" / "给 Order 增加 TotalAmount…"
         try
         {
             using var backfillCmd = conn.CreateCommand();
@@ -121,7 +123,10 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
                        OR user_input LIKE '%workspace\e2e%'
                        OR user_input LIKE '%ShippingService%'
                        OR user_input LIKE '%OrderSummary%'
-                       OR user_input LIKE 'use --write%')
+                       OR user_input LIKE 'use --write%'
+                       OR user_input LIKE '%给 OrderService 增加%'
+                       OR user_input LIKE '%OrderTotalService%'
+                       OR user_input LIKE '%给 Order 增加 TotalAmount%')
                 """;
             backfillCmd.ExecuteNonQuery();
         }
