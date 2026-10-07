@@ -16,3 +16,10 @@ workspace/
 # 临时文件
 *.tmp
 *.log
+
+# 本地诊断输出（误提交清理后补录）
+build_c.txt
+tests_c.txt
+cli_review_in.txt
+cli_review_out.txt
+cli_review_utf8.txt
