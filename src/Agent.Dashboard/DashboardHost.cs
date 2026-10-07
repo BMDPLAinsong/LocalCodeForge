@@ -12,6 +12,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
+using Agent.Core;
 using Agent.Core.Models;
 using Agent.Infrastructure.Diff;
 using Agent.Infrastructure.Events;
@@ -30,7 +31,11 @@ public sealed record DashboardOptions(
     TaskEventHub Hub,
     TaskEventStore EventStore,         // ← 10-07 UI 层 #1：任务事件持久化（详情回放数据源）
     AgentOptions Options,              // ← 10-07 UI 层：调权阈值配置（/api/tuning）
-    string MemoryDbPath);              // ← 10-07 UI 层：agent_memory.db 路径（/api/memory）
+    string MemoryDbPath,               // ← 10-07 UI 层：agent_memory.db 路径（/api/memory）
+    CommandHub CommandHub);            // ← 10-07 webUI 交互：web 提交汇入 CLI 主循环命令通道
+
+/// <summary>POST /api/commands 请求体（最小输入 DTO，非业务模型）。</summary>
+public sealed record CommandRequest(string? Input);
 
 public static class DashboardHost
 {
@@ -218,6 +223,21 @@ public static class DashboardHost
             var direct = DependencyAnalyzer.GetDirectDependencies(norm, edges);
             var reverse = DependencyAnalyzer.GetReverseDependencies(norm, edges);
             return Results.Json(new { direct, reverse }, JsonOpts);
+        });
+
+        // ── 命令提交（10-07 webUI 交互）：web 命令汇入 CLI 主循环命令通道 ──
+        // 终端输入与 web 提交统一排队（CommandHub 有界 100 DropOldest）——一次一任务串行语义不变。
+        // 空输入/超限 → 400；通道满 → 429；成功 → 202 {queued:true}。
+        app.MapPost("/api/commands", (CommandRequest? req) =>
+        {
+            var input = req?.Input?.TrimStart('\uFEFF')?.Trim();
+            if (string.IsNullOrWhiteSpace(input))
+                return Results.BadRequest(new { error = "input 为空。" });
+            if (input.Length > 2000)
+                return Results.BadRequest(new { error = "input 超过 2000 字符上限。" });
+            if (!o.CommandHub.TrySubmit(input))
+                return Results.Json(new { error = "命令通道已满（排队过多），稍后重试。" }, JsonOpts, statusCode: 429);
+            return Results.Accepted("/api/commands", new { queued = true, input });
         });
 
         // ── SSE：当前任务实时事件流（每订阅者 BoundedChannel 1000 DropOldest）──

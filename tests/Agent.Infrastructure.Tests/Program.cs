@@ -2589,6 +2589,25 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         try { Directory.Delete(ws2, true); } catch { }
     }
 
+    // ── CommandHub 单元（10-07 webUI 交互：终端/web 统一命令通道）──
+    {
+        var cmdHub = new Agent.Core.CommandHub();
+        cmdHub.TrySubmit("a");
+        cmdHub.TrySubmit("b");
+        var a = await cmdHub.NextAsync(CancellationToken.None);
+        var b = await cmdHub.NextAsync(CancellationToken.None);
+        Check("CommandHub FIFO：先提交先取回（终端输入与 web 提交同一队列）", a == "a" && b == "b");
+        cmdHub.TrySubmit(null);
+        Check("CommandHub EOF null 透传（无头 stdin 关闭 → 主循环退出）", await cmdHub.NextAsync(CancellationToken.None) is null);
+        var big = new Agent.Core.CommandHub();
+        for (var i = 0; i < 105; i++) big.TrySubmit("c" + i);
+        Check("CommandHub 有界 100 DropOldest：超限丢最旧（105 条写入后首条为 c5）",
+            await big.NextAsync(CancellationToken.None) == "c5");
+        var cancelCts = new CancellationTokenSource();
+        cancelCts.Cancel();
+        Check("CommandHub 取消 → null（不抛）", await new Agent.Core.CommandHub().NextAsync(cancelCts.Token) is null);
+    }
+
     // ── 3. DashboardHost 冒烟：真起 Kestrel → HttpClient 验证 API ──
     var ws = Path.Combine(Path.GetTempPath(), "dash_smoke_" + Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(ws);
@@ -2602,7 +2621,8 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         var (url, stop) = await Agent.Dashboard.DashboardHost.StartAsync(
             new Agent.Dashboard.DashboardOptions(ws, null, Path.Combine(ws, "symbol_index.db"), null, metrics, dashHub, store,
                 new Agent.Core.Models.AgentOptions(),
-                Path.Combine(ws, "agent_memory.db")), CancellationToken.None);
+                Path.Combine(ws, "agent_memory.db"),
+                new Agent.Core.CommandHub()), CancellationToken.None);
         using var http = new HttpClient { BaseAddress = new Uri(url + "/") };
         var page = await http.GetStringAsync("");
         Check("GET / 返回嵌入单页（含标题 + 回放 API + 过滤/滚动开关）",
@@ -2626,6 +2646,14 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         Check("GET /api/tasks/{id}/events 无事件 → 空数组", noEvts == "[]");
         var noDeps = await http.GetAsync("api/deps");
         Check("无工程根 /api/deps → 400 BadRequest", noDeps.StatusCode == System.Net.HttpStatusCode.BadRequest);
+        var cmdBad = await http.PostAsync("api/commands",
+            new StringContent("{\"input\":\"   \"}", System.Text.Encoding.UTF8, "application/json"));
+        Check("POST /api/commands 空输入 → 400", cmdBad.StatusCode == System.Net.HttpStatusCode.BadRequest);
+        var cmdOk = await http.PostAsync("api/commands",
+            new StringContent("{\"input\":\"stats\"}", System.Text.Encoding.UTF8, "application/json"));
+        var cmdBody = await cmdOk.Content.ReadAsStringAsync();
+        Check("POST /api/commands 合法命令 → 202 {queued:true}",
+            cmdOk.StatusCode == System.Net.HttpStatusCode.Accepted && cmdBody.Contains("queued"));
         await stop();
 
         // ── 4. /api/deps 工程依赖图谱：真工程（含类型级引用）+ 索引 → 概览 + 单文件依赖 ──
@@ -2648,7 +2676,8 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
                     new Agent.Infrastructure.Events.TaskEventHub(),
                     new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(depWs, "metrics.db")),
                     new Agent.Core.Models.AgentOptions(),
-                    Path.Combine(depWs, "agent_memory.db")),
+                    Path.Combine(depWs, "agent_memory.db"),
+                    new Agent.Core.CommandHub()),
                 CancellationToken.None);
             using var depHttp = new HttpClient { BaseAddress = new Uri(depUrl + "/") };
             var overview = await depHttp.GetStringAsync("api/deps");

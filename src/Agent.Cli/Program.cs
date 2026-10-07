@@ -343,10 +343,42 @@ internal class Program
             }
         }
 
+        // ═══════════ 输入通道化（10-07 webUI 交互）：终端输入与 Dashboard POST /api/commands
+        // 统一汇入 CommandHub，主循环一次消费一条（一次一任务串行语义不变）。
+        // 交互态：控制台后台线程负责行编辑（Tab/↑↓/历史）并写入通道；web 提交也写入同一通道——
+        // 主循环阻塞在 NextAsync 时 web 命令即时响应（用户无需碰终端）。
+        // 无头（管道/重定向）：保持原同步读-执行循环（逐字节兼容 E2E）。
+        var commandHub = new Agent.Core.CommandHub();
+        var consoleReaderStopped = false;
+        if (!Console.IsInputRedirected && !Console.IsOutputRedirected)
+        {
+            _ = Task.Run(() =>
+            {
+                while (!consoleReaderStopped)
+                {
+                    renderer.Prompt();
+                    var line = ReadLineWithTabCompletion();
+                    if (line is null) { commandHub.TrySubmit(null); break; }   // stdin EOF
+                    commandHub.TrySubmit(line);
+                }
+            });
+        }
+
         while (true)
         {
-            renderer.Prompt();
-            var input = ReadLineWithTabCompletion();
+            string? input;
+            if (Console.IsInputRedirected || Console.IsOutputRedirected)
+            {
+                // 无头路径：原同步读-执行（管道输出逐字节兼容）
+                renderer.Prompt();
+                input = ReadLineWithTabCompletion();
+            }
+            else
+            {
+                // 交互态：从通道取（终端输入 / web 提交先到先执行）；null = EOF/取消 → 退出
+                input = await commandHub.NextAsync(CancellationToken.None);
+                if (input is null) { consoleReaderStopped = true; break; }
+            }
             // 【A-补强】统一剥离 BOM（U+FEFF）——PS 5.1 管道注入 UTF-8 BOM 到首行时
             // StartsWith("use ")/StartsWith("plan ") 等全部不命中、命令被当任务执行。
             // 原 370 行仅 use 分支 trim；此处提到主循环入口，覆盖所有命令分支。
@@ -354,7 +386,10 @@ internal class Program
             input = input?.TrimStart('\uFEFF')?.Trim();
 
             if (input is null || input.Length == 0 || input.Equals("exit", StringComparison.OrdinalIgnoreCase))
+            {
+                consoleReaderStopped = true;
                 break;
+            }
 
             if (input.Equals("new", StringComparison.OrdinalIgnoreCase))
             {
@@ -458,7 +493,8 @@ internal class Program
                         options.LawUnifiedEpoch,
                         provider.GetRequiredService<IMetricsCollector>(), eventHub, eventStore,
                         options,
-                        Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "agent_memory.db")),
+                        Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "agent_memory.db"),
+                        commandHub),
                     CancellationToken.None);
                 dashboardUrl = url;
                 // 【10-07 UI 层 #4】交互态 [link] 超链接样式；无头态 dashboard 命令已被无头守卫拦截（不会到此处）

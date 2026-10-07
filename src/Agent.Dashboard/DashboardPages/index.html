@@ -90,6 +90,12 @@
         <label style="margin-left:10px;color:var(--dim)"><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
       </span>
     </h2>
+    <div id="cmdBar" style="display:flex;gap:8px;margin:6px 0 10px;align-items:center">
+      <input id="cmdInput" type="text" placeholder="输入需求或命令（如：写一个 C# 待办事项项目 / use --write 路径 / stats）"
+             style="flex:1;background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-size:13px" />
+      <button class="btn" id="cmdSend">提交</button>
+      <span id="cmdHint" class="dim" style="font-size:12px"></span>
+    </div>
     <div id="events"><div class="empty">等待任务事件…（dashboard 不阻塞 CLI，任务照常执行）</div></div>
   </div>
 
@@ -456,6 +462,35 @@ async function showDiff(taskId, rel) {
 }
 
 function refreshAll() { fetchStats(); fetchTasks(); fetchBackups(); fetchTuning(); fetchMemory(); }
+
+// ── 命令提交（10-07 webUI 交互）：POST /api/commands → CLI 命令通道（与终端输入统一排队）──
+async function submitCommand() {
+  const input = $("cmdInput").value.trim();
+  const hint = $("cmdHint");
+  if (!input) { hint.textContent = "输入为空"; return; }
+  hint.textContent = "提交中…";
+  try {
+    const r = await fetch("/api/commands", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input })
+    });
+    if (r.status === 202) {
+      hint.textContent = "已排队（与终端输入统一队列，一次一任务串行执行）";
+      $("cmdInput").value = "";
+    } else if (r.status === 429) {
+      hint.textContent = "命令通道已满，稍后重试";
+    } else {
+      const d = await r.json().catch(() => ({}));
+      hint.textContent = "提交失败：" + (d.error || r.status);
+    }
+  } catch (e) {
+    hint.textContent = "提交失败：" + e.message;
+  }
+}
+$("cmdSend").addEventListener("click", submitCommand);
+$("cmdInput").addEventListener("keydown", e => { if (e.key === "Enter") submitCommand(); });
+
 openStream();
 refreshAll();
 </script>
