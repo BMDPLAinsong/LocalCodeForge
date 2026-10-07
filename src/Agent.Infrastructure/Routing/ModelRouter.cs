@@ -109,7 +109,9 @@ public sealed class ModelRouter : IModelRouter
                     RoutingDecision.Large, RoutingTier.Rule.ToString(), 10, ct);
 
                 if (RoutingIntelligence.TrySuggestDowngrade(
-                    smallStats, largeStats, minSamples: 3, minSuccessRate: 0.6, out var reason))
+                    smallStats, largeStats,
+                    minSamples: _options.RoutingTuningMinSamples,
+                    minSuccessRate: _options.RoutingDowngradeMinSuccessRate, out var reason))
                 {
                     _logger.LogInformation("[数据闭环] L0.5 写任务降级 small（{Reason}）", reason);
                     var d = new RoutingDecision(
@@ -154,7 +156,10 @@ public sealed class ModelRouter : IModelRouter
                         RoutingDecision.AgentPro, RoutingTier.Rule.ToString(), 10, ct);
 
                     if (RoutingIntelligence.TrySuggestReadTier(
-                        proStats, smallStats, minSamples: 3, badRate: 0.6, minSuccessRate: 0.5, out var readReason))
+                        proStats, smallStats,
+                        minSamples: _options.RoutingTuningMinSamples,
+                        badRate: _options.RoutingReadUpgradeBadRate,
+                        minSuccessRate: _options.RoutingReadUpgradeMinSuccessRate, out var readReason))
                     {
                         _logger.LogInformation("[数据闭环] L0.5b 读任务升级 agent_pro（{Reason}）", readReason);
                         var d = new RoutingDecision(
@@ -230,7 +235,9 @@ public sealed class ModelRouter : IModelRouter
                 var proStats = await GetTuningStatsAsync(
                     RoutingDecision.AgentPro, RoutingTier.SmallModel.ToString(), 10, ct);
                 if (RoutingIntelligence.TrySuggestDropAgentPro(
-                    proStats, minSamples: 5, minSuccessRate: 0.5, out var dropReason))
+                    proStats,
+                    minSamples: _options.RoutingDropAgentProMinSamples,
+                    minSuccessRate: _options.RoutingDropAgentProMinSuccessRate, out var dropReason))
                 {
                     _logger.LogInformation("[数据闭环] P2 ComplexReason 降级 large（{Reason}）", dropReason);
                     serviceId = RoutingDecision.Large;

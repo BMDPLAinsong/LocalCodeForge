@@ -345,6 +345,12 @@ CompletionGate.Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFi
 
 **【P2】时代过滤（10-07）**：三处闭环判定全部走 `GetTuningStatsAsync`——`options.LawUnifiedEpoch` 非空 → `GetServiceStatsSinceAsync`（SQL 加 `started_at >= epochUnix`，只统计 30B 时代样本，4B 历史不再污染判定）；null → 全量（兼容）。**TrySuggestDropAgentPro（L3 ComplexReason → agent_pro 自动调权）**：样本 ≥5 且成功率 <0.5 才降级 large，数据不足/表现好保持 agent_pro（保守不冒险）。
 
+**【调权收尾（10-07）】参数配置化 + 状态可观测**：
+- **阈值不再硬编码**：三处判定参数全部走 `AgentOptions.Routing*` 配置字段——`RoutingTuningMinSamples=3`（L0.5/L0.5b 最小样本）、`RoutingDowngradeMinSuccessRate=0.6`（写降级）、`RoutingReadUpgradeBadRate=0.6` / `RoutingReadUpgradeMinSuccessRate=0.5`（读升级）、`RoutingDropAgentProMinSamples=5` / `RoutingDropAgentProMinSuccessRate=0.5`（Complex 降级）。默认值与原硬编码一致（行为零变化），调敏感度只改 AppSettings/环境变量。
+- **stats 面板"路由调权状态"小节**：L0.5 写降级 / L0.5b 读升级 / P2 ComplexReason 降级各自显示 {样本数 / 成功率 / 阈值 / 当前判定（触发 or 保持）+ 原因}；时代过滤语义与 ModelRouter 完全一致（epoch 非空 → 只统计 30B 样本）；`PrintSummaryAsync` 签名增加 `AgentOptions options` 参数。
+
+**【记忆治理收尾（10-07）】启动自动治理**：`agent_memory` 此前只靠手动 `memory prune/dedup`（routing_decisions 90d / task_events 30d 均有启动清理）——CLI 启动 Banner 后自动 `PruneExpired(options.MemoryPruneDays, options.MemoryPruneMinHits) + Deduplicate()`（默认 30 天/1 命中），0 条清理静默、非 0 打印一行 `[记忆治理]` 日志。至此记忆生命周期闭环：Add 去重内建 → 手动治理命令 → 启动自动清理 → feature 过滤注入。
+
 ### 6.5 词表漂移（重点维护项，历史多次踩坑）
 
 同一功能逻辑在**多处有硬编码词表**，改词表必须**一次改齐**并补 tests：

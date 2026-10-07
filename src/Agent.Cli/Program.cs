@@ -192,6 +192,14 @@ internal class Program
         // ─────────── 打印欢迎 ───────────
         renderer.Banner(workspace, dbPath);
 
+        // 【记忆治理收尾】启动自动治理：过期清理 + 存量去重（阈值走 AgentOptions.MemoryPrune* 配置字段）
+        // agent_memory 此前只靠手动 memory prune/dedup——启动自动清理与 routing_decisions(90d)/task_events(30d) 对齐
+        var memoryStore = provider.GetRequiredService<Agent.Infrastructure.Memory.AgentMemoryStore>();
+        var prunedMem = memoryStore.PruneExpired(options.MemoryPruneDays, options.MemoryPruneMinHits);
+        var dedupedMem = memoryStore.Deduplicate();
+        if (prunedMem > 0 || dedupedMem > 0)
+            renderer.System($"[记忆治理] 启动清理：过期 {prunedMem} 条 / 重复合并 {dedupedMem} 条。");
+
         // ─────────── 打印配置 ───────────
         renderer.ConfigBlock(options);
 
@@ -463,7 +471,7 @@ internal class Program
                         }
                     }
 
-                    await PrintSummaryAsync(metrics, options.LawUnifiedEpoch, featureAggregator, decisionStore, rejectStore);
+                    await PrintSummaryAsync(metrics, options.LawUnifiedEpoch, options, featureAggregator, decisionStore, rejectStore);
                     await PrintRecentAsync(metrics, 5);
                 }
 
@@ -1170,7 +1178,7 @@ internal class Program
     }
 
     /// <summary>打印指标汇总。</summary>
-    static async Task PrintSummaryAsync(IMetricsCollector metrics, DateTimeOffset? lawUnifiedEpoch, Agent.Infrastructure.Routing.TaskMetricsAggregator? featureAggregator = null, Agent.Infrastructure.Routing.RoutingDecisionStore? decisionStore = null, Agent.Infrastructure.Metrics.ToolRejectionStore? rejectStore = null)
+    static async Task PrintSummaryAsync(IMetricsCollector metrics, DateTimeOffset? lawUnifiedEpoch, Agent.Core.Models.AgentOptions? options = null, Agent.Infrastructure.Routing.TaskMetricsAggregator? featureAggregator = null, Agent.Infrastructure.Routing.RoutingDecisionStore? decisionStore = null, Agent.Infrastructure.Metrics.ToolRejectionStore? rejectStore = null)
     {
         var summary = await metrics.GetSummaryAsync(null, CancellationToken.None);
 
@@ -1327,6 +1335,43 @@ internal class Program
                 Console.WriteLine($"  ({s.SuccessCount}/{s.TotalCount})  avg {s.AvgTotalMs / 1000:N0}s  失败主因: {s.TopFailureCause}");
             }
             if (hasData) Console.WriteLine("  （特征类归因 · D2 路由数据校准）");
+        }
+
+        // 【路由调权收尾】调权状态可观测：三处调权当前判定（样本/成功率/阈值/触发与否）
+        if (options is not null)
+        {
+            try
+            {
+                // 与 ModelRouter 同一时代过滤语义：epoch 已配置 → 只统计 30B 时代样本
+                async Task<Agent.Infrastructure.Routing.ServiceStats> TuningAsync(string svc, string tier) =>
+                    lawUnifiedEpoch is { } e
+                        ? await metrics.GetServiceStatsSinceAsync(svc, tier, e, 10, CancellationToken.None)
+                        : await metrics.GetServiceStatsAsync(svc, tier, 10, CancellationToken.None);
+
+                var smallRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.Small, "Rule");
+                var largeRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.Large, "Rule");
+                var proRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.AgentPro, "Rule");
+                var proL3 = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.AgentPro, "SmallModel");
+
+                var downgrade = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDowngrade(
+                    smallRule, largeRule, options.RoutingTuningMinSamples, options.RoutingDowngradeMinSuccessRate, out var dowReason);
+                var readUp = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestReadTier(
+                    proRule, smallRule, options.RoutingTuningMinSamples, options.RoutingReadUpgradeBadRate, options.RoutingReadUpgradeMinSuccessRate, out var readReason);
+                var dropPro = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDropAgentPro(
+                    proL3, options.RoutingDropAgentProMinSamples, options.RoutingDropAgentProMinSuccessRate, out var dropReason);
+
+                Console.WriteLine("=== 路由调权状态 ===");
+                static string RateOf(Agent.Infrastructure.Routing.ServiceStats s) =>
+                    s.TotalCount > 0 ? $"{(double)s.SuccessCount / s.TotalCount:P0}" : "无样本";
+                Console.WriteLine($"  L0.5 写降级 small:  small 样本 {smallRule.TotalCount} 成功率 {RateOf(smallRule)}（阈值 {options.RoutingDowngradeMinSuccessRate:P0}）→ {(downgrade ? "触发：写任务降级 small" : "保持 large")}（{dowReason}）");
+                Console.WriteLine($"  L0.5b 读升级 pro:   small 成功率 {RateOf(smallRule)}（坏率阈值 {options.RoutingReadUpgradeBadRate:P0}）/ pro 成功率 {RateOf(proRule)}（阈值 {options.RoutingReadUpgradeMinSuccessRate:P0}）→ {(readUp ? "触发：读任务升级 agent_pro" : "保持 small")}（{readReason}）");
+                Console.WriteLine($"  P2 Complex 降级 large: pro 样本 {proL3.TotalCount} 成功率 {RateOf(proL3)}（阈值 {options.RoutingDropAgentProMinSuccessRate:P0}）→ {(dropPro ? "触发：ComplexReason 降级 large" : "保持 agent_pro")}（{dropReason}）");
+                Console.WriteLine("  （阈值来自 AgentOptions.Routing* 配置；样本仅统计 law-unified 30B 时代）");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  [调权状态] 读取失败: {ex.Message}");
+            }
         }
 
         // 【3A】路由决策落库：决策分布（调权数据地基的可见面）

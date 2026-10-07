@@ -156,6 +156,23 @@ public sealed class AgentOptions
     public int MemoryPruneMinHits { get; set; } = 1;
 
     /// <summary>
+    /// 【路由调权收尾】调权参数配置化（此前硬编码在 ModelRouter 三个调用点）。
+    /// 改调权敏感度只需改配置，无需改代码。
+    /// </summary>
+    /// <summary>L0.5 写降级 / L0.5b 读升级：最小样本数（低于则保持默认路径，不冒险）。</summary>
+    public int RoutingTuningMinSamples { get; set; } = 3;
+    /// <summary>L0.5 写降级：small 写任务最小成功率（达到且省时 → 降级 small）。</summary>
+    public double RoutingDowngradeMinSuccessRate { get; set; } = 0.6;
+    /// <summary>L0.5b 读升级：small 读任务坏率阈值（超过 → 考虑升级 agent_pro）。</summary>
+    public double RoutingReadUpgradeBadRate { get; set; } = 0.6;
+    /// <summary>L0.5b 读升级：agent_pro 最小成功率。</summary>
+    public double RoutingReadUpgradeMinSuccessRate { get; set; } = 0.5;
+    /// <summary>P2 ComplexReason 降级：最小样本数。</summary>
+    public int RoutingDropAgentProMinSamples { get; set; } = 5;
+    /// <summary>P2 ComplexReason 降级：最小成功率（低于 → 降级 large）。</summary>
+    public double RoutingDropAgentProMinSuccessRate { get; set; } = 0.5;
+
+    /// <summary>
     /// 【时代隔离】模型时代切换点（law-unified 30B 落地时刻，本地时间）。
     /// stats 面板按此拆分 agent_pro 等服务的成功率（当前时代 vs 历史时代）。
     /// null = 不启用时代拆分。

@@ -542,6 +542,14 @@ Console.WriteLine("== 记忆治理收尾：自动过期清理 + 默认阈值 =="
     Check("治理默认 30 天", opt.MemoryPruneDays == 30);
     Check("治理默认 1 命中（仅 0 命中可清）", opt.MemoryPruneMinHits == 1);
 
+    // 【路由调权收尾】调权参数默认值（与 ModelRouter 原硬编码一致，行为零变化）
+    Check("调权默认样本 3", opt.RoutingTuningMinSamples == 3);
+    Check("写降级默认阈值 0.6", opt.RoutingDowngradeMinSuccessRate == 0.6);
+    Check("读升级默认坏率 0.6", opt.RoutingReadUpgradeBadRate == 0.6);
+    Check("读升级默认成功率 0.5", opt.RoutingReadUpgradeMinSuccessRate == 0.5);
+    Check("Complex 降级默认样本 5", opt.RoutingDropAgentProMinSamples == 5);
+    Check("Complex 降级默认阈值 0.5", opt.RoutingDropAgentProMinSuccessRate == 0.5);
+
     // PruneExpired 确定性验证：久未使用且 0 命中 → 删除；有命中 → 保留
     var memPPath = Path.Combine(TestTmp, "agent_memory_p_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db");
     var memP = new Agent.Infrastructure.Memory.AgentMemoryStore(memPPath);
