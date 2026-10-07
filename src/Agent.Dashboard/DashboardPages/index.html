@@ -94,6 +94,8 @@
       <input id="cmdInput" type="text" placeholder="输入需求或命令（如：写一个 C# 待办事项项目 / use --write 路径 / stats）"
              style="flex:1;background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-size:13px" />
       <button class="btn" id="cmdSend">提交</button>
+      <button class="btn" id="cmdCancel" title="取消当前正在执行的任务（与终端 q 键同一机制）">取消当前任务</button>
+      <span id="queueStatus" class="dim" style="font-size:12px"></span>
       <span id="cmdHint" class="dim" style="font-size:12px"></span>
     </div>
     <div id="events"><div class="empty">等待任务事件…（dashboard 不阻塞 CLI，任务照常执行）</div></div>
@@ -476,7 +478,10 @@ async function submitCommand() {
       body: JSON.stringify({ input })
     });
     if (r.status === 202) {
-      hint.textContent = "已排队（与终端输入统一队列，一次一任务串行执行）";
+      const d = await r.json().catch(() => ({}));
+      hint.textContent = d.pending > 1
+        ? `已排队：第 ${d.pending} 位（队列中 ${d.pending} 个，一次一任务串行）`
+        : "已提交，任务开始执行…";
       $("cmdInput").value = "";
     } else if (r.status === 429) {
       hint.textContent = "命令通道已满，稍后重试";
@@ -488,8 +493,34 @@ async function submitCommand() {
     hint.textContent = "提交失败：" + e.message;
   }
 }
+async function cancelCurrentTask() {
+  const hint = $("cmdHint");
+  try {
+    const r = await fetch("/api/cancel", { method: "POST" });
+    if (r.status === 200) {
+      hint.textContent = "取消请求已发送（当前任务将在阶段间停止）";
+    } else if (r.status === 409) {
+      const d = await r.json().catch(() => ({}));
+      hint.textContent = "无运行中任务：" + (d.error || "");
+    } else {
+      hint.textContent = "取消失败：" + r.status;
+    }
+  } catch (e) {
+    hint.textContent = "取消失败：" + e.message;
+  }
+}
 $("cmdSend").addEventListener("click", submitCommand);
 $("cmdInput").addEventListener("keydown", e => { if (e.key === "Enter") submitCommand(); });
+$("cmdCancel").addEventListener("click", cancelCurrentTask);
+// 队列可见性：每 3 秒轮询 /api/queue 显示待执行数（前端不持队列状态，数据单一来源在后端）
+async function refreshQueue() {
+  try {
+    const r = await fetch("/api/queue");
+    const d = await r.json();
+    $("queueStatus").textContent = d.pending > 0 ? `⏳ 队列中 ${d.pending} 个待执行` : "";
+  } catch { /* 服务未就绪时静默 */ }
+}
+setInterval(refreshQueue, 3000);
 
 openStream();
 refreshAll();

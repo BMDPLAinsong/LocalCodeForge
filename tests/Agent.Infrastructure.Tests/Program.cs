@@ -2589,23 +2589,36 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         try { Directory.Delete(ws2, true); } catch { }
     }
 
-    // ── CommandHub 单元（10-07 webUI 交互：终端/web 统一命令通道）──
+    // ── CommandHub 单元（10-07 webUI 交互：终端/web 统一命令通道；10-08 P0：seq/快照/取消）──
     {
         var cmdHub = new Agent.Core.CommandHub();
-        cmdHub.TrySubmit("a");
-        cmdHub.TrySubmit("b");
+        var sa = cmdHub.TrySubmit("a");
+        var sb = cmdHub.TrySubmit("b");
+        Check("CommandHub seq 递增（web 提交归属标识）", sa == 1 && sb == 2);
         var a = await cmdHub.NextAsync(CancellationToken.None);
         var b = await cmdHub.NextAsync(CancellationToken.None);
-        Check("CommandHub FIFO：先提交先取回（终端输入与 web 提交同一队列）", a == "a" && b == "b");
+        Check("CommandHub FIFO：先提交先取回（终端输入与 web 提交同一队列）", a!.Value.Input == "a" && b!.Value.Input == "b");
+        Check("CommandHub 条目含提交时间（/api/queue SubmittedAt 数据源）",
+            a!.Value.SubmittedAt != default && b!.Value.SubmittedAt != default);
         cmdHub.TrySubmit(null);
-        Check("CommandHub EOF null 透传（无头 stdin 关闭 → 主循环退出）", await cmdHub.NextAsync(CancellationToken.None) is null);
+        Check("CommandHub EOF null 透传（无头 stdin 关闭 → 主循环退出）",
+            (await cmdHub.NextAsync(CancellationToken.None))!.Value.Input is null);
         var big = new Agent.Core.CommandHub();
         for (var i = 0; i < 105; i++) big.TrySubmit("c" + i);
         Check("CommandHub 有界 100 DropOldest：超限丢最旧（105 条写入后首条为 c5）",
-            await big.NextAsync(CancellationToken.None) == "c5");
+            (await big.NextAsync(CancellationToken.None))!.Value.Input == "c5");
+        Check("CommandHub Snapshot：顺序与 EOF 过滤（/api/queue 数据源）",
+            big.Snapshot().Count == 99 && big.Snapshot()[0].Input == "c6" && big.Snapshot()[^1].Input == "c104");
         var cancelCts = new CancellationTokenSource();
         cancelCts.Cancel();
         Check("CommandHub 取消 → null（不抛）", await new Agent.Core.CommandHub().NextAsync(cancelCts.Token) is null);
+        var hub2 = new Agent.Core.CommandHub();
+        var taskCts = new CancellationTokenSource();
+        hub2.AttachTaskCancellation(taskCts);
+        Check("CommandHub 取消当前任务：Attach 后 CancelCurrentTask → 令牌已取消（web POST /api/cancel 触发同一机制）",
+            hub2.CancelCurrentTask() && taskCts.IsCancellationRequested);
+        hub2.DetachTaskCancellation();
+        Check("CommandHub 取消：Detach 后无任务可取消 → false", !hub2.CancelCurrentTask());
     }
 
     // ── 3. DashboardHost 冒烟：真起 Kestrel → HttpClient 验证 API ──
@@ -2652,8 +2665,17 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         var cmdOk = await http.PostAsync("api/commands",
             new StringContent("{\"input\":\"stats\"}", System.Text.Encoding.UTF8, "application/json"));
         var cmdBody = await cmdOk.Content.ReadAsStringAsync();
-        Check("POST /api/commands 合法命令 → 202 {queued:true}",
-            cmdOk.StatusCode == System.Net.HttpStatusCode.Accepted && cmdBody.Contains("queued"));
+        Check("POST /api/commands 合法命令 → 202 {queued:true} 且含 seq/pending（web 提交归属+位置）",
+            cmdOk.StatusCode == System.Net.HttpStatusCode.Accepted
+            && cmdBody.Contains("queued") && cmdBody.Contains("seq") && cmdBody.Contains("pending"));
+        var qResp = await http.GetAsync("api/queue");
+        var qBody = await qResp.Content.ReadAsStringAsync();
+        Check("GET /api/queue → 200 且结构 {pending, items[{seq,input,submittedAt}]}（队列可见性）",
+            qResp.StatusCode == System.Net.HttpStatusCode.OK
+            && qBody.Contains("\"pending\"") && qBody.Contains("\"items\"") && qBody.Contains("\"submittedAt\""));
+        var cancelResp = await http.PostAsync("api/cancel", new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
+        Check("POST /api/cancel 无运行中任务 → 409 {error}（无任务时明确拒绝）",
+            cancelResp.StatusCode == System.Net.HttpStatusCode.Conflict);
         await stop();
 
         // ── 4. /api/deps 工程依赖图谱：真工程（含类型级引用）+ 索引 → 概览 + 单文件依赖 ──

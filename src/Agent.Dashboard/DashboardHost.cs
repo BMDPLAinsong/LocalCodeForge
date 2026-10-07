@@ -227,7 +227,7 @@ public static class DashboardHost
 
         // ── 命令提交（10-07 webUI 交互）：web 命令汇入 CLI 主循环命令通道 ──
         // 终端输入与 web 提交统一排队（CommandHub 有界 100 DropOldest）——一次一任务串行语义不变。
-        // 空输入/超限 → 400；通道满 → 429；成功 → 202 {queued:true}。
+        // 空输入/超限 → 400；通道满 → 429；成功 → 202 {queued:true, seq, pending}。
         app.MapPost("/api/commands", (CommandRequest? req) =>
         {
             var input = req?.Input?.TrimStart('\uFEFF')?.Trim();
@@ -235,10 +235,28 @@ public static class DashboardHost
                 return Results.BadRequest(new { error = "input 为空。" });
             if (input.Length > 2000)
                 return Results.BadRequest(new { error = "input 超过 2000 字符上限。" });
-            if (!o.CommandHub.TrySubmit(input))
+            if (o.CommandHub.Count >= 100)
                 return Results.Json(new { error = "命令通道已满（排队过多），稍后重试。" }, JsonOpts, statusCode: 429);
-            return Results.Accepted("/api/commands", new { queued = true, input });
+            var seq = o.CommandHub.TrySubmit(input);
+            return Results.Accepted("/api/commands", new { queued = true, seq, pending = o.CommandHub.Count });
         });
+
+        // ── 命令队列状态（10-07 P0）：排队中的命令列表（seq/输入/提交时间）——web 用户可看到自己的位置 ──
+        app.MapGet("/api/queue", () =>
+        {
+            var items = o.CommandHub.Snapshot();
+            return Results.Json(new
+            {
+                pending = items.Count,
+                items = items.Select(q => new { q.Seq, q.Input, q.SubmittedAt }),
+            }, JsonOpts);
+        });
+
+        // ── 取消当前任务（10-07 P0）：触发 CLI 主循环当前任务的取消令牌（与终端 q 键同一机制）──
+        app.MapPost("/api/cancel", () =>
+            o.CommandHub.CancelCurrentTask()
+                ? Results.Ok(new { cancelled = true })
+                : Results.Conflict(new { error = "当前无运行中任务（无任务或已取消）。" }));
 
         // ── SSE：当前任务实时事件流（每订阅者 BoundedChannel 1000 DropOldest）──
         app.MapGet("/events", async (HttpContext ctx, CancellationToken ct) =>

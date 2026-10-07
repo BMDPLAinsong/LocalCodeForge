@@ -375,9 +375,10 @@ internal class Program
             }
             else
             {
-                // 交互态：从通道取（终端输入 / web 提交先到先执行）；null = EOF/取消 → 退出
-                input = await commandHub.NextAsync(CancellationToken.None);
-                if (input is null) { consoleReaderStopped = true; break; }
+                // 交互态：从通道取（终端输入 / web 提交先到先执行）；null/EOF = 退出
+                var next = await commandHub.NextAsync(CancellationToken.None);
+                if (next is null || next.Value.Input is null) { consoleReaderStopped = true; break; }
+                input = next.Value.Input;
             }
             // 【A-补强】统一剥离 BOM（U+FEFF）——PS 5.1 管道注入 UTF-8 BOM 到首行时
             // StartsWith("use ")/StartsWith("plan ") 等全部不命中、命令被当任务执行。
@@ -782,6 +783,9 @@ internal class Program
             // 监听随任务收尾（finally）停止；无头路径（sp==null）不启用。
             var sp = renderer as Agent.Infrastructure.Rendering.SpectreRenderer;
             var taskCts = new CancellationTokenSource();
+            // 【P0·web 取消】挂载当前任务取消源——Dashboard POST /api/cancel 经 CommandHub 触发同一令牌
+            // （与终端 q 键同一取消机制；任务结束 finally 摘除）。
+            commandHub.AttachTaskCancellation(taskCts);
             var listenCts = new CancellationTokenSource();
             if (sp is not null)
             {
@@ -872,6 +876,7 @@ internal class Program
             finally
             {
                 listenCts.Cancel();
+                commandHub.DetachTaskCancellation();
             }
         }
     }
