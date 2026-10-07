@@ -24,6 +24,7 @@ namespace Agent.Dashboard;
 public sealed record DashboardOptions(
     string WorkspaceRoot,
     string? ProjectRoot,
+    string SymbolDbPath,               // ← 10-07 UI 层 #3：工程依赖图谱（symbol_index.db 路径，与 find_symbol/analyze_deps 同源）
     DateTimeOffset? LawUnifiedEpoch,
     IMetricsCollector Metrics,
     TaskEventHub Hub,
@@ -109,6 +110,50 @@ public static class DashboardHost
             var current = Path.Combine(o.ProjectRoot, backup.Value.Rel);
             var result = FileDiffService.Compute(backup.Value.Full, current);
             return Results.Json(result, JsonOpts);
+        });
+
+        // ── 工程依赖图谱（10-07 UI 层 #3）：全工程边概览 / 单文件直接+反向依赖 ──
+        // 无 path → { files, edges, topReverse }（改动风险 Top5）；path=相对文件 → { direct, reverse }。
+        // 与 find_symbol/analyze_deps 同一 symbol_index.db + DependencyAnalyzer 引擎（单一来源，无 DTO）。
+        app.MapGet("/api/deps", (string? path) =>
+        {
+            if (o.ProjectRoot is null)
+                return Results.BadRequest(new { error = "未设置工程根（CLI 执行 use <路径> 后刷新），依赖图谱不可用。" });
+            var store = new SymbolIndexStore(o.SymbolDbPath);
+            try
+            {
+                if (!store.HasIndex(o.ProjectRoot))
+                {
+                    if (store.BuildAndSave(o.ProjectRoot) == 0)
+                        return Results.Ok(new { files = Array.Empty<string>(), edges = Array.Empty<object>(), topReverse = Array.Empty<object>(), direct = Array.Empty<string>(), reverse = Array.Empty<string>() });
+                }
+                else
+                {
+                    store.BuildAndSaveIncremental(o.ProjectRoot);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = $"符号索引失败：{ex.Message}" });
+            }
+            var symbols = store.GetAll(o.ProjectRoot);
+            var edges = DependencyAnalyzer.Build(o.ProjectRoot, symbols);
+            var files = edges.Select(e => e.File).Concat(edges.Select(e => e.DependsOnFile)).Distinct().OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                var topReverse = files
+                    .Select(f => (File: f, Count: DependencyAnalyzer.GetReverseDependencies(f, edges).Count))
+                    .Where(x => x.Count > 0)
+                    .OrderByDescending(x => x.Count).ThenBy(x => x.File, StringComparer.OrdinalIgnoreCase)
+                    .Take(5)
+                    .Select(x => new { file = x.File, count = x.Count })
+                    .ToList();
+                return Results.Json(new { files, edges, topReverse }, JsonOpts);
+            }
+            var norm = path.Replace('\\', '/');
+            var direct = DependencyAnalyzer.GetDirectDependencies(norm, edges);
+            var reverse = DependencyAnalyzer.GetReverseDependencies(norm, edges);
+            return Results.Json(new { direct, reverse }, JsonOpts);
         });
 
         // ── SSE：当前任务实时事件流（每订阅者 BoundedChannel 1000 DropOldest）──

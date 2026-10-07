@@ -72,8 +72,26 @@
 </header>
 <main>
   <div class="card" style="grid-column:1/-1">
-    <h2>任务实时流（SSE · 当前任务）</h2>
+    <h2>任务实时流（SSE · 当前任务）
+      <span style="float:right;font-weight:400">
+        <button class="btn fbtn active" data-f="all">全部</button>
+        <button class="btn fbtn" data-f="tools">工具</button>
+        <button class="btn fbtn" data-f="errors">错误</button>
+        <button class="btn fbtn" data-f="done">完成</button>
+        <label style="margin-left:10px;color:var(--dim)"><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
+      </span>
+    </h2>
     <div id="events"><div class="empty">等待任务事件…（dashboard 不阻塞 CLI，任务照常执行）</div></div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1">
+    <h2>工程依赖图谱（use 工程模式）
+      <span style="float:right;font-weight:400">
+        <select id="depFile" style="background:#1a1f2e;color:var(--fg);border:1px solid #2f3a52;border-radius:4px;padding:2px 6px"><option value="">（全工程概览）</option></select>
+        <button class="btn" id="depLoad" style="margin-left:6px">加载</button>
+      </span>
+    </h2>
+    <div id="dep"><div class="empty">未启用工程模式或无依赖数据。CLI 执行 use &lt;路径&gt; 后点"加载"刷新。</div></div>
   </div>
 
   <div class="card">
@@ -130,17 +148,87 @@ function appendEventLine(box, evt, bad) {
   box.appendChild(div);
   return div;
 }
-function trimBox(box, max) { while (box.children.length > max) box.removeChild(box.firstChild); }
+
+// ── 事件流过滤 + 自动滚动（10-07 UI 层 #5）──
+// 过滤只影响展示不丢数据：eventsCache 保留最近 300 事件，切换过滤即时重渲染。
+let filterMode = "all";
+const filterMap = {
+  all:    () => true,
+  tools:  (e) => ["toolCall", "toolResultEvent"].includes(e.type),
+  errors: (e) => e.type === "error",
+  done:   (e) => ["finalAnswer", "error"].includes(e.type),
+};
+let eventsCache = [];
+function renderEvents() {
+  const box = $("events");
+  box.innerHTML = "";
+  let n = 0;
+  for (const evt of eventsCache) {
+    if (filterMap[filterMode](evt)) { appendEventLine(box, evt, false); n++; }
+  }
+  if (n === 0) box.innerHTML = `<div class="empty">${eventsCache.length ? "当前过滤下无匹配事件" : "等待任务事件…（dashboard 不阻塞 CLI，任务照常执行）"}</div>`;
+  if ($("autoScroll").checked) box.scrollTop = box.scrollHeight;
+}
+document.querySelectorAll(".fbtn").forEach(btn => btn.addEventListener("click", () => {
+  document.querySelectorAll(".fbtn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  filterMode = btn.dataset.f;
+  renderEvents();
+}));
+
+// ── 工程依赖图谱（10-07 UI 层 #3）──
+// 全工程概览：文件数/边数/改动风险 Top5（反向依赖最多）表格；选文件 → 直接/反向依赖表格。
+function loadDeps() {
+  const dep = $("dep");
+  dep.innerHTML = `<div class="empty">加载依赖图谱…</div>`;
+  fetch("/api/deps")
+    .then(r => { if (!r.ok) throw new Error("未启用工程模式或索引失败（CLI 先 use <路径>）"); return r.json(); })
+    .then(data => {
+      const sel = $("depFile");
+      sel.innerHTML = `<option value="">（全工程概览）</option>` + data.files.map(f => `<option>${esc(f)}</option>`).join("");
+      let html = `<div class="kv"><span class="tag">文件</span> ${data.files.length} 个 &nbsp; <span class="tag">依赖边</span> ${data.edges.length} 条</div>`;
+      if (data.topReverse.length) {
+        html += `<table class="tbl"><tr><th>文件（改动影响面最大 Top5）</th><th>反向依赖数</th></tr>`;
+        for (const t of data.topReverse) html += `<tr><td>${esc(t.file)}</td><td>${t.count}</td></tr>`;
+        html += `</table><div class="dim" style="margin-top:6px">改动这些文件会波及最多其他文件——多文件修改前先查影响面。</div>`;
+      } else {
+        html += `<div class="empty">暂无类型级依赖边（符号索引为空或工程无可索引代码定义）。</div>`;
+      }
+      dep.innerHTML = html;
+      if (sel.value) loadFileDeps(sel.value);
+    })
+    .catch(err => { dep.innerHTML = `<div class="empty">${esc(err.message)}</div>`; });
+}
+function loadFileDeps(file) {
+  const dep = $("dep");
+  dep.innerHTML = `<div class="empty">查询 ${esc(file)} 的依赖…</div>`;
+  fetch("/api/deps?path=" + encodeURIComponent(file))
+    .then(r => r.json())
+    .then(data => {
+      const box = (title, items) => {
+        let h = `<h3 style="margin:8px 0 4px">${title}（${items.length}）</h3>`;
+        if (!items.length) return h + `<div class="empty" style="padding:4px">无</div>`;
+        h += `<table class="tbl"><tr><th>文件</th></tr>` + items.map(x => `<tr><td>${esc(x)}</td></tr>`).join("") + `</table>`;
+        return h;
+      };
+      dep.innerHTML = `<div class="kv"><span class="tag">${esc(file)}</span></div>`
+        + box("反向依赖（谁引用本文件——改动影响面）", data.reverse)
+        + box("直接依赖（本文件引用的类型所在文件）", data.direct)
+        + `<div class="dim" style="margin-top:6px">依赖基于类型符号引用（粗粒度，含注释/字符串误报），仅供参考方向；精确改动前用 find_symbol/analyze_deps 核实。</div>`;
+    })
+    .catch(err => { dep.innerHTML = `<div class="empty">${esc(err.message)}</div>`; });
+}
+$("depLoad").addEventListener("click", loadDeps);
+$("depFile").addEventListener("change", (e) => { if (e.target.value) loadFileDeps(e.target.value); });
 
 // ── SSE 实时流 ──
 function openStream() {
   const es = new EventSource("/events");
   es.onmessage = (e) => {
     let evt; try { evt = JSON.parse(e.data); } catch { return; }
-    const box = $("events");
-    appendEventLine(box, evt, false);
-    trimBox(box, 300);
-    box.scrollTop = box.scrollHeight;
+    eventsCache.push(evt);
+    while (eventsCache.length > 300) eventsCache.shift();
+    renderEvents();
     $("sub").textContent = "运行目录：" + (evt.type === "toolCall" ? "任务执行中…" : "在线");
   };
   es.onerror = () => { /* 无任务事件时 SSE 保持连接；错误自动重连 */ };

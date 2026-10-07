@@ -2592,10 +2592,12 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         store.RecordAsync("hist1", 0, new Agent.Core.Models.AgentEvent.Thinking("t"));
         store.RecordAsync("hist1", 1, new Agent.Core.Models.AgentEvent.Error("boom"));
         var (url, stop) = await Agent.Dashboard.DashboardHost.StartAsync(
-            new Agent.Dashboard.DashboardOptions(ws, null, null, metrics, dashHub, store), CancellationToken.None);
+            new Agent.Dashboard.DashboardOptions(ws, null, Path.Combine(ws, "symbol_index.db"), null, metrics, dashHub, store), CancellationToken.None);
         using var http = new HttpClient { BaseAddress = new Uri(url + "/") };
         var page = await http.GetStringAsync("");
-        Check("GET / 返回嵌入单页（含标题 + 回放 API）", page.Contains("LocalAI Workbench") && page.Contains("/events") && page.Contains("showTaskEvents"));
+        Check("GET / 返回嵌入单页（含标题 + 回放 API + 过滤/滚动开关）",
+            page.Contains("LocalAI Workbench") && page.Contains("/events") && page.Contains("showTaskEvents")
+            && page.Contains("fbtn") && page.Contains("autoScroll"));
         var stats = await http.GetStringAsync("api/stats");
         Check("GET /api/stats 200 + JSON 结构", stats.Contains("\"summary\"") && stats.Contains("totalCount"));
         var tasks = await http.GetStringAsync("api/tasks?take=3");
@@ -2609,7 +2611,44 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             evts.StartsWith("[") && evts.Contains("\"type\":\"Thinking\"") && evts.Contains("boom"));
         var noEvts = await http.GetStringAsync("api/tasks/none/events");
         Check("GET /api/tasks/{id}/events 无事件 → 空数组", noEvts == "[]");
+        var noDeps = await http.GetAsync("api/deps");
+        Check("无工程根 /api/deps → 400 BadRequest", noDeps.StatusCode == System.Net.HttpStatusCode.BadRequest);
         await stop();
+
+        // ── 4. /api/deps 工程依赖图谱：真工程（含类型级引用）+ 索引 → 概览 + 单文件依赖 ──
+        var depWs = Path.Combine(Path.GetTempPath(), "dash_deps_" + Guid.NewGuid().ToString("N"));
+        var depProj = Path.Combine(depWs, "proj");
+        Directory.CreateDirectory(depProj);
+        try
+        {
+            File.WriteAllText(Path.Combine(depProj, "Customer.cs"),
+                "public class Customer { public int Id { get; set; } public string Name { get; set; } }\n");
+            File.WriteAllText(Path.Combine(depProj, "OrderService.cs"),
+                "public class OrderService { public Customer Find(int id) { return new Customer(); } }\n");
+            File.WriteAllText(Path.Combine(depProj, "Program.cs"),
+                "public class Program { static void Main() { var s = new OrderService(); var c = s.Find(1); } }\n");
+            var depStore = new Agent.Infrastructure.Project.SymbolIndexStore(Path.Combine(depWs, "symbol_index.db"));
+            Check("deps 冒烟：符号索引可建（3 个类型级符号）", depStore.BuildAndSave(depProj) >= 3);
+            var (depUrl, depStop) = await Agent.Dashboard.DashboardHost.StartAsync(
+                new Agent.Dashboard.DashboardOptions(depWs, depProj, Path.Combine(depWs, "symbol_index.db"), null,
+                    new Agent.Infrastructure.Metrics.SqliteMetricsCollector(Path.Combine(depWs, "metrics.db")),
+                    new Agent.Infrastructure.Events.TaskEventHub(),
+                    new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(depWs, "metrics.db"))),
+                CancellationToken.None);
+            using var depHttp = new HttpClient { BaseAddress = new Uri(depUrl + "/") };
+            var overview = await depHttp.GetStringAsync("api/deps");
+            Check("GET /api/deps 概览：files/edges/topReverse 结构 + 3 文件 + 依赖边 ≥1",
+                overview.Contains("\"files\"") && overview.Contains("\"topReverse\"")
+                && overview.Contains("OrderService.cs") && overview.Contains("Program.cs"));
+            var single = await depHttp.GetStringAsync("api/deps?path=OrderService.cs");
+            Check("GET /api/deps?path=OrderService.cs → direct 含 Customer.cs（类型级引用检测）",
+                single.Contains("Customer.cs") && single.Contains("reverse"));
+            await depStop();
+        }
+        finally
+        {
+            try { Directory.Delete(depWs, true); } catch { }
+        }
     }
     finally
     {

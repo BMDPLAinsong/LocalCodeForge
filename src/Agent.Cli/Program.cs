@@ -255,10 +255,57 @@ internal class Program
         // ─────────── 主循环 ───────────
         // 【10-07 Dashboard】已启动的 dashboard URL（幂等：重复 dashboard 命令只提示不重启）
         string? dashboardUrl = null;
+
+        // 【10-07 UI 层 #4】Tab 命令补全（交互态自制行编辑；无头/重定向退回 ReadLine 逐字节兼容 E2E）
+        // 命令列表与主循环分支保持一致（use/rollback/stats/memory/plan/orch/diff/dashboard/help/exit/new）
+        string[] cliCommands = { "use", "rollback", "stats", "memory", "plan", "orch", "diff", "dashboard", "help", "exit", "new" };
+        string? ReadLineWithTabCompletion()
+        {
+            // 无头路径（管道/重定向）：E2E 输出逐字节兼容，不做行编辑
+            if (Console.IsInputRedirected || Console.IsOutputRedirected)
+                return Console.ReadLine();
+            var buf = new System.Text.StringBuilder();
+            while (true)
+            {
+                var key = Console.ReadKey(true);
+                switch (key.Key)
+                {
+                    case ConsoleKey.Enter:
+                        Console.WriteLine();
+                        return buf.ToString();
+                    case ConsoleKey.Backspace:
+                        if (buf.Length > 0) { buf.Length--; Console.Write("\b \b"); }
+                        break;
+                    case ConsoleKey.Tab:
+                        if (buf.Length == 0) break;
+                        var prefix = buf.ToString();
+                        var matches = cliCommands.Where(c => c.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList();
+                        if (matches.Count == 1)
+                        {
+                            var rest = matches[0][buf.Length..];
+                            buf.Append(rest).Append(' ');
+                            Console.Write(rest + " ");
+                        }
+                        else if (matches.Count > 1)
+                        {
+                            // 多候选：打印候选列表后重绘提示符 + 当前输入
+                            Console.WriteLine();
+                            renderer.System($"[补全] {string.Join("  ", matches)}");
+                            renderer.Prompt();
+                            Console.Write(buf);
+                        }
+                        break;
+                    default:
+                        if (key.KeyChar >= ' ' && key.KeyChar != '\0') { buf.Append(key.KeyChar); Console.Write(key.KeyChar); }
+                        break;
+                }
+            }
+        }
+
         while (true)
         {
             renderer.Prompt();
-            var input = Console.ReadLine();
+            var input = ReadLineWithTabCompletion();
             // 【A-补强】统一剥离 BOM（U+FEFF）——PS 5.1 管道注入 UTF-8 BOM 到首行时
             // StartsWith("use ")/StartsWith("plan ") 等全部不命中、命令被当任务执行。
             // 原 370 行仅 use 分支 trim；此处提到主循环入口，覆盖所有命令分支。
@@ -365,11 +412,14 @@ internal class Program
                     continue;
                 }
                 var (url, _) = await Agent.Dashboard.DashboardHost.StartAsync(
-                    new Agent.Dashboard.DashboardOptions(workspace, options.ProjectRoot, options.LawUnifiedEpoch,
+                    new Agent.Dashboard.DashboardOptions(workspace, options.ProjectRoot,
+                        Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db"),
+                        options.LawUnifiedEpoch,
                         provider.GetRequiredService<IMetricsCollector>(), eventHub, eventStore),
                     CancellationToken.None);
                 dashboardUrl = url;
-                renderer.Notice($"Dashboard 已启动（仅本机回环）：{url}\n  浏览器打开查看：任务实时流 / stats / 历史任务 / 备份 Diff");
+                // 【10-07 UI 层 #4】交互态 [link] 超链接样式；无头态 dashboard 命令已被无头守卫拦截（不会到此处）
+                renderer.Notice($"Dashboard 已启动（仅本机回环）：[link]{url}[/]\n  浏览器打开查看：任务实时流 / stats / 历史任务 / 备份 Diff / 任务详情回放");
                 continue;
             }
 

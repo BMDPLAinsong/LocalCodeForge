@@ -146,6 +146,8 @@ else → AgentLoop 分支（AgentRequest 携带 writeTarget/writeTargetIsFile）
 - **事件旁路接线（关键架构决策）**：`ConsumeTaskAsync` 内 `renderer.RenderEventAsync(evt)` **之后**调 `eventHub.Publish(evt)`——渲染器直接消费不变，hub 是第二消费者（旁路多播而非发布-订阅）。SSE 订阅者 = 浏览器标签页（BoundedChannel 1000 DropOldest，后台/卡住不占内存）。加第二前端时再考虑重构为发布-订阅。**事件持久化是第三消费者**（`eventStore.RecordAsync(taskId, seq++, evt)`，fail-safe 静默）。
 - **任务详情回放（10-07 UI 层 #2）**：`/api/tasks/{taskId}/events` 返回 StoredEvent 数组（`payload` 为 JSON 字符串，与 SSE 推送格式一致）——前端 `JSON.parse(payload)` 后直接复用 `renderEventLine()`（**SSE 与回放共用同一渲染函数，消双路径**）。历史任务表行点击触发；失败任务自动定位到第一个 error 事件（描边高亮 + scrollIntoView）。无事件 → 空数组 200。
 - **事件持久化（10-07 UI 层 #1）**：`TaskEventStore` 落 metrics.db 同库 `task_events` 表（主键 (task_id,seq)）；启动时 `PruneOlderThan(30)` 清理 30 天前。**JsonOpts 单一来源 = `TaskEventStore.JsonOpts`**（存储/SSE/回放同一 camelCase + 字符串枚举），DashboardHost 不再自带 JsonOpts。
+- **Tab 命令补全（10-07 UI 层 #4）**：主循环 `ReadLineWithTabCompletion()`——交互态 ReadKey 自制行编辑（退格 / Tab 唯一匹配自动补全+空格 / 多候选打印列表重绘提示符）；**无头守卫 `Console.IsInputRedirected || Console.IsOutputRedirected` 退回 `Console.ReadLine`**（E2E 管道输出逐字节兼容）。命令列表 `cliCommands`（use/rollback/stats/memory/plan/orch/diff/dashboard/help/exit/new）与主循环分支保持一致——新增命令必须同步加入列表。
+- **工程依赖图谱（10-07 UI 层 #3）**：`/api/deps` 端点——无 path → `{files,edges,topReverse}`（全工程概览 + 改动影响面 Top5）；`?path=相对文件` → `{direct,reverse}`。**数据源与 find_symbol/analyze_deps 同一 `symbol_index.db` + `DependencyAnalyzer` 引擎**（DashboardOptions.SymbolDbPath 由 CLI 传 metrics.db 同目录；无 DTO，语义单一来源）。每次请求：`HasIndex` 无则全量 `BuildAndSave`、有则 `BuildAndSaveIncremental`，再 `Build` 重算边（51 文件毫秒级；超大工程可加缓存）。
 - **SSE 语义**：`/events` 只推**当前任务**的事件流（单向追加）；历史任务走 `/api/tasks?take=` 轮询；前端按 taskId 分组。浏览器刷新页面前的事件不重放（SSE 无缓冲回溯）——刷新后历史看任务表、实时从新任务起。
 - **Diff API 无 DTO**：`/api/diff` 直接序列化 `FileDiffService.DiffResult`（camelCase + 枚举转字符串，`JsonStringEnumConverter`）；前端只需 `{lines:[{type:"same|add|remove",oldNo,newNo,text}]}`。**diff 语义单一来源在引擎**（终端 + 浏览器共用），符合"消双路径漂移"原则。
 - **已知坑（实测）**：`app.StopAsync()` 调用即开始执行（非惰性）——`StartAsync` 若直接返回其 Task，宿主会在启动后立刻停服（tests 首版崩溃实证）。**必须返回停止委托 `() => app.StopAsync()`**。另：DashboardHost 用 `_running` 静态字段持 app 引用防 GC 停服。
@@ -632,7 +634,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 | `src/Agent.Infrastructure/Events/TaskEventHub.cs` | 事件多播总线（10-07） | Subscribe（BoundedChannel 1000 DropOldest + IDisposable 句柄）/ Publish（无订阅者零开销） |
 | `src/Agent.Infrastructure/Events/TaskEventStore.cs` | 任务事件持久化（10-07 UI 层 #1） | RecordAsync（fail-safe）/ GetEventsAsync / PruneOlderThan / JsonOpts（单一来源） |
 | `src/Agent.Infrastructure/Diff/FileDiffService.cs` | 行级 Diff 引擎（10-07，零第三方依赖） | Compute（前缀/后缀剥离 + 中间段 LCS）/ PlainDiffFormatter.Format |
-| `src/Agent.Dashboard/DashboardHost.cs` | 真 UI 层宿主（10-07） | StartAsync（Kestrel 127.0.0.1:0 + 停止委托）/ 6 API + SSE（+ /api/tasks/{id}/events 回放，UI 层 #2） |
+| `src/Agent.Dashboard/DashboardHost.cs` | 真 UI 层宿主（10-07） | StartAsync（Kestrel 127.0.0.1:0 + 停止委托）/ 7 API + SSE（+ /api/tasks/{id}/events 回放、/api/deps 依赖图谱） |
 | `src/Agent.Dashboard/DashboardPages/index.html` | Dashboard 单页（10-07，纯 CSS 零外网） | SSE 实时流 / stats 条形 / 任务表 / 备份树 + Diff 查看器 |
 | `src/Agent.Infrastructure/Tools/` | 10 工具 | 见 §7.1 |
 | `tests/Agent.Infrastructure.Tests/Program.cs` | 492 断言 harness | Check / 各分组 |
