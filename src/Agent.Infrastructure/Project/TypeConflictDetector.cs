@@ -91,6 +91,31 @@ public static class TypeConflictDetector
     }
 
     /// <summary>
+    /// 【10-08 B 扩展】检测新内容【自身】重复定义类型名（同一内容中 class X 出现 ≥2 次）。
+    /// 与 DetectDuplicateTypes（跨文件）互补：模型可能在单份新内容里写两个同名类
+    /// （10-08 复测实证：LetterCaseChecker.cs 900 字符内 2×class LetterCaseChecker → CS0101）。
+    /// 纯内容检测，不依赖工程扫描——沙箱模式同样生效。
+    /// 返回重复类型名列表（"名（定义 N 次）"，按次数降序）；无重复返回空列表。
+    /// </summary>
+    public static List<string> DetectSelfDuplicateTypes(string content)
+    {
+        var result = new List<string>();
+        if (string.IsNullOrWhiteSpace(content)) return result;
+        var cleaned = BlockCommentRegex.Replace(content, "");
+        cleaned = LineCommentRegex.Replace(cleaned, "");
+        cleaned = StringLiteralRegex.Replace(cleaned, "");
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match m in TypeDefRegex.Matches(cleaned))
+        {
+            var name = m.Groups[2].Value;
+            counts[name] = counts.TryGetValue(name, out var c) ? c + 1 : 1;
+        }
+        foreach (var kv in counts.Where(kv => kv.Value >= 2).OrderByDescending(kv => kv.Value))
+            result.Add($"{kv.Key}（定义 {kv.Value} 次）");
+        return result;
+    }
+
+    /// <summary>
     /// 生成"已有类型清单"文案（数据驱动引导）：
     /// "工程已有类型：Order(Order.cs), OrderService(OrderService.cs), …（共 N 个）。请勿重复定义以上类型；本文件只应定义新类型。"
     /// 超长工程最多列前 30 个 + "等 N 个"。

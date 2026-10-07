@@ -170,6 +170,22 @@ public sealed class WriteFileTool : AgentToolBase
             return err;
         }
 
+        // 【10-08 B 扩展】同文件内自重复类型定义检测（独立于工程模式：沙箱/工程均拦截）。
+        // 模型可能在单份新内容里写两个同名类（10-08 复测实证：LetterCaseChecker.cs 900 字符
+        // 内 2×class LetterCaseChecker → CS0101 编译失败 → 修复循环熔断）。
+        // 新内容自身重复定义 → 写入前拒绝 + 引导只保留一份，省多轮编译往返。
+        if (Path.GetExtension(fullPath).Equals(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            var selfDups = TypeConflictDetector.DetectSelfDuplicateTypes(content);
+            if (selfDups.Count > 0)
+            {
+                var err = $"错误：{relative} 的新内容自身重复定义类型：{string.Join("；", selfDups)}。\n" +
+                       "请只保留一份该类型定义（删除多余副本），不要在同一文件里重复定义同名类型。";
+                await RecordRejectionAsync("pd_conflict", relative, err, ct);
+                return err;
+            }
+        }
+
         // 【P-D】写前类型冲突检测：工程可写时，新内容定义了工程【其他文件】已有类型 → 拒绝写入。
         // ShippingService 类任务 3/3 失败根因：模型把已有 class Order 重复定义进 OrderService.cs（CS0101）。
         // 确定性拦截（正则扫工程已有类型）+ 附"已有类型清单"引导（数据驱动，非提示词）。

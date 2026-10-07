@@ -127,6 +127,21 @@ public sealed class EditFileTool : AgentToolBase
             return err;
         }
 
+        // 【10-08 B 扩展】编辑内容自重复类型定义检测（独立于工程模式）。
+        // 模型可能在 new_string 里塞两份同名类型定义（与 write_file 同源恶习）；
+        // 新内容自身重复定义 → 拒绝 + 引导只保留一份。
+        if (Path.GetExtension(fullPath).Equals(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            var selfDups = TypeConflictDetector.DetectSelfDuplicateTypes(newStr);
+            if (selfDups.Count > 0)
+            {
+                var err = $"错误：{relative} 的编辑内容自身重复定义类型：{string.Join("；", selfDups)}。\n" +
+                       "请只保留一份该类型定义（删除多余副本），不要在同一文件里重复定义同名类型。";
+                await RecordRejectionAsync("pd_conflict", relative, err, ct);
+                return err;
+            }
+        }
+
         // 【P-D】编辑引入类型定义冲突检测：工程可写时，new_string 定义了工程【其他文件】已有类型 → 拒绝。
         // 与 write_file 同理（模型可能用 edit_file 引入重复类型定义）；局部编辑本身少见，成本毫秒级。
         if (insideProject && _projectRoot is not null)

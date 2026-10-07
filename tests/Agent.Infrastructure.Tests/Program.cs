@@ -204,6 +204,25 @@ Console.WriteLine("== PyCodeGuard 交互拒绝 + edit_file 后处理（§14-3j�
     eTool.InvokeAsync(eArgs2, CancellationToken.None).GetAwaiter().GetResult();
     Check("edit .py 无 timeout → 补 timeout=8",
         R("e.py").Contains(", timeout=8"));
+
+    // 【10-08 B】同文件内自重复类型定义：沙箱模式（无工程）同样拦截——
+    // 实证 LetterCaseChecker.cs 900 字符内 2×class LetterCaseChecker → CS0101。
+    var selfDupRet = W("Dup.cs",
+        "using System;\npublic class LetterCaseChecker\n{\n}\npublic class LetterCaseChecker\n{\n}\n");
+    Check("B 沙箱 write_file 自身重复类型 → 拒绝（pd_conflict）",
+        selfDupRet.Contains("自身重复定义类型") && selfDupRet.Contains("LetterCaseChecker"));
+    Check("B write_file 拒绝 → 文件未创建",
+        !File.Exists(Path.Combine(ws, "Dup.cs")));
+    // 单类正常写入不受影响
+    Check("B 沙箱 write_file 单类 → 成功",
+        W("Single.cs", "public class Single { }").Contains("已写入"));
+    // edit_file 新内容自身重复类型 → 拒绝
+    File.WriteAllText(Path.Combine(ws, "editDup.cs"), "public class Keep { }");
+    var eDupJson = $"{{\"path\":\"editDup.cs\",\"old_string\":{JsonSerializer.Serialize("public class Keep { }")},\"new_string\":{JsonSerializer.Serialize("public class Keep { }\npublic class Keep { }")}}}";
+    var eDupArgs = JsonSerializer.Deserialize<JsonElement>(eDupJson);
+    var eDupRet = eTool.InvokeAsync(eDupArgs, CancellationToken.None).GetAwaiter().GetResult();
+    Check("B edit_file 新内容自身重复类型 → 拒绝",
+        eDupRet.Contains("自身重复定义类型") && File.ReadAllText(Path.Combine(ws, "editDup.cs")).Contains("Keep { }"));
 }
 
 
@@ -1901,6 +1920,52 @@ Console.WriteLine("== P1-1 symbol 索引增量失效（mtime） ==");
     File.Delete(Path.Combine(proj, "B.cs"));
     var inc2 = store.BuildAndSaveIncremental(proj);
     Check("P1-1 删除文件记录清除", inc2.Rescanned == 0 && !store.GetAll(proj).Any(s => s.Symbol == "B"));
+}
+
+Console.WriteLine("== 10-08 A 演示分支容错（OutputVerifier.HasGenericFailure 容错 3） ==");
+{
+    // 真实样本：Python 计算器教学演示——成功计算行 + 异常分支演示行并存。
+    // 此前 "错误:" 命中业务演示行 → 误判失败 → 修复循环熔断误杀。
+    var demoCalc = "计算器演示\n============\n10 + 5 = 15\n10 - 3 = 7\n4 * 6 = 24\n15 / 3 = 5.0\n10 / 0 -> 错误: 除数不能为零\n8 % 3 -> 错误: 不支持的运算符: %";
+    Check("A 演示分支容错：计算器演示（成功行+错误演示行）→ 放行",
+        !Generic(demoCalc, null));
+    // 真失败仍拦：失败词命中但无"数字 op 数字 = 数字"成功计算形态
+    Check("A 真失败仍拦：连接失败无计算行 → 判失败",
+        Generic("错误: 无法连接服务器\n重试中", null));
+    // 只有错误演示行、无成功计算行 → 仍判失败（保守）
+    Check("A 仅错误演示行无成功行 → 仍判失败",
+        Generic("10 / 0 -> 错误: 除数不能为零", null));
+    // 结构性错误不受影响（Traceback 由前置检查硬拦，本容错不接管）
+    Check("A 结构性错误不豁免：含 Traceback 仍判失败",
+        Generic("Traceback (most recent call last)\n10 / 0 -> 错误: 除数不能为零", null));
+    // 成功信号容错（既有容错 2）不受影响
+    Check("A 既有成功信号容错保持：成功 5 条失败 1 条 → 放行",
+        !Generic("处理 6 条：成功 5 条，失败 1 条", null));
+    // 演示容错不吞掉带 expected 的失败场景（expected 含失败词仍走容错 1）
+    Check("A expected 含失败词（取款失败样例）→ 放行（容错 1 优先）",
+        !Generic("取款失败：余额不足", "取款失败：余额不足"));
+}
+
+Console.WriteLine("== 10-08 B 同文件内自重复类型定义检测（P-D 扩展） ==");
+{
+    // 真实样本：LetterCaseChecker.cs 900 字符内 2×class LetterCaseChecker → CS0101。
+    var selfDup = Agent.Infrastructure.Project.TypeConflictDetector.DetectSelfDuplicateTypes(
+        "using System;\npublic class LetterCaseChecker\n{\n}\npublic class LetterCaseChecker\n{\n}\n");
+    Check("B DetectSelfDuplicateTypes → 检出 1 项重复（定义 2 次）",
+        selfDup.Count == 1 && selfDup[0].Contains("LetterCaseChecker") && selfDup[0].Contains("2 次"));
+    // 正常单类 → 空
+    Check("B 单类定义 → 无自重复",
+        Agent.Infrastructure.Project.TypeConflictDetector.DetectSelfDuplicateTypes(
+            "public class Order { }\npublic class OrderService { }").Count == 0);
+    // 注释/字符串中的类名不计
+    Check("B 注释/字符串中的类名 → 不计入自重复",
+        Agent.Infrastructure.Project.TypeConflictDetector.DetectSelfDuplicateTypes(
+            "// class Fake\nstring s = \"class InString\";\npublic class Real { }").Count == 0);
+    // 三份重复 → 定义 3 次
+    var selfDup3 = Agent.Infrastructure.Project.TypeConflictDetector.DetectSelfDuplicateTypes(
+        "public class X { }\npublic class X { }\npublic class X { }");
+    Check("B 三份重复 → 定义 3 次",
+        selfDup3.Count == 1 && selfDup3[0].Contains("3 次"));
 }
 
 Console.WriteLine("== P0-2 expected_output 严格校验（IsTaskExpectedOutputStrict） ==");

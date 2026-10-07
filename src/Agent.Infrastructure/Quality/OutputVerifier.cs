@@ -198,9 +198,35 @@ public static class OutputVerifier
             return false;
         }
 
+        // 容错 3：演示程序容错（10-08 真实样本：Python 计算器教学演示）
+        // 程序输出同时含「成功计算行」与「异常分支演示行」——如
+        //   10 + 5 = 15
+        //   10 / 0 -> 错误: 除数不能为零
+        // 失败词命中的是业务演示行（捕获异常后打印的错误消息），非真实失败。
+        // 双条件都满足才放行：① 至少一行 数字 op 数字 = 数字 成功计算形态；
+        // ② 至少一行 数字 op 数字 (=|->) 错误/失败 演示异常分支。
+        // 结构性错误层（Traceback / error CS / 未捕获异常）由前置检查硬拦，不受本容错影响。
+        if (HasDemoCalcLine(stdout) && HasDemoErrorLine(stdout))
+        {
+            reason = "";
+            return false;
+        }
+
         reason = "失败/failed/error";
         return true;
     }
+
+    /// <summary>演示程序的成功计算行：`数字 op 数字 = 数字`（如 `10 + 5 = 15` / `15 / 3 = 5.0`）。</summary>
+    private static bool HasDemoCalcLine(string stdout) =>
+        Regex.IsMatch(stdout,
+            @"\b\d+(?:\.\d+)?\s*[+\-*/%]\s*\d+(?:\.\d+)?\s*=\s*-?\d+(?:\.\d+)?\b",
+            RegexOptions.IgnoreCase);
+
+    /// <summary>演示程序的异常分支行：`数字 op 数字 (=|->) 错误/失败/error`（如 `10 / 0 -> 错误: 除数不能为零`）。</summary>
+    private static bool HasDemoErrorLine(string stdout) =>
+        Regex.IsMatch(stdout,
+            @"\b\d+(?:\.\d+)?\s*[+\-*/%]\s*\d+(?:\.\d+)?\s*(?:=|->)\s*(?:错误|失败|error|fail)",
+            RegexOptions.IgnoreCase);
 
     // ──────────────────────────────────────────────────────────
     // 检查 4.1：占位 API Key（AgentLoop 检查 4.1 使用；
