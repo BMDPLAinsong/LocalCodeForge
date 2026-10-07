@@ -152,6 +152,9 @@ internal class Program
         services.AddAgent(options, workspace, dbPath, options.ProjectRoot);
         // 【10-07 Dashboard】事件多播总线（跨任务单例）：渲染器直接消费不变，Dashboard SSE 是第二消费者
         services.AddSingleton<Agent.Infrastructure.Events.TaskEventHub>();
+        // 【10-07 UI 层 #1】事件持久化（metrics.db 同库 task_events 表）：Dashboard 任务详情回放地基
+        services.AddSingleton<Agent.Infrastructure.Events.TaskEventStore>(_ =>
+            new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "metrics.db")));
         var provider = services.BuildServiceProvider();
         // 【关键】启动时显式解析 IMetricsCollector，触发 SQLite 建表
         // 否则 Singleton 工厂不会被调用，metrics.db 不会创建
@@ -164,6 +167,9 @@ internal class Program
         _ = provider.GetRequiredService<Agent.Infrastructure.Metrics.ToolRejectionStore>();
         // 【10-07 Dashboard】事件总线显式解析（主容器单例，任务循环旁路发布 + SSE 订阅）
         var eventHub = provider.GetRequiredService<Agent.Infrastructure.Events.TaskEventHub>();
+        // 【10-07 UI 层 #1】事件持久化显式解析（触发 task_events 建表）+ 30 天生命周期清理
+        var eventStore = provider.GetRequiredService<Agent.Infrastructure.Events.TaskEventStore>();
+        eventStore.PruneOlderThan(30);
 
         // 【D2】启动时加载任务特征类历史聚合（路由数据校准 + stats 归因）
         var featureAggregator = provider.GetRequiredService<Agent.Infrastructure.Routing.TaskMetricsAggregator>();
@@ -197,6 +203,7 @@ internal class Program
         // 响应 q 取消（OperationCanceledException）、任务结束打印汇总行。
         // 取消任务不归档（不污染成功率指标）；无头路径（sp==null）行为与旧版逐字节一致。
         async Task<(List<string> errors, string? answer, bool cancelled)> ConsumeTaskAsync(
+            string taskId,
             IAsyncEnumerable<AgentEvent> events,
             Agent.Infrastructure.Rendering.SpectreRenderer? sp,
             CancellationToken ct)
@@ -205,6 +212,7 @@ internal class Program
             string? answer = null;
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var step = 0;
+            var seq = 0;
             var svc = "?";
             var cancelled = false;
             try
@@ -220,6 +228,8 @@ internal class Program
                     // 【10-07 Dashboard】旁路多播：渲染器直接消费不变，hub 是第二消费者
                     // （SSE 订阅者浏览器后台/JS 卡住时 DropOldest 丢最旧，绝不阻塞任务）
                     eventHub.Publish(evt);
+                    // 【10-07 UI 层 #1】事件持久化（第三消费者，fail-safe）：Dashboard 任务详情回放
+                    eventStore.RecordAsync(taskId, seq++, evt);
                 }
             }
             catch (OperationCanceledException)
@@ -356,7 +366,7 @@ internal class Program
                 }
                 var (url, _) = await Agent.Dashboard.DashboardHost.StartAsync(
                     new Agent.Dashboard.DashboardOptions(workspace, options.ProjectRoot, options.LawUnifiedEpoch,
-                        provider.GetRequiredService<IMetricsCollector>(), eventHub),
+                        provider.GetRequiredService<IMetricsCollector>(), eventHub, eventStore),
                     CancellationToken.None);
                 dashboardUrl = url;
                 renderer.Notice($"Dashboard 已启动（仅本机回环）：{url}\n  浏览器打开查看：任务实时流 / stats / 历史任务 / 备份 Diff");
@@ -696,7 +706,7 @@ internal class Program
 
                     var orchestrator = taskProvider.GetRequiredService<IOrchestrator>();
                     var (orchErrors, orchAnswer, cancelled) = await ConsumeTaskAsync(
-                        orchestrator.RunAsync(input, workspace, taskCts.Token), sp, taskCts.Token);
+                        taskId, orchestrator.RunAsync(input, workspace, taskCts.Token), sp, taskCts.Token);
                     if (!cancelled)
                         ArchiveTask(taskProvider, input, taskId, "orchestrator", orchErrors, orchAnswer);
                     if (options.ProjectRoot is not null)
@@ -715,7 +725,7 @@ internal class Program
                     var request = new AgentRequest(sessionId, input, workspace, writeTarget, writeTargetIsFile);
 
                     var (loopErrors, loopAnswer, cancelled) = await ConsumeTaskAsync(
-                        taskLoop.RunAsync(request, taskCts.Token), sp, taskCts.Token);
+                        taskId, taskLoop.RunAsync(request, taskCts.Token), sp, taskCts.Token);
                     if (!cancelled)
                         ArchiveTask(taskProvider, input, taskId, "agent", loopErrors, loopAnswer);
                     if (options.ProjectRoot is not null)

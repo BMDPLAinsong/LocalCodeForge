@@ -2530,10 +2530,11 @@ Console.WriteLine("== 配置结构自检：RoutingRules.json ==");
 // ════════════════════════════════════════════════════════════
 // Dashboard P0：TaskEventHub 多播 + DashboardHost API 冒烟（10-07）
 //   1. TaskEventHub 订阅/发布/退订（BoundedChannel 背压 DropOldest）
-//   2. DashboardHost 真起 Kestrel（127.0.0.1:0）→ HttpClient 拉 /api/stats /api/tasks
-//      /api/backups /api/diff 与 GET /（嵌入页）→ 200 + JSON 结构
+//   2. TaskEventStore 持久化：记录/读取/清理/fail-safe（10-07 UI 层 #1）
+//   3. DashboardHost 真起 Kestrel（127.0.0.1:0）→ HttpClient 拉 /api/stats /api/tasks
+//      /api/backups /api/diff /api/tasks/{id}/events 与 GET /（嵌入页）→ 200 + JSON 结构
 // ════════════════════════════════════════════════════════════
-Console.WriteLine("== Dashboard P0 TaskEventHub + DashboardHost（Events/ + Agent.Dashboard） ==");
+Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost（Events/ + Agent.Dashboard） ==");
 {
     // ── 1. TaskEventHub：订阅 → 发布 → 读取；退订后不再收到 ──
     var hub = new Agent.Infrastructure.Events.TaskEventHub();
@@ -2550,18 +2551,51 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + DashboardHost（Events/ + Agen
     reader2.TryRead(out first);
     Check("退订后不再接收（第二个订阅者不受影响）", first is Agent.Core.Models.AgentEvent.Thinking && (first as Agent.Core.Models.AgentEvent.Thinking)!.Text == "t2");
 
-    // ── 2. DashboardHost 冒烟：真起 Kestrel → HttpClient 验证 API ──
+    // ── 2. TaskEventStore：记录 → 读取（seq 升序）→ Prune 清理 → JsonOpts 单一来源 ──
+    var ws2 = Path.Combine(Path.GetTempPath(), "store_smoke_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(ws2);
+    try
+    {
+        var store = new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(ws2, "metrics.db"));
+        var ev1 = new Agent.Core.Models.AgentEvent.ToolCall("write_file", System.Text.Json.JsonDocument.Parse("{\"path\":\"a.cs\"}").RootElement);
+        var ev2 = new Agent.Core.Models.AgentEvent.FinalAnswer("done");
+        store.RecordAsync("taskX", 0, ev1);
+        store.RecordAsync("taskX", 1, ev2);
+        store.RecordAsync("other", 0, ev1);
+        var all = store.GetEventsAsync("taskX");
+        Check("store 记录 + 读取（seq 升序、跨任务隔离）",
+            all.Count == 2 && all[0].Seq == 0 && all[1].Seq == 1
+            && all[0].Type == nameof(Agent.Core.Models.AgentEvent.ToolCall)
+            && all[1].Type == nameof(Agent.Core.Models.AgentEvent.FinalAnswer)
+            && all[0].Payload.Contains("write_file"));
+        var parsed = System.Text.Json.JsonSerializer.Deserialize<Agent.Core.Models.AgentEvent.ToolCall>(all[0].Payload, Agent.Infrastructure.Events.TaskEventStore.JsonOpts);
+        Check("store payload 可反序列化回原事件（JsonOpts 单一来源）",
+            parsed is not null && parsed.Name == "write_file");
+        var pruned = store.PruneOlderThan(1);
+        Check("PruneOlderThan(1) 清理 1 秒前事件（刚写入的保留）", pruned == 0);
+        var eventsApi = store.GetEventsAsync("nope");
+        Check("store 未写入任务 → 空列表", eventsApi.Count == 0);
+    }
+    finally
+    {
+        try { Directory.Delete(ws2, true); } catch { }
+    }
+
+    // ── 3. DashboardHost 冒烟：真起 Kestrel → HttpClient 验证 API ──
     var ws = Path.Combine(Path.GetTempPath(), "dash_smoke_" + Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(ws);
     try
     {
         var dashHub = new Agent.Infrastructure.Events.TaskEventHub();
         var metrics = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(Path.Combine(ws, "metrics.db"));
+        var store = new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(ws, "metrics.db"));
+        store.RecordAsync("hist1", 0, new Agent.Core.Models.AgentEvent.Thinking("t"));
+        store.RecordAsync("hist1", 1, new Agent.Core.Models.AgentEvent.Error("boom"));
         var (url, stop) = await Agent.Dashboard.DashboardHost.StartAsync(
-            new Agent.Dashboard.DashboardOptions(ws, null, null, metrics, dashHub), CancellationToken.None);
+            new Agent.Dashboard.DashboardOptions(ws, null, null, metrics, dashHub, store), CancellationToken.None);
         using var http = new HttpClient { BaseAddress = new Uri(url + "/") };
         var page = await http.GetStringAsync("");
-        Check("GET / 返回嵌入单页（含标题）", page.Contains("LocalAI Workbench") && page.Contains("/events"));
+        Check("GET / 返回嵌入单页（含标题 + 回放 API）", page.Contains("LocalAI Workbench") && page.Contains("/events") && page.Contains("showTaskEvents"));
         var stats = await http.GetStringAsync("api/stats");
         Check("GET /api/stats 200 + JSON 结构", stats.Contains("\"summary\"") && stats.Contains("totalCount"));
         var tasks = await http.GetStringAsync("api/tasks?take=3");
@@ -2570,6 +2604,11 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + DashboardHost（Events/ + Agen
         Check("GET /api/backups 200 + 数组", backups.StartsWith("["));
         var noDiff = await http.GetAsync("api/diff?taskId=x&rel=y");
         Check("无工程根 diff → 400 BadRequest", noDiff.StatusCode == System.Net.HttpStatusCode.BadRequest);
+        var evts = await http.GetStringAsync("api/tasks/hist1/events");
+        Check("GET /api/tasks/{id}/events 200 + 事件数组（payload 为 JSON 字符串）",
+            evts.StartsWith("[") && evts.Contains("\"type\":\"Thinking\"") && evts.Contains("boom"));
+        var noEvts = await http.GetStringAsync("api/tasks/none/events");
+        Check("GET /api/tasks/{id}/events 无事件 → 空数组", noEvts == "[]");
         await stop();
     }
     finally

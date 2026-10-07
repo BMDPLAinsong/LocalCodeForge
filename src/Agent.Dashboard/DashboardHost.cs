@@ -26,16 +26,14 @@ public sealed record DashboardOptions(
     string? ProjectRoot,
     DateTimeOffset? LawUnifiedEpoch,
     IMetricsCollector Metrics,
-    TaskEventHub Hub);
+    TaskEventHub Hub,
+    TaskEventStore EventStore);   // ← 10-07 UI 层 #1：任务事件持久化（详情回放数据源）
 
 public static class DashboardHost
 {
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-    };
+    // 【10-07 UI 层 #1】序列化单一来源在 TaskEventStore.JsonOpts（存储/SSE/回放共用同一格式，
+    // 前端一个渲染函数吃三种数据源——消双路径漂移）
+    private static readonly JsonSerializerOptions JsonOpts = TaskEventStore.JsonOpts;
 
     // 持有当前宿主引用：StartAsync 返回后 Kestrel 依赖 app 对象存活（防 GC 停止服务）
     private static WebApplication? _running;
@@ -83,6 +81,13 @@ public static class DashboardHost
 
         // ── 备份列表（Diff 数据源定位）──
         app.MapGet("/api/backups", () => Results.Json(BackupService.ListBackups(o.WorkspaceRoot), JsonOpts));
+
+        // ── 任务详情回放：完整事件序列（10-07 UI 层 #1/#2）──
+        // 返回 StoredEvent 数组（payload 为 JSON 字符串，与 SSE 推送格式一致）——
+        // 前端 JSON.parse(payload) 后直接复用 renderEvent 渲染（单一渲染函数）。
+        // 无事件 → 空数组（200），前端显示"无事件记录"。
+        app.MapGet("/api/tasks/{taskId}/events", (string taskId) =>
+            Results.Json(o.EventStore.GetEventsAsync(taskId), JsonOpts));
 
         // ── Diff：备份 vs 当前（直接序列化引擎模型，无 DTO）──
         app.MapGet("/api/diff", (string taskId, string rel, CancellationToken ct) =>

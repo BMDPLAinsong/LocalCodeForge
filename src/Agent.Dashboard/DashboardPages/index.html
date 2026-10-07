@@ -46,6 +46,10 @@
   td.inp { max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .ok { color:var(--green); } .fail { color:var(--red); } .warn { color:var(--yellow); }
   #tasksBody { display:block; max-height:260px; overflow-y:auto; }
+  #tasksBody tr { cursor:pointer; }
+  #tasksBody tr:hover { background:#21262d; }
+  #detail { max-height:240px; overflow-y:auto; font-size:12px; }
+  .ev.error.bad { outline:1px solid var(--red); outline-offset:-1px; }
   #backups { max-height:220px; overflow-y:auto; }
   .bk-task { cursor:pointer; padding:3px 6px; border-radius:3px; }
   .bk-task:hover { background:#21262d; }
@@ -82,6 +86,11 @@
     <div id="tasks"><div class="empty">加载中…</div></div>
   </div>
 
+  <div class="card">
+    <h2>任务详情回放（点击左侧历史任务行 /api/tasks/{id}/events）</h2>
+    <div id="detail"><div class="empty">点击历史任务行回放完整事件序列；失败任务自动定位到第一个 error 事件</div></div>
+  </div>
+
   <div class="card" style="grid-column:1/-1">
     <h2>工程备份与 Diff（/api/backups + /api/diff）</h2>
     <div id="backups"><div class="empty">加载中…</div></div>
@@ -96,33 +105,70 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&
 const cut = (s, n) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n) + "…" : s; };
 const fmtMs = (ms) => ms >= 1000 ? (ms / 1000).toFixed(1) + "s" : ms + "ms";
 
+// ── 事件行渲染：单一渲染函数（10-07 UI 层 #2 抽取）──
+// SSE 实时流与任务详情回放共用——两种数据源同一视觉（消双路径漂移）。
+function renderEventLine(evt) {
+  const cls = "ev " + (evt.type === "finalAnswer" ? "final" : evt.type === "error" ? "error" : evt.type);
+  const text = evt.type === "toolCall"
+    ? evt.name + " " + cut(JSON.stringify(evt.args), 200)
+    : evt.type === "toolResultEvent"
+    ? evt.name + (evt.success ? " [ok] " : " [fail] ") + cut(evt.output, 300)
+    : evt.type === "routing" ? evt.serviceId + " ← " + evt.tier + (evt.intent ? " [" + evt.intent + "]" : "") + " · " + cut(evt.reason, 120)
+    : evt.type === "planGenerated" ? "「" + cut(evt.summary, 120) + "」 " + (evt.filePaths || []).length + " files"
+    : evt.type === "fileWritten" ? evt.path + " (" + evt.size + " chars)"
+    : evt.type === "finalAnswer" ? cut(evt.text, 500)
+    : cut(JSON.stringify(evt), 400);
+  const tag = { finalAnswer:"完成", error:"错误", toolCall:"工具调用", toolResultEvent:"工具结果",
+                routing:"路由", thinking:"思考", planGenerated:"规划", fileWritten:"写文件" }[evt.type] || evt.type;
+  return { cls, tag, text };
+}
+function appendEventLine(box, evt, bad) {
+  const { cls, tag, text } = renderEventLine(evt);
+  const div = document.createElement("div");
+  div.className = cls + (bad ? " bad" : "");
+  div.innerHTML = `<span class="tag">${tag}</span> ${esc(text)}`;
+  box.appendChild(div);
+  return div;
+}
+function trimBox(box, max) { while (box.children.length > max) box.removeChild(box.firstChild); }
+
 // ── SSE 实时流 ──
 function openStream() {
   const es = new EventSource("/events");
   es.onmessage = (e) => {
     let evt; try { evt = JSON.parse(e.data); } catch { return; }
     const box = $("events");
-    const cls = "ev " + (evt.type === "finalAnswer" ? "final" : evt.type === "error" ? "error" : evt.type);
-    const text = evt.type === "toolCall"
-      ? evt.name + " " + cut(JSON.stringify(evt.args), 200)
-      : evt.type === "toolResultEvent"
-      ? evt.name + (evt.success ? " [ok] " : " [fail] ") + cut(evt.output, 300)
-      : evt.type === "routing" ? evt.serviceId + " ← " + evt.tier + (evt.intent ? " [" + evt.intent + "]" : "") + " · " + cut(evt.reason, 120)
-      : evt.type === "planGenerated" ? "「" + cut(evt.summary, 120) + "」 " + (evt.filePaths || []).length + " files"
-      : evt.type === "fileWritten" ? evt.path + " (" + evt.size + " chars)"
-      : evt.type === "finalAnswer" ? cut(evt.text, 500)
-      : cut(JSON.stringify(evt), 400);
-    const tag = { finalAnswer:"完成", error:"错误", toolCall:"工具调用", toolResultEvent:"工具结果",
-                  routing:"路由", thinking:"思考", planGenerated:"规划", fileWritten:"写文件" }[evt.type] || evt.type;
-    const div = document.createElement("div");
-    div.className = cls;
-    div.innerHTML = `<span class="tag">${tag}</span> ${esc(text)}`;
-    box.appendChild(div);
-    while (box.children.length > 300) box.removeChild(box.firstChild);
+    appendEventLine(box, evt, false);
+    trimBox(box, 300);
     box.scrollTop = box.scrollHeight;
     $("sub").textContent = "运行目录：" + (evt.type === "toolCall" ? "任务执行中…" : "在线");
   };
   es.onerror = () => { /* 无任务事件时 SSE 保持连接；错误自动重连 */ };
+}
+
+// ── 任务详情回放（10-07 UI 层 #2）──
+let lastDetailTaskId = null;
+async function showTaskEvents(taskId) {
+  lastDetailTaskId = taskId;
+  const box = $("detail");
+  box.innerHTML = `<div class="empty">加载任务 ${esc(taskId)} 事件…</div>`;
+  const r = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/events`);
+  if (!r.ok) { box.innerHTML = `<div class="empty">详情不可用（${r.status}）</div>`; return; }
+  const list = await r.json();
+  if (!list.length) { box.innerHTML = `<div class="empty">任务 ${esc(taskId)} 无事件记录（事件持久化从 10-07 起生效）</div>`; return; }
+  let firstErr = null;
+  for (const st of list) {
+    let evt; try { evt = JSON.parse(st.payload); } catch { continue; }
+    const div = appendEventLine(box, evt, false);
+    if (evt.type === "error" && !firstErr) { firstErr = div; div.classList.add("bad"); }
+  }
+  if (firstErr) {
+    firstErr.scrollIntoView({ block: "center" });
+    $("sub").textContent = `任务 ${taskId}：${list.length} 事件，失败定位到 error`;
+  } else {
+    box.scrollTop = box.scrollHeight;
+    $("sub").textContent = `任务 ${taskId}：${list.length} 事件`;
+  }
 }
 
 // ── stats ──
@@ -163,10 +209,14 @@ async function fetchTasks() {
     const d = new Date(t.startedAt);
     const hm = d.toTimeString ? d.toTimeString().slice(0, 8) : "";
     const res = t.success ? `<span class="ok">OK</span>` : t.isSuspicious ? `<span class="warn">可疑</span>` : `<span class="fail">FAIL</span>`;
-    html += `<tr><td>${hm}</td><td>${esc(t.mode)}</td><td>${esc(t.serviceId)}</td><td>${res}</td>
+    html += `<tr title="点击回放任务事件" onclick="showTaskEvents('${esc(t.taskId).replace(/'/g, "\\'")}')"><td>${hm}</td><td>${esc(t.mode)}</td><td>${esc(t.serviceId)}</td><td>${res}</td>
              <td>${fmtMs(t.totalMs)}</td><td class="inp" title="${esc(t.userInput)}">${esc(cut(t.userInput, 60))}</td></tr>`;
   }
   $("tasks").innerHTML = html + "</tbody></table>";
+  if (lastDetailTaskId) {
+    const row = document.querySelector(`#tasksBody tr[onclick*="${lastDetailTaskId}"]`);
+    if (row) row.style.background = "#1f3a2a";
+  }
 }
 
 // ── 备份 + Diff ──
