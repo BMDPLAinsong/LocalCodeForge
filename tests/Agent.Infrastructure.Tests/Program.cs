@@ -2608,6 +2608,9 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         Check("GET / 返回嵌入单页（含标题 + 回放 API + 过滤/滚动开关）",
             page.Contains("LocalAI Workbench") && page.Contains("/events") && page.Contains("showTaskEvents")
             && page.Contains("fbtn") && page.Contains("autoScroll"));
+        Check("嵌入单页含 SVG 依赖子图（layoutOneDegree 纯函数 + renderDepSvg + 节点点击联动 selectDepFile + 箭头 marker）",
+            page.Contains("function layoutOneDegree") && page.Contains("function renderDepSvg")
+            && page.Contains("function selectDepFile") && page.Contains("depArrowG") && page.Contains("DEP_NODE_MAX"));
         var stats = await http.GetStringAsync("api/stats");
         Check("GET /api/stats 200 + JSON 结构", stats.Contains("\"summary\"") && stats.Contains("totalCount"));
         var tasks = await http.GetStringAsync("api/tasks?take=3");

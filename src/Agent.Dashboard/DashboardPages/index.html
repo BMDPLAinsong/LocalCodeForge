@@ -62,6 +62,15 @@
   .d-hunk { color:var(--yellow); }
   .d-add { color:var(--green); } .d-del { color:var(--red); } .d-same { color:var(--dim); }
   .empty { color:var(--dim); padding:6px 0; }
+  /* 10-07 SVG 依赖子图：暗色主题节点/边 */
+  .depRect { fill:#1f2a3d; stroke:var(--border); stroke-width:1; }
+  .depRect.depC { fill:#233a5c; stroke:var(--blue); stroke-width:2; }
+  .depRect.depD { stroke:#4caf78; }
+  .depRect.depR { stroke:#e06c5a; }
+  .depText { fill:var(--fg); font-size:12px; }
+  .depNode { cursor:pointer; }
+  .depNode:hover .depRect { filter:brightness(1.35); }
+  .depEdge { fill:none; stroke-width:1.5; opacity:.85; }
 </style>
 </head>
 <body>
@@ -209,6 +218,58 @@ function loadDeps() {
     })
     .catch(err => { dep.innerHTML = `<div class="empty">${esc(err.message)}</div>`; });
 }
+// ── SVG 依赖子图（10-07：选中文件 1 度依赖图；纯函数布局 + 原生 SVG，无第三方库）──
+// 布局规则：中心 selected 节点 + direct（出边，绿）左列 + reverse（入边，红）右列。
+// 节点 > 25 → 返回降级标记（表格视图保留为兜底）；节点名截断 14 字符 + title 全名。
+const DEP_NODE_MAX = 25;
+function layoutOneDegree(center, direct, reverse) {
+  const nodeW = 150, nodeH = 28, gap = 14, pad = 18;
+  if (1 + direct.length + reverse.length > DEP_NODE_MAX) return { tooMany: true };
+  const rows = Math.max(direct.length, reverse.length, 1);
+  const H = rows * (nodeH + gap) + pad * 2;
+  const W = nodeW * 2 + 240;
+  const cx = W / 2, cy = H / 2 - nodeH / 2;
+  const yFor = (i) => pad + i * (nodeH + gap) + (H - rows * (nodeH + gap)) / 2;
+  const mk = (f, x, y) => ({ f, x, y });
+  return {
+    W, H,
+    center: mk(center, cx - nodeW / 2, cy),
+    left: direct.map((f, i) => mk(f, pad, yFor(i))),
+    right: reverse.map((f, i) => mk(f, W - pad - nodeW, yFor(i)))
+  };
+}
+function renderDepSvg(file, direct, reverse) {
+  const lay = layoutOneDegree(file, direct, reverse);
+  if (lay.tooMany) return `<div class="empty">节点 ${1 + direct.length + reverse.length} 个超过上限 ${DEP_NODE_MAX}，降级表格视图。</div>`;
+  const node = (n, cls) => {
+    const label = cut(n.f, 14);
+    return `<g transform="translate(${n.x},${n.y})" class="depNode" data-file="${esc(n.f).replace(/'/g, "\\'")}" onclick="selectDepFile(this.dataset.file)">
+      <rect width="150" height="28" rx="6" class="depRect ${cls}" /><text x="75" y="19" text-anchor="middle" class="depText">${esc(label)}</text>
+      <title>${esc(n.f)}</title></g>`;
+  };
+  const edge = (x1, y1, x2, y2, color) => {
+    const mx = (x1 + x2) / 2;
+    return `<path d="M${x1},${y1 + 14} C${mx},${y1 + 14} ${mx},${y2 + 14} ${x2},${y2 + 14}" class="depEdge" stroke="${color}" marker-end="url(#depArrow${color === "#4caf78" ? "G" : "R"})" />`;
+  };
+  let h = `<svg viewBox="0 0 ${lay.W} ${lay.H}" width="100%" style="display:block;max-width:920px;margin:0 auto">
+    <defs>
+      <marker id="depArrowG" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#4caf78"/></marker>
+      <marker id="depArrowR" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06c5a"/></marker>
+    </defs>`;
+  const c = lay.center, cy = c.y + 14;
+  for (const n of lay.left)  h += edge(c.x, cy, n.x + 150, n.y, "#4caf78");   // 中心 → direct（绿）
+  for (const n of lay.right) h += edge(n.x + 150, n.y, c.x, cy, "#e06c5a");   // reverse → 中心（红）
+  h += node(c, "depC");
+  for (const n of lay.left)  h += node(n, "depD");
+  for (const n of lay.right) h += node(n, "depR");
+  h += `</svg><div class="dim" style="margin-top:6px">绿 = 直接依赖（本文件引用）· 红 = 反向依赖（谁引用本文件）· 点击节点切换选中文件。</div>`;
+  return h;
+}
+function selectDepFile(file) {
+  const sel = $("depFile");
+  sel.value = file;
+  loadFileDeps(file);
+}
 function loadFileDeps(file) {
   const dep = $("dep");
   dep.innerHTML = `<div class="empty">查询 ${esc(file)} 的依赖…</div>`;
@@ -221,7 +282,8 @@ function loadFileDeps(file) {
         h += `<table class="tbl"><tr><th>文件</th></tr>` + items.map(x => `<tr><td>${esc(x)}</td></tr>`).join("") + `</table>`;
         return h;
       };
-      dep.innerHTML = `<div class="kv"><span class="tag">${esc(file)}</span></div>`
+      dep.innerHTML = renderDepSvg(file, data.direct, data.reverse)
+        + `<div class="kv"><span class="tag">${esc(file)}</span></div>`
         + box("反向依赖（谁引用本文件——改动影响面）", data.reverse)
         + box("直接依赖（本文件引用的类型所在文件）", data.direct)
         + `<div class="dim" style="margin-top:6px">依赖基于类型符号引用（粗粒度，含注释/字符串误报），仅供参考方向；精确改动前用 find_symbol/analyze_deps 核实。</div>`;
