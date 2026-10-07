@@ -512,14 +512,20 @@ async function cancelCurrentTask() {
 $("cmdSend").addEventListener("click", submitCommand);
 $("cmdInput").addEventListener("keydown", e => { if (e.key === "Enter") submitCommand(); });
 $("cmdCancel").addEventListener("click", cancelCurrentTask);
-// 队列可见性：每 3 秒轮询 /api/queue 显示待执行数（前端不持队列状态，数据单一来源在后端）
+// 队列可见性 + 任务归属：每 3 秒轮询 /api/queue + /api/current-task（数据单一来源在后端）
 async function refreshQueue() {
   try {
-    const r = await fetch("/api/queue");
-    const d = await r.json();
-    $("queueStatus").textContent = d.pending > 0 ? `⏳ 队列中 ${d.pending} 个待执行` : "";
+    const [q, c] = await Promise.all([
+      fetch("/api/queue").then(r => r.json()),
+      fetch("/api/current-task").then(r => r.json()).catch(() => ({ running: false }))
+    ]);
+    const parts = [];
+    if (c.running) parts.push(`▶ 当前任务：${trunc(c.input, 26)}（提交号 ${c.seq}）`);
+    if (q.pending > 0) parts.push(`⏳ 队列中 ${q.pending} 个待执行`);
+    $("queueStatus").textContent = parts.join("　");
   } catch { /* 服务未就绪时静默 */ }
 }
+function trunc(s, n) { return (s && s.length > n) ? s.slice(0, n) + "…" : s; }
 setInterval(refreshQueue, 3000);
 
 openStream();

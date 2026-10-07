@@ -76,4 +76,24 @@ public sealed class CommandHub
         cts.Cancel();
         return true;
     }
+
+    // ── 当前任务归属（10-08 P1：SSE 混排的归属问题——前端显示"当前任务 = 哪条提交")──
+    // 主循环任务开始时 AttachTaskInfo(seq, input)，finally Detach；GET /api/current-task 数据源。
+    private int _currentSeq;
+    private string? _currentInput;
+
+    public void AttachTaskInfo(int seq, string input)
+    {
+        lock (_lock) { _currentSeq = seq; _currentInput = input; }
+    }
+
+    public void DetachTaskInfo()
+    {
+        lock (_lock) { _currentSeq = 0; _currentInput = null; }
+    }
+
+    public (int Seq, string? Input) CurrentTask
+    {
+        get { lock (_lock) return (_currentSeq, _currentInput); }
+    }
 }

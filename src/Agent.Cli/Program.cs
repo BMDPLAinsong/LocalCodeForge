@@ -364,6 +364,7 @@ internal class Program
             });
         }
 
+        int currentSeq = 0;   // 当前命令的提交序号（web 归属标记：任务执行期间 /api/current-task 可见）
         while (true)
         {
             string? input;
@@ -379,6 +380,7 @@ internal class Program
                 var next = await commandHub.NextAsync(CancellationToken.None);
                 if (next is null || next.Value.Input is null) { consoleReaderStopped = true; break; }
                 input = next.Value.Input;
+                currentSeq = next.Value.Seq;
             }
             // 【A-补强】统一剥离 BOM（U+FEFF）——PS 5.1 管道注入 UTF-8 BOM 到首行时
             // StartsWith("use ")/StartsWith("plan ") 等全部不命中、命令被当任务执行。
@@ -786,6 +788,8 @@ internal class Program
             // 【P0·web 取消】挂载当前任务取消源——Dashboard POST /api/cancel 经 CommandHub 触发同一令牌
             // （与终端 q 键同一取消机制；任务结束 finally 摘除）。
             commandHub.AttachTaskCancellation(taskCts);
+            // 【P1·归属】挂载当前任务提交序号与输入——GET /api/current-task 显示"当前任务 = 哪条提交"。
+            commandHub.AttachTaskInfo(currentSeq, input);
             var listenCts = new CancellationTokenSource();
             if (sp is not null)
             {
@@ -877,6 +881,7 @@ internal class Program
             {
                 listenCts.Cancel();
                 commandHub.DetachTaskCancellation();
+                commandHub.DetachTaskInfo();
             }
         }
     }

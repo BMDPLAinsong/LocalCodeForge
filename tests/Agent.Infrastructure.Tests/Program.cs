@@ -2619,6 +2619,16 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             hub2.CancelCurrentTask() && taskCts.IsCancellationRequested);
         hub2.DetachTaskCancellation();
         Check("CommandHub 取消：Detach 后无任务可取消 → false", !hub2.CancelCurrentTask());
+        // ── 任务归属（10-08 P1）──
+        var hub3 = new Agent.Core.CommandHub();
+        hub3.AttachTaskInfo(7, "用 C# 写一个待办事项项目");
+        var cur = hub3.CurrentTask;
+        Check("CommandHub 当前任务归属：Attach(seq,input) 后 CurrentTask 返回（/api/current-task 数据源）",
+            cur.Seq == 7 && cur.Input == "用 C# 写一个待办事项项目");
+        hub3.DetachTaskInfo();
+        var cur2 = hub3.CurrentTask;
+        Check("CommandHub 当前任务归属：Detach 后 Seq=0/Input=null（任务结束清除）",
+            cur2.Seq == 0 && cur2.Input is null);
     }
 
     // ── 3. DashboardHost 冒烟：真起 Kestrel → HttpClient 验证 API ──
@@ -2676,6 +2686,10 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         var cancelResp = await http.PostAsync("api/cancel", new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
         Check("POST /api/cancel 无运行中任务 → 409 {error}（无任务时明确拒绝）",
             cancelResp.StatusCode == System.Net.HttpStatusCode.Conflict);
+        var curResp = await http.GetAsync("api/current-task");
+        var curBody = await curResp.Content.ReadAsStringAsync();
+        Check("GET /api/current-task 无任务 → 200 {running:false}（任务归属端点）",
+            curResp.StatusCode == System.Net.HttpStatusCode.OK && curBody.Contains("\"running\":false"));
         await stop();
 
         // ── 4. /api/deps 工程依赖图谱：真工程（含类型级引用）+ 索引 → 概览 + 单文件依赖 ──

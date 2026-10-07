@@ -258,6 +258,15 @@ public static class DashboardHost
                 ? Results.Ok(new { cancelled = true })
                 : Results.Conflict(new { error = "当前无运行中任务（无任务或已取消）。" }));
 
+        // ── 当前任务归属（10-08 P1）：SSE 混排归属问题——前端显示"当前任务 = 哪条提交（seq）"──
+        app.MapGet("/api/current-task", () =>
+        {
+            var (seq, input) = o.CommandHub.CurrentTask;
+            return seq == 0 || input is null
+                ? Results.Json(new { running = false }, JsonOpts)
+                : Results.Json(new { running = true, seq, input }, JsonOpts);
+        });
+
         // ── SSE：当前任务实时事件流（每订阅者 BoundedChannel 1000 DropOldest）──
         app.MapGet("/events", async (HttpContext ctx, CancellationToken ct) =>
         {
