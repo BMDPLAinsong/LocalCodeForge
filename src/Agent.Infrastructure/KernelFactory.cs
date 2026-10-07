@@ -19,10 +19,10 @@ public static class KernelFactory
     {
         var builder = Kernel.CreateBuilder();
 
-        RegisterEndpoint(builder, RoutingDecision.Classifier, options.Classifier);
-        RegisterEndpoint(builder, RoutingDecision.Small, options.Small);
-        RegisterEndpoint(builder, RoutingDecision.Large, options.Large);
-        RegisterEndpoint(builder, RoutingDecision.AgentPro, options.AgentPro);
+        RegisterEndpoint(builder, RoutingDecision.Classifier, options.Classifier, options);
+        RegisterEndpoint(builder, RoutingDecision.Small, options.Small, options);
+        RegisterEndpoint(builder, RoutingDecision.Large, options.Large, options);
+        RegisterEndpoint(builder, RoutingDecision.AgentPro, options.AgentPro, options);
 
         return builder.Build();
     }
@@ -31,7 +31,8 @@ public static class KernelFactory
     private static void RegisterEndpoint(
         IKernelBuilder builder,
         string serviceId,
-        ModelEndpoint endpoint)
+        ModelEndpoint endpoint,
+        AgentOptions options)
     {
         switch (endpoint.Provider?.ToLowerInvariant())
         {
@@ -39,11 +40,12 @@ public static class KernelFactory
             case "ollama":
                 var ollamaKey = string.IsNullOrWhiteSpace(endpoint.ApiKey) ? "ollama" : endpoint.ApiKey;
 
-                // 【关键】本地模型用 10 分钟超时的 HttpClient
-                // 9B 模型 + 多轮生成，100 秒默认超时远远不够
+                // 【关键】本地模型用长超时 HttpClient（默认 20 分钟，AgentOptions.OllamaHttpTimeoutMinutes）
+                // 30B 模型 + 多轮生成，默认 100 秒超时远远不够；
+                // 10-04 实证 600s 硬编码仍腰斩 BigService 大文件多轮任务 → 配置化并加长到 20 分钟。
                 var ollamaHttp = new HttpClient
                 {
-                    Timeout = TimeSpan.FromMinutes(10)
+                    Timeout = TimeSpan.FromMinutes(options.OllamaHttpTimeoutMinutes)
                 };
 
                 builder.AddOpenAIChatCompletion(

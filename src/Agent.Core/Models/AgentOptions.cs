@@ -177,6 +177,11 @@ public sealed class AgentOptions
     /// 超时后任务在阶段间响应取消 → cancelled → 照常走失败回滚承接。默认 30 分钟防失控任务永久卡队列。</summary>
     public int TaskTimeoutMinutes { get; set; } = 30;
 
+    /// <summary>【10-08 C 项】本地 Ollama HttpClient 超时（分钟）。
+    /// 此前硬编码 10 分钟（KernelFactory.cs），30B 本地推理大文件多轮任务实测被 600s 超时腰斩
+    /// （10-04 BigService 890s 任务实证）；默认 20 分钟，让任务至少能跑到熔断诚实失败而非超时误杀。</summary>
+    public int OllamaHttpTimeoutMinutes { get; set; } = 20;
+
     /// <summary>
     /// 【时代隔离】模型时代切换点（law-unified 30B 落地时刻，本地时间）。
     /// stats 面板按此拆分 agent_pro 等服务的成功率（当前时代 vs 历史时代）。

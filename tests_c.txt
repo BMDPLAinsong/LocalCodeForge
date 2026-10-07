@@ -1,0 +1,893 @@
+== 凭据失败（检查 0.5） ==
+  [OK] 401 JSON
+  [OK] 403 Forbidden
+  [OK] api_key invalid
+  [OK] unauthorized
+  [OK] 正常输出不误伤
+== stderr 剥离（检查 2） ==
+  [OK] 纯 Warning 剥离后为空
+  [OK] Warning+真错误 剥离后非空
+  [OK] NETSDK 警告行被过滤
+== 结构性错误（检查 3） ==
+  [OK] error CS
+  [OK] Traceback
+  [OK] ZeroDivisionError（并集新增）
+  [OK] 找不到（中文）
+  [OK] 成功输出不误伤
+== 通用失败词 + JSON + 双容错（检查 3.5） ==
+  [OK] JSON error 命中
+  [OK] JSON error_type 命中
+  [OK] 网络错误: 命中
+  [OK] 取款失败 命中
+  [OK] 未找到 命中（查找类）
+  [OK] expected 含失败词 → 放行
+  [OK] expected 含 JSON error → 放行
+  [OK] 成功报告 → 放行
+  [OK] wttr.in 成功 → 放行
+  [OK] expected 含未找到 → 放行
+== 占位 Key / 占位符 / 模板（检查 4） ==
+  [OK] 占位 Key 命中
+  [OK] 占位符过半命中
+  [OK] 标题+数据行不判占位（fib 形态，P2-1）
+  [OK] 单行纯标题壳判占位（P2-1）
+  [OK] 全空标题壳判占位（P2-1）
+  [OK] 键值输出不判占位（P2-1）
+  [OK] 模板单行 hello 命中
+  [OK] 模板 success 命中
+  [OK] 多行正常输出不判模板
+== WriteFileTool 写入时 timeout 静态检查（§14-3h） ==
+  [OK] requests.get 无 timeout → 补 timeout=8
+  [OK] requests.get 已带 timeout → 不动
+  [OK] 跨行调用 → 不动
+  [OK] urllib urlopen → 补 timeout
+  [OK] 非 .py 文件 → 不动
+== PyCodeGuard 交互拒绝 + edit_file 后处理（§14-3j） ==
+  [OK] write .py 含 input( → 拒绝
+  [OK] write .cs 含 Console.ReadLine( → 拒绝
+  [OK] 正常 .py 不被拒
+  [OK] edit .py 新内容含 input( → 拒绝
+  [OK] edit .py 无 timeout → 补 timeout=8
+== 工程感知 P1：写工具双根 + 备份 + 回滚 ==
+  [OK] 沙箱模式写任务根外 → 越界拒绝
+  [OK] 工程只读 → 写入任务目录而非工程
+  [OK] 工程可写创建文件 → 成功
+  [OK] 覆盖工程文件 → 备份生成
+  [OK] 覆盖工程文件 → 内容已变
+  [OK] edit 工程文件 → 内容已变
+  [OK] edit 工程文件 → 备份已生成
+  [OK] rollback 恢复 → 返回恢复路径
+  [OK] rollback 恢复 → 内容回到修改前
+  [OK] 工程可写路径穿越 → 越界拒绝
+  [OK] 任务目录工具改工程文件 → 内容已变
+  [OK] 任务目录备份 → run 目录能列出（备份根归一化）
+  [OK] PruneBackups 保留最近 2 个（删除 3 个）
+  [OK] PruneBackups keepLastN=0 → 全清
+  [OK] P-D write_file 重复定义已有类型 → 拒绝
+  [OK] P-D 拒绝消息 → 附工程已有类型清单（引导能/不能定义什么）
+  [OK] P-D write_file 拒绝 → 目标文件未被写入
+  [OK] P-D write_file 新建文件含已有类型 → 拒绝
+  [OK] P-D 新建文件拒绝 → 文件未创建
+  [OK] P-D 新建文件拒绝消息 → 含'是新建文件'指引
+  [OK] P-D 已存在文件拒绝消息 → 含 read_file/edit_file 局部修改指引
+  [OK] P-D 已存在文件拒绝 → 文件保持原状（未被覆盖）
+  [OK] P-D 目标文件自身含该类型 → 放行（partial 语义）
+  [OK] P-D 无冲突写入 → 成功
+  [OK] P-D edit_file 引入已有类型 → 拒绝
+  [OK] P-D edit_file 拒绝 → 文件未变
+  [OK] P-D ExtractTypeNames → 提取 5 类 + 排除注释/字符串
+  [OK] P-D 连续拒绝 → 熔断指令（第 3 次 + 禁止 write_file + 强制 edit_file）
+  [OK] P-D 二连拒 → 文件仍未变
+  [OK] P-D 其他路径第 1 次 → 普通拒绝（非熔断）
+  [OK] 方案A write_file 新建 .csproj → 拒绝
+  [OK] 方案A write_file 拒绝 → 文件未创建
+  [OK] 方案A edit_file 改 .csproj → 拒绝
+  [OK] 方案A write_file 新建 .sln → 拒绝
+  [OK] run 目录 rollback → 恢复任务目录产生的备份
+== 工程感知 P2：跨任务记忆（§14-3w P2） ==
+  [OK] 签名含文件数 2
+  [OK] 签名含目录数 1
+  [OK] 首次查询 → 未命中
+  [OK] Scan 产出 CompactBlock（目录聚合）
+  [OK] CompactBlock 瘦身（不含具体文件名）
+  [OK] 全量 ContextBlock 含具体文件名
+  [OK] 签名一致 → 缓存命中
+  [OK] 缓存命中返回 Overview
+  [OK] 文件修改 → 签名变化
+  [OK] 新签名 → 缓存未命中（自动重扫）
+  [OK] 重扫后 → 新签名命中
+== 工程感知 P3：模型级记忆（§14-3w P3） ==
+  [OK] Tokenize 含中文串
+  [OK] Tokenize 含文件 token
+  [OK] Tokenize 含路径 token
+  [OK] Search 命中 ProjectRoot 记忆
+  [OK] Search 不命中无关记忆（limit 截断）
+  [OK] 命中计数 > 0
+  [OK] 同特征类 task 记忆命中
+  [OK] 跨特征类 task 记忆剔除
+  [OK] 关键词不命中则 model 决策不注入
+  [OK] 跨类检索：model 决策降权保留 + task 归档剔除
+  [OK] 命中计数递增
+  [OK] 空 topic/content 不写入
+  [OK] RememberTool 空 content 拒绝
+  [OK] RememberTool 写入成功
+  [OK] RememberTool 写入可检索
+== 工程感知 P3 补足：任务归档记忆（§14-3w P3） ==
+  [OK] 成功 topic 去换行截断
+  [OK] 成功 content 含完成标记
+  [OK] 成功 content 不含失败标记
+  [OK] 失败 topic 含输入
+  [OK] 失败 content 含失败标记
+  [OK] 失败 content 提炼错误教训
+  [OK] 无错误 → 未知错误
+  [OK] topic 截断到 40
+  [OK] content 截断到 200
+  [OK] task 记忆可检索
+== 记忆治理收尾：自动过期清理 + 默认阈值 ==
+  [OK] 治理默认 30 天
+  [OK] 治理默认 1 命中（仅 0 命中可清）
+  [OK] 调权默认样本 3
+  [OK] 写降级默认阈值 0.6
+  [OK] 读升级默认坏率 0.6
+  [OK] 读升级默认成功率 0.5
+  [OK] Complex 降级默认样本 5
+  [OK] Complex 降级默认阈值 0.5
+  [OK] 过期 0 命中清理 1 条
+  [OK] 常用知识（有命中）保留
+  [OK] 旧任务 0 命中已清
+== 工程感知 P3 补足：失败教训注入（少走弯路） ==
+  [OK] 无命中 → null
+  [OK] 失败教训独立警示组
+  [OK] 失败内容含教训原文
+  [OK] 参考组含 model 记忆
+  [OK] 失败与参考分节
+  [OK] 多条失败 → 计数强化
+  [OK] 仅参考无警示组
+== 路由层修复 A+B：写任务直连 + 空响应跳层（§14-3w） ==
+  [OK] small 空响应 → 直达 large
+  [OK] agent_pro 空响应 → 直达 large
+  [OK] large 空响应 → null（原层重试）
+  [OK] 写任务判定稳定
+== 10-08 真实失败收尾 B：LLM 异常升级兜底 ==
+  [OK] LLM 调用异常 → llm_error 类别（非 empty_response）
+  [OK] LLM 调用异常（超时型）→ llm_error 类别
+  [OK] 异常升级语义：large 已最高层无升级目标（判失败路径）
+  [OK] 异常升级语义：small/agent_pro 可升 large（复用空响应链映射）
+== 模板检测降级：任务要求输出豁免（方案 1） ==
+  [OK] 任务要求的 hello 输出 → 豁免
+  [OK] 任务无关的 hello → 不豁免
+  [OK] 多行输出不判模板（单行限制）
+  [OK] 输入含输出行 → 豁免
+  [OK] 空预期 → 不豁免
+  [OK] 大小写不敏感 → 豁免
+  [OK] Hello, World! 大小写标点归一 → 豁免
+  [OK] 输入无关输出不豁免（加法任务输出 hello 仍拦截）
+  [OK] 同工具同参同输出 → 同签名
+  [OK] 输出变化 → 签名变化
+  [OK] 不同工具/参数 → 不同签名
+  [组合实证] IsTemplateOutput=True IsTaskExpectedOutput=True → 判模板=False
+  [OK] 组合条件不判模板
+== 工程感知 P1：run_command 路径边界（§14-3t） ==
+  [OK] 工程模式：盘符敏感路径（C:\Windows）→ 敏感源头拒
+  [OK] 工程模式：路径穿越（..）→ 拒绝
+  [OK] 工程模式：工程根内绝对路径 → 放行
+  [OK] 工程模式：相对路径命令 → 放行
+  [OK] 沙箱模式：不启用边界检查（现状保持）
+  [OK] 工程模式：dotnet run 无 --project → 放行（项目名校验不误伤）
+  [OK] 工程模式：幻觉项目名（OrderSystem.csproj）→ 拒绝+提示正确项目名
+  [OK] 工程模式：真实项目名 → 放行
+  [OK] 沙箱模式：项目名校验不启用（现状保持）
+== TaskClassifier 编排判定（§14-3w） ==
+  [OK] 读取工程文件长描述 → 走 Agent（不编排）
+  [OK] 构建验证任务 → 走 Agent（不编排）
+  [OK] 多文件项目 → 编排（强多文件词）
+  [OK] 学生管理系统多文件 → 编排（回归）
+  [OK] 天气方法 → 走 Agent（回归）
+  [OK] 奇数偶数函数 → 走 Agent（回归）
+  [OK] 订单明细项目 → 编排（系统/服务词）
+  [OK] 添加注释到具体文件（长路径）→ 走 Agent（文件引用排除）
+  [OK] 带路径修改任务 → 走 Agent（文件引用排除）
+  [OK] 含多文件词的工程任务 → 仍编排（强多文件词优先于文件引用）
+== IntentOverride 意图覆盖（§14-3w） ==
+  [OK] SimpleQA + 添加注释到文件 → CodeGenerate
+  [OK] 加一行注释 → SimpleQA 覆盖为 CodeGenerate
+  [OK] SimpleQA + 修改代码 → CodeGenerate
+  [OK] SimpleQA + 纯问答 → 保持 SimpleQA
+  [OK] SimpleQA + 操作词但无文件语境 → 保持 SimpleQA
+  [OK] 非 SimpleQA 原样返回
+  [OK] 空输入保持原样
+== ExtractTargetFile 目标文件提取 ==
+  [OK] 提取 BigService.cs
+  [OK] 提取 py 文件
+  [OK] 提取 csproj
+  [OK] 无文件名 → null
+  [OK] 空输入 → null
+== IntentOverride 写任务判定（§14-3w 直连 large） ==
+  [OK] 添加注释到文件 → 写任务
+  [OK] 修改代码 → 写任务
+  [OK] 创建新文件 → 写任务
+  [OK] 纯问答 → 非写任务
+  [OK] 读取文件 → 非写任务（读保持 small）
+  [OK] 加一行注释 → 写任务（词表补全）
+  [OK] 列出目录 → 非写任务
+  [OK] 操作词但无文件语境 → 非写任务
+  [OK] 写一个…脚本 → 写任务
+  [OK] 更改这个脚本 → 写任务
+  [OK] 生成一个Python脚本 → 写任务
+  [OK] 改为…方法 → 写任务
+  [OK] 纯打印无语境 → 非写任务
+== 数据闭环 RoutingIntelligence（历史表现回流调权） ==
+  [OK] 样本不足（2 条）→ 不降级
+  [OK] 成功率低（3 条 1 成功）→ 不降级
+  [OK] 不省时 → 不降级
+  [OK] 达标 → 降级
+  [OK] 当前无历史 + 候选达标 → 降级
+== 读任务数据闭环（small → agent_pro 升级判定） ==
+  [OK] 读取文件 → 读任务
+  [OK] 分析代码 → 读任务
+  [OK] 查看结构 → 读任务
+  [OK] 纯问答 → 非读任务
+  [OK] 写任务（修改）→ 非读任务
+  [OK] 无代码语境 → 非读任务
+  [OK] small 样本不足 → 不升级
+  [OK] small 成功率高 → 不升级
+  [OK] agent_pro 样本不足 → 不升级
+  [OK] agent_pro 成功率低 → 不升级
+  [OK] agent_pro 不省时 → 不升级
+  [OK] 达标 → 升级 agent_pro
+== D2 TaskFeatureClassifier + TaskMetricsAggregator ==
+  [OK] 工程增量：在工程中新增类 → ProjectIncremental
+  [OK] 工程增量：修改已有文件加方法 → ProjectIncremental
+  [OK] 外部凭据：查天气 → ExternalCredential
+  [OK] 外部凭据：查 IP 天气 → ExternalCredential
+  [OK] 读/查：读取工程文件 → ReadQuery
+  [OK] 多文件：分模型服务入口 → MultiFile
+  [OK] 单文件：写一个 C# 函数 → SingleFile
+  [OK] 其他：纯闲聊 → Other
+  [OK] 聚合：工程增量 3 条 0 成功
+  [OK] 聚合：工程增量失败主因=编译/类型冲突
+  [OK] 聚合：外部凭据 2 条 2 成功
+  [OK] 聚合：单文件 1 条 1 成功
+  [OK] 聚合：无其他类样本 → null
+== 3A RoutingDecisionStore 路由决策落库 ==
+  [OK] 落库：总数 3
+  [OK] 落库：按服务 large=1 small=2
+  [OK] 落库：按特征类 写任务=单文件生成 读任务=读/查
+  [OK] 落库：超长输入截断到 200
+== C ToolRejectionStore 工具拒绝事件落库 ==
+  [OK] 拒绝落库：总数 3
+  [OK] 拒绝落库：按类别 pd_conflict=2 old_not_found=1
+  [OK] 拒绝落库：按工具 write_file=2 edit_file=1
+  [OK] 带 store 的 P-D 拒绝 → 仍返回拒绝
+  [OK] 带 store 的 P-D 拒绝 → 事件落库（pd_conflict 增至 3）
+  [OK] 不带 store 构造 → 拒绝正常返回（无异常）
+== 1 ReadFileTool 分页续读 ==
+  [OK] 工程模式大文件无 offset → 拒绝 + 定位引导
+  [OK] 大文件 offset 续读 → 501-1000 行
+  [OK] 大文件仅 limit 无 offset → 仍拒绝（防绕过）
+  [OK] 大文件末页 → 无续读提示
+  [OK] 非工程模式大文件无 offset → 仍分页（兼容）
+  [OK] 小文件默认 → 全文无分页头
+== 3 FailureCategorizer 失败类别归类 ==
+  [OK] 类别：外部凭据 401
+  [OK] 类别：外部凭据 403
+  [OK] 类别：编译错误 CS
+  [OK] 类别：运行崩溃 Traceback
+  [OK] 类别：超时
+  [OK] 类别：工具拒绝 P-D
+  [OK] 类别：工具拒绝 白名单
+  [OK] 类别：未找到
+  [OK] 类别：空响应
+  [OK] 类别：其他兜底
+  [OK] 类别：成功不归类（空入参）
+  [OK] 类别：写文件但验证未通过 → write_unverified
+  [OK] 类别：写任务未产生写入 → write_not_attempted
+  [OK] 类别：目标不存在 → target_mismatch
+  [OK] 类别：写被拒未落地 → tool_rejected
+  [OK] 类别：验证失败 → validator_failed
+  [OK] 类别：回填标注 → validator_failed
+  [OK] 类别：严格校验不一致 → validator_mismatch
+  [OK] 类别：修复输出相同 → repair_unimproved
+  [OK] 提取：弯引号 CS0117 → Order
+  [OK] 提取：直引号 CS0117 → Order
+  [OK] 提取：CS0246 → Order
+  [OK] 提取：CS1061 → Order
+  [OK] 提取：无类型缺失 → null
+  [OK] 提取：空输入 → null
+  [OK] 失败类别落库 → compile_error:1（成功不统计）
+  [OK] 可疑成功落库 → GetRecentAsync 可过滤出明细
+  [OK] E2E 治理：真实统计剔除 E2E（1 真实成功 / 0 失败）
+  [OK] E2E 治理：E2E 计数单列 = 2
+  [OK] E2E 治理：GetRecentAsync 过滤 E2E（仅真实任务）
+  [OK] E2E 治理：GetRecentFailuresAsync 过滤 E2E（E2E 故意失败不计入）
+  [OK] 父失败回填：窗口内成功 Executor 子记录 1 条被回填
+  [OK] 回填后 success=0 + validator_failed
+  [OK] 窗口外历史记录不被回填
+  [OK] 原本失败的记录不受影响
+== 工程增量计划校验（CheckIncrementalPlanConflicts） ==
+  [OK] 计划含 3 个已有文件 → 冲突 3
+  [OK] 新增 1 + 接入 1 → 冲突 1（放行）
+  [OK] 全新增 → 冲突 0（放行）
+  [OK] 大小写/分隔符归一化（order.cs → 冲突）
+  [OK] 错误签名：C# CS码+行号
+  [OK] 错误签名：Python line+NameError
+  [OK] 错误签名：相同错误输出 → 相同指纹
+  [OK] 错误签名：无错误输出 → null
+== TestProjectDetector（完成门） ==
+  [OK] 无测试工程 → false
+  [OK] tests 目录 → true
+  [OK] *.Tests.csproj → true
+  [OK] pytest.ini → true
+  [OK] 空根 → false
+== 编辑冲突诊断（EditFileTool 找不到 old_string 且备份漂移） ==
+  [OK] 正常编辑成功（含备份）
+  [OK] 漂移诊断（提及备份/变化）
+== 工程只读模式（写工程文件被拒绝并提示） ==
+  [OK] write 工程文件 → 只读拒绝
+  [OK] 工程文件未被写入
+  [OK] edit 工程文件 → 只读拒绝
+  [OK] 任务目录写不受影响
+== TestRunnerService（测试命令检测） ==
+  [OK] console 断言形态 → dotnet run
+  [OK] xunit 形态 → dotnet test
+  [OK] pytest.ini → pytest
+  [OK] 无测试入口 → null
+== 任务级回滚（多文件变更单元） ==
+  [OK] 修改后文件已变更
+  [OK] 任务级回滚恢复 2 个文件
+  [OK] a.cs 已恢复
+  [OK] b.cs 已恢复
+== 工程图谱（符号索引 + find_symbol） ==
+  [OK] 探针：正则直接匹配 Router
+  [OK] 多修饰符类（public static class）
+  [OK] 多修饰符 record
+  [OK] 多修饰符方法
+  [OK] 控制流 if 不误判为方法
+  [OK] 控制流 for 不误判为方法
+  [OK] C# 类索引
+  [OK] C# 方法索引
+  [OK] C# 属性索引
+  [OK] Python 函数索引
+  [OK] Python 类索引
+  [OK] Python 缩进方法索引
+  [OK] find_symbol 命中 Order
+  [OK] find_symbol 命中 Python 函数
+  [OK] find_symbol 未命中 → 提示
+  [OK] 无工程模式 → 拒绝
+  [OK] 索引后新增符号 → 增量刷新可命中
+  [OK] find_symbol 命中 → 注入 offset 操作指引
+== analyze_code 大文件支持 ==
+  [OK] analyze_code 大文件(300KB) → 出符号地图
+== 记忆治理（去重/过期/forget） ==
+  [OK] 同 topic 合并为一条
+  [OK] 合并后 count=2
+  [OK] 合并后 content 为最新
+  [OK] 不同 topic 独立成条
+  [OK] 检索命中返回 count
+  [OK] BumpHit 后 last_hit_at 非空
+  [OK] forget 删除单条
+  [OK] 过期清理删除旧记录
+  [OK] dedup 合并存量重复
+  [OK] dedup 后 count=3（1+2）
+== CodeAnalyzerTool（确定性符号索引） ==
+  [OK] C# 语言识别
+  [OK] C# 类定位（行号 3）
+  [OK] C# 属性定位
+  [OK] C# 方法定位
+  [OK] Python 语言识别
+  [OK] Python 函数定位
+  [OK] Python 类定位
+  [OK] Python 缩进方法定位
+  [OK] 文件不存在 → 错误
+  [OK] 路径越界 → 拒绝
+  [OK] 非代码文件 → 无符号
+== 单模型三角色温度注入 ==
+  [OK] GetEndpoint small
+  [OK] GetEndpoint large
+  [OK] GetEndpoint agent_pro
+  [OK] GetEndpoint classifier
+  [OK] GetEndpoint 未知 → null
+  [OK] small 温度 0.3
+  [OK] large 温度 0.7
+  [OK] agent_pro 温度 0.5
+  [OK] 三角色同 tag
+  [OK] 端点温度 null → 全局回退
+  [OK] 未知服务 → 全局回退
+== 时代隔离：GetEpochBreakdownAsync ==
+  [OK] 30B 时代 2 条
+  [OK] 30B 时代全成功
+  [OK] 4B 历史 3 条
+  [OK] 4B 历史 1 成功
+== P2 自动调权：GetServiceStatsSinceAsync + TrySuggestDropAgentPro ==
+  [OK] P2 时代过滤：仅 30B 2 条
+  [OK] P2 时代过滤：2 成功
+  [OK] P2 对照全量：4 条
+  [OK] P2 对照全量：3 成功（含 4B）
+  [OK] P2 样本不足(<5)保持 agent_pro
+  [OK] P2 成功率 0.4 <0.5 → 降级 large
+  [OK] P2 成功率 0.6 ≥0.5 → 保持 agent_pro
+== 工程图谱增强：依赖分析 ==
+  [OK] 符号索引含 Order/OrderService
+  [OK] 依赖边 OrderService→Order
+  [OK] 依赖边 Program→OrderService
+  [OK] 反向依赖 Order.cs ← OrderService.cs
+  [OK] analyze_deps 输出反向依赖
+  [OK] analyze_deps 非工程模式报错
+== P0-1 工程失败自动回滚（RollbackTaskFull） ==
+  [OK] P0-1 恢复已存在文件备份
+  [OK] P0-1 清理新建文件
+  [OK] P0-1 新文件不残留在备份列表
+== P1-1 symbol 索引增量失效（mtime） ==
+  [OK] P1-1 全量构建 3 符号
+  [OK] P1-1 增量仅重扫 1 文件
+  [OK] P1-1 新符号可见（A3）
+  [OK] P1-1 未变文件保留（B）
+  [OK] P1-1 删除文件记录清除
+== P0-2 expected_output 严格校验（IsTaskExpectedOutputStrict） ==
+  [OK] P0-2 严格：全部行精确匹配 → 通过
+  [OK] P0-2 严格：缺一行 → 不通过
+  [OK] P0-2 严格：顺序无关（行集匹配）→ 通过
+  [OK] P0-2 严格：空 expected → 不通过（无预期不适用）
+  [OK] P0-2 宽松/严格差异（宽松通过、严格拒绝）
+== H1 跨任务误删防护（ClearNewMarkers，P-B taskId 隔离） ==
+  [OK] H1 任务 A 成功建的文件保留（不被 B 失败回滚误删）
+  [OK] H1 任务 B 新建文件被清理
+  [OK] H1 回滚后 A 的备份目录不残留
+== P-A 回滚取最早备份（防恢复到任务中间状态） ==
+  [OK] P-A 回滚取最早备份（恢复任务前干净状态，非中间状态）
+== 跨任务端到端（taskId 隔离三场景） ==
+  [OK] 场景1 A 新文件保留
+  [OK] 场景1 B 新文件清理
+  [OK] 场景2 A 第二次改动保留（B 回滚不碰 A 的备份）
+  [OK] 场景3 A 失败回滚删除其 X.cs
+  [OK] 场景3 B 新建同名文件保留（C 回滚不误删）
+== rollback --dry-run 预览（不执行） ==
+  [OK] dry-run 列出将恢复的文件
+  [OK] dry-run 列出将删除的新文件
+  [OK] dry-run 不执行任何改动
+== Diff P0 FileDiffService（Diff/） ==
+  [OK] 混合 diff 非 TooLarge
+  [OK] 混合 diff 有 1 个 hunk（上下文相连）
+  [OK] 混合 diff 含增删改行
+  [OK] Same 行带新旧行号
+  [OK] 5000 行改 1 行 → 非降级且可行
+  [OK] 5000 行改 1 行 → 输出远小于全文（8 行 ≤ 20）
+  [OK] 裁剪含变更行与 ±3 上下文
+  [OK] hunk 头计数正确
+  [OK] 相同文件 → 无 hunk
+  [OK] 新建（空→3 行）→ 全 Add 单 hunk
+  [OK] 全删 → 全 Remove 单 hunk
+  [OK] 3000 行全不同 → 明确降级 TooLarge + 原因
+  [OK] 3000 行改 1 行 → 非降级且只输出 ±3 行
+  [OK] gap≤6 两处改动合并为 1 hunk
+  [OK] gap>6 两处改动分为 2 hunks
+  [OK] PlainDiffFormatter 含 hunk 头与 +/- 行
+  [OK] PlainDiffFormatter 无 TooLarge 文本
+== Spectre P0 渲染器（Rendering/） ==
+  [OK] 无头 → PlainTextRenderer
+  [OK] 交互 → SpectreRenderer（构造不抛）
+  [OK] Spectre TaskPrefix 默认空
+  [OK] Spectre Verbose 默认 false
+  [OK] Routing 带意图
+  [OK] Routing 无意图
+  [OK] PlanGenerated 多行文件清单
+  [OK] FileWritten
+  [OK] ToolCall 保留原名+参数格式化
+  [OK] ToolResult 成功
+  [OK] ToolResult 截断 300
+  [OK] FinalAnswer
+  [OK] Error
+  [OK] Truncate 短串不变
+  [OK] Truncate 长串截断
+  [OK] FormatToolArgs write_file
+  [OK] FormatToolArgs list_dir 默认 path
+  [OK] 兼容抽样 FileWritten
+  [OK] 兼容抽样 Routing
+[完成] 任务完成
+
+  [OK] PlainText RenderEventAsync 不抛
+  [OK] ToolResult 截断统一 300（orch 路径原 500 已收敛）
+== 双根保护：PathBoundary 逐段比较 ==
+  [OK] 子目录在内
+  [OK] root 自身在内
+  [OK] 前缀假阳性根治（proj2 不被 proj 放行）
+  [OK] .. 跳脱拒绝
+  [OK] 大小写归一
+== 双根保护：SensitivePathGuard 敏感区源头拒 ==
+  [OK] 系统区命中（C:\Windows 子路径）
+  [OK] 凭据区命中（.ssh）
+  [OK] 前缀假阳性不误伤（C:\Windows2）
+  [OK] 普通工程路径不拒
+  [OK] 8.3 短名绕过被拦（C:\PROGRA~1）
+  [OK] 符号链接最终目标命中敏感区（link→C:\Windows）
+  [OK] denylist 文件不存在 → 静默（不抛）
+  [OK] 用户 denylist 追加生效
+== 双根保护：写白名单（WriteRoots）+ 前缀假阳性 ==
+  [OK] 写白名单：工程根内绝对路径 → 放行
+  [OK] 写白名单：双根外绝对路径 → 越界拒
+  [OK] 写白名单：前缀同名目录（proj2）→ 越界拒（假阳性根治）
+== 双根保护：run_command 敏感路径源头拒（跨模式） ==
+  [OK] 绝对路径敏感命令 → 拒绝
+  [OK] 环境变量展开后敏感命令 → 拒绝
+== 双根保护：启动重叠自检 ==
+  [OK] 正常工程根不重叠
+  [OK] 敏感区内工程根 → 重叠检出
+== 双根保护：ProjectPathDetector 输入路径自动识别 ==
+  [OK] 提取：标点分片后命中（读取一下 …项目）
+  [OK] 提取：含空格真实路径直接命中（不误剥）
+  [OK] 提取：尾部中文语境词剥离（X:\…目录）
+  [OK] 提取：无路径 → 失败
+  [OK] 提取：不存在路径尾部非 CJK → 不剥不误判
+  [OK] 读语境：读取/分析/看看/项目 命中
+  [OK] 写语境：写/创建/生成 命中（写优先拦）
+  [OK] 自动 use：读语境 + 存在路径 → 通过
+  [OK] 自动 use：写任务 → 不触发
+  [OK] 自动 use：敏感区路径 → 源头不触发
+== 批次1：写目标提取（TryGetWriteTarget） ==
+  [OK] 写目标：X盘根目录+文件名 → 文件级
+  [OK] 写目标：X盘下+大写盘符 → 归一化
+  [OK] 写目标：X盘根目录无文件名 → 目录级
+  [OK] 写目标：完整路径（已存在文件）→ 文件级
+  [OK] 写目标：完整路径（不存在但形似文件）→ 文件级
+  [OK] 写目标：完整路径（目录）→ 目录级
+  [OK] 写目标：读语境（无写词）→ 不触发
+== 批次1：完成门（CompletionGate） ==
+  [OK] 完成门：非写任务 → 放行
+  [OK] 完成门：写被拒且无任何写成功 → 判失败
+  [OK] 完成门：写了文件但显式目标不存在 → 判失败+可疑
+  [OK] 完成门：目标文件存在 → 放行
+  [OK] 完成门：目录目标存在 → 放行
+== 批次1：显式写授权（explicitWriteRoots）+ 敏感兜底 ==
+  [OK] 显式授权：授权根内 → 放行
+  [OK] 显式授权：授权根外 → 越界拒
+  [OK] 显式授权：敏感区兜底 → 拒绝
+  [OK] 显式授权：EditFileTool 授权根内 → 放行
+== 只读工程组合边界（ReadOnlyGuard） ==
+  [OK] 只读+写任务+引用工程内文件 → 拦截
+  [OK] 只读+写任务+无文件引用 → 不拦
+  [OK] 只读+写任务+引用工程外文件 → 不拦
+  [OK] 只读+读任务+引用工程内文件 → 不拦
+  [OK] 只读+显式写目标在工程外 → 放行
+  [OK] 工程可写+写任务+引用工程内文件 → 不拦
+  [OK] 沙箱（projectRoot=null）→ 不触发
+  [OK] 同名文件命中（src/App.cs 亦属工程文件）
+  [OK] csproj 后缀不截断（OrderSystem.csproj 不误命）
+  [OK] 文件引用大小写归一
+== 配置结构自检：RoutingRules.json ==
+  [OK] RoutingRules.json 存在（仓库根回溯）
+  [OK] JSON 可解析且含 rules 数组
+  [OK] 规则数 == 8（当前基线）
+  [OK] target 全合法（small/agent_pro/large）
+  [OK] 无重名规则（防死规则回归）
+  [OK] priority 全 > 0
+  [OK] type 全合法
+  [OK] regex 规则 Pattern 非空且可编译
+  [OK] keyword_any 规则 Keywords 非空
+== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost（Events/ + Agent.Dashboard） ==
+  [OK] hub 发布 → 订阅者收到 2 事件
+  [OK] 退订后不再接收（第二个订阅者不受影响）
+  [OK] store 记录 + 读取（seq 升序、跨任务隔离）
+  [OK] store payload 可反序列化回原事件（JsonOpts 单一来源）
+  [OK] PruneOlderThan(1) 清理 1 秒前事件（刚写入的保留）
+  [OK] store 未写入任务 → 空列表
+  [OK] CommandHub seq 递增（web 提交归属标识）
+  [OK] CommandHub FIFO：先提交先取回（终端输入与 web 提交同一队列）
+  [OK] CommandHub 条目含提交时间（/api/queue SubmittedAt 数据源）
+  [OK] CommandHub EOF null 透传（无头 stdin 关闭 → 主循环退出）
+  [OK] CommandHub 有界 100 DropOldest：超限丢最旧（105 条写入后首条为 c5）
+  [OK] CommandHub Snapshot：顺序与 EOF 过滤（/api/queue 数据源）
+  [OK] CommandHub 取消 → null（不抛）
+  [OK] CommandHub 取消当前任务：Attach 后 CancelCurrentTask → 令牌已取消（web POST /api/cancel 触发同一机制）
+  [OK] CommandHub 取消：Detach 后无任务可取消 → false
+  [OK] CommandHub 当前任务归属：Attach(seq,input) 后 CurrentTask 返回（/api/current-task 数据源）
+  [OK] CommandHub 当前任务归属：Detach 后 Seq=0/Input=null（任务结束清除）
+  [OK] AgentOptions.TaskTimeoutMinutes 默认 30（任务级整体超时配置，0=禁用）
+  [OK] AgentOptions.OllamaHttpTimeoutMinutes 默认 20（本地 Ollama HttpClient 超时，10-04 600s 腰斩实证后配置化加长）
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://127.0.0.1:53091
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Production
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: X:\.NET AI\LocalAiWorkbench
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/ - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /'
+info: Microsoft.AspNetCore.Http.Result.ContentResult[2]
+      Write content with HTTP Response ContentType of text/html; charset=utf-8
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/ - 200 34249 text/html;+charset=utf-8 65.9852ms
+  [OK] GET / 返回嵌入单页（含标题 + 回放 API + 过滤/滚动开关）
+  [OK] 嵌入单页含 SVG 依赖子图（layoutOneDegree 纯函数 + renderDepSvg + 节点点击联动 selectDepFile + 箭头 marker）
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/stats - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/stats'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType0`3' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/stats'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/stats - 200 - application/json;+charset=utf-8 19.5996ms
+  [OK] GET /api/stats 200 + JSON 结构
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/tasks?take=3 - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/tasks'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type 'List`1' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/tasks'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/tasks?take=3 - 200 - application/json;+charset=utf-8 15.7461ms
+  [OK] GET /api/tasks 200 + 数组
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/backups - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/backups'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type 'List`1' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/backups'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/backups - 200 - application/json;+charset=utf-8 3.2715ms
+  [OK] GET /api/backups 200 + 数组
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/files - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/files'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType3`3' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/files'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/files - 200 - application/json;+charset=utf-8 14.6623ms
+  [OK] GET /api/files 根列表 200 + children 结构（任务产物浏览）
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/files?path=sample.cs - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/files'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType4`5' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/files'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/files?path=sample.cs - 200 - application/json;+charset=utf-8 3.6147ms
+  [OK] GET /api/files 文本文件 → {text:true, content}（预览内容）
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/files?path=sample.cs&raw=true - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/files'
+info: Microsoft.AspNetCore.Http.Result.PhysicalFileResult[5]
+      Sending file with download name 'sample.cs'.
+  [OK] GET /api/files raw=true → 下载 200
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/files'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/files?path=sample.cs&raw=true - 200 23 application/octet-stream 8.1364ms
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/files?path=..%2F..%2FWindows%2Fwin.ini - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/files'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[1]
+      Setting HTTP status code 400.
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType1`1' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/files'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/files?path=..%2F..%2FWindows%2Fwin.ini - 400 - application/json;+charset=utf-8 4.7110ms
+  [OK] GET /api/files 越界路径 → 400（PathBoundary 逐段判定拒绝）
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/diff?taskId=x&rel=y - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/diff'
+info: Microsoft.AspNetCore.Http.Result.BadRequestObjectResult[1]
+      Setting HTTP status code 400.
+info: Microsoft.AspNetCore.Http.Result.BadRequestObjectResult[3]
+      Writing value of type '<>f__AnonymousType1`1' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/diff'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/diff?taskId=x&rel=y - 400 - application/json;+charset=utf-8 1.1388ms
+  [OK] 无工程根 diff → 400 BadRequest
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/tasks/hist1/events - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/tasks/{taskId}/events'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type 'List`1' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/tasks/{taskId}/events'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/tasks/hist1/events - 200 - application/json;+charset=utf-8 2.1538ms
+  [OK] GET /api/tasks/{id}/events 200 + 事件数组（payload 为 JSON 字符串）
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/tasks/none/events - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/tasks/{taskId}/events'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type 'List`1' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/tasks/{taskId}/events'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/tasks/none/events - 200 - application/json;+charset=utf-8 0.2501ms
+  [OK] GET /api/tasks/{id}/events 无事件 → 空数组
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/deps - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/deps'
+info: Microsoft.AspNetCore.Http.Result.BadRequestObjectResult[1]
+      Setting HTTP status code 400.
+info: Microsoft.AspNetCore.Http.Result.BadRequestObjectResult[3]
+      Writing value of type '<>f__AnonymousType1`1' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/deps'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/deps - 400 - application/json;+charset=utf-8 0.9622ms
+  [OK] 无工程根 /api/deps → 400 BadRequest
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 POST http://127.0.0.1:53091/api/commands - application/json;+charset=utf-8 15
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: POST /api/commands'
+info: Microsoft.AspNetCore.Http.Result.BadRequestObjectResult[1]
+      Setting HTTP status code 400.
+info: Microsoft.AspNetCore.Http.Result.BadRequestObjectResult[3]
+      Writing value of type '<>f__AnonymousType1`1' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: POST /api/commands'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 POST http://127.0.0.1:53091/api/commands - 400 - application/json;+charset=utf-8 8.8238ms
+  [OK] POST /api/commands 空输入 → 400
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 POST http://127.0.0.1:53091/api/commands - application/json;+charset=utf-8 17
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: POST /api/commands'
+info: Microsoft.AspNetCore.Http.Result.AcceptedResult[1]
+      Setting HTTP status code 202.
+info: Microsoft.AspNetCore.Http.Result.AcceptedResult[3]
+      Writing value of type '<>f__AnonymousType16`3' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: POST /api/commands'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 POST http://127.0.0.1:53091/api/commands - 202 - application/json;+charset=utf-8 2.7718ms
+  [OK] POST /api/commands 合法命令 → 202 {queued:true} 且含 seq/pending（web 提交归属+位置）
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/queue - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/queue'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType17`2' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/queue'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/queue - 200 - application/json;+charset=utf-8 4.6352ms
+  [OK] GET /api/queue → 200 且结构 {pending, items[{seq,input,submittedAt}]}（队列可见性）
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 POST http://127.0.0.1:53091/api/cancel - application/json;+charset=utf-8 2
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: POST /api/cancel'
+info: Microsoft.AspNetCore.Http.Result.ConflictObjectResult[1]
+      Setting HTTP status code 409.
+info: Microsoft.AspNetCore.Http.Result.ConflictObjectResult[3]
+      Writing value of type '<>f__AnonymousType1`1' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: POST /api/cancel'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 POST http://127.0.0.1:53091/api/cancel - 409 - application/json;+charset=utf-8 0.3994ms
+  [OK] POST /api/cancel 无运行中任务 → 409 {error}（无任务时明确拒绝）
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53091/api/current-task - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/current-task'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType20`1' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/current-task'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53091/api/current-task - 200 - application/json;+charset=utf-8 1.3620ms
+  [OK] GET /api/current-task 无任务 → 200 {running:false}（任务归属端点）
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://127.0.0.1:53093
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Production
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: X:\.NET AI\LocalAiWorkbench
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53093/api/stats - - -
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53093/api/stats - 401 - application/json;+charset=utf-8 12.7308ms
+  [OK] ③ AuthToken 鉴权：无 token 请求 → 401（中间件拒绝）
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53093/api/stats?token=wrong - - -
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53093/api/stats?token=wrong - 401 - application/json;+charset=utf-8 1.2513ms
+  [OK] ③ AuthToken 鉴权：错误 token → 401
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53093/api/stats?token=secret-token-123 - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/stats'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType0`3' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/stats'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53093/api/stats?token=secret-token-123 - 200 - application/json;+charset=utf-8 0.6113ms
+  [OK] ③ AuthToken 鉴权：正确 token → 200
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53093/api/stats - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/stats'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType0`3' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/stats'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53093/api/stats - 200 - application/json;+charset=utf-8 0.3357ms
+  [OK] ③ AuthToken 鉴权：header X-Dashboard-Token → 200（fetch 包装兼容）
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+  [OK] deps 冒烟：符号索引可建（3 个类型级符号）
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://127.0.0.1:53095
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Production
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: X:\.NET AI\LocalAiWorkbench
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53095/api/deps - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/deps'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType14`3' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/deps'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53095/api/deps - 200 - application/json;+charset=utf-8 24.1319ms
+  [OK] GET /api/deps 概览：files/edges/topReverse 结构 + 3 文件 + 依赖边 ≥1
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53095/api/deps?path=OrderService.cs - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/deps'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType15`2' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/deps'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53095/api/deps?path=OrderService.cs - 200 - application/json;+charset=utf-8 8.1360ms
+  [OK] GET /api/deps?path=OrderService.cs → direct 含 Customer.cs（类型级引用检测）
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53095/api/tuning - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/tuning'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType5`5' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/tuning'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53095/api/tuning - 200 - application/json;+charset=utf-8 8.7292ms
+  [OK] GET /api/tuning 200：三态 + 阈值结构（写降级/读升级/Complex 降级）
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53095/api/memory?take=5 - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /api/memory'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType10`2' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /api/memory'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53095/api/memory?take=5 - 200 - application/json;+charset=utf-8 11.4648ms
+  [OK] GET /api/memory 200：stats + rows 结构
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+
+结果: 545 通过 / 0 失败

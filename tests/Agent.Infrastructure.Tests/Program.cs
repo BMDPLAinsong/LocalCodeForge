@@ -2680,6 +2680,8 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             cur2.Seq == 0 && cur2.Input is null);
         Check("AgentOptions.TaskTimeoutMinutes 默认 30（任务级整体超时配置，0=禁用）",
             new Agent.Core.Models.AgentOptions().TaskTimeoutMinutes == 30);
+        Check("AgentOptions.OllamaHttpTimeoutMinutes 默认 20（本地 Ollama HttpClient 超时，10-04 600s 腰斩实证后配置化加长）",
+            new Agent.Core.Models.AgentOptions().OllamaHttpTimeoutMinutes == 20);
     }
 
     // ── 3. DashboardHost 冒烟：真起 Kestrel → HttpClient 验证 API ──
