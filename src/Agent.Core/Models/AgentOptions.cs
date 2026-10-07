@@ -172,6 +172,11 @@ public sealed class AgentOptions
     /// <summary>P2 ComplexReason 降级：最小成功率（低于 → 降级 large）。</summary>
     public double RoutingDropAgentProMinSuccessRate { get; set; } = 0.5;
 
+    /// <summary>【10-08 ② 任务级超时】单任务整体超时（分钟）。0 = 禁用。
+    /// 主循环任务开始时 taskCts.CancelAfter——与终端 q 键 / web POST /api/cancel 同一取消令牌，
+    /// 超时后任务在阶段间响应取消 → cancelled → 照常走失败回滚承接。默认 30 分钟防失控任务永久卡队列。</summary>
+    public int TaskTimeoutMinutes { get; set; } = 30;
+
     /// <summary>
     /// 【时代隔离】模型时代切换点（law-unified 30B 落地时刻，本地时间）。
     /// stats 面板按此拆分 agent_pro 等服务的成功率（当前时代 vs 历史时代）。

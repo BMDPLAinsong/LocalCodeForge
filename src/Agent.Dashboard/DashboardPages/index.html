@@ -102,6 +102,18 @@
   </div>
 
   <div class="card" style="grid-column:1/-1">
+    <h2>任务产物（工作目录 /api/files）
+      <span style="float:right;font-weight:400">
+        <span id="filesPath" class="dim" style="font-size:12px">/</span>
+        <button class="btn" id="filesUp" style="margin-left:6px" title="返回上级">上级</button>
+        <button class="btn" id="filesRefresh" title="刷新">刷新</button>
+      </span>
+    </h2>
+    <div id="files" style="font-size:12px;line-height:1.8"><div class="empty">点击"刷新"浏览 run 工作目录产物（CLI 任务生成的文件）</div></div>
+    <pre id="filesPreview" class="empty" style="display:none;max-height:320px;overflow:auto;margin-top:8px;background:#0d1117;border:1px solid var(--border);border-radius:4px;padding:8px;font-size:12px"></pre>
+  </div>
+
+  <div class="card" style="grid-column:1/-1">
     <h2>工程依赖图谱（use 工程模式）
       <span style="float:right;font-weight:400">
         <select id="depFile" style="background:#1a1f2e;color:var(--fg);border:1px solid #2f3a52;border-radius:4px;padding:2px 6px"><option value="">（全工程概览）</option></select>
@@ -527,6 +539,60 @@ async function refreshQueue() {
 }
 function trunc(s, n) { return (s && s.length > n) ? s.slice(0, n) + "…" : s; }
 setInterval(refreshQueue, 3000);
+// ── 任务产物浏览（10-08 ①）：文件列表 + 面包屑 + 文本预览（数据源 /api/files）──
+let filesDir = "";
+async function loadFiles(dir) {
+  filesDir = dir || "";
+  try {
+    const r = await fetch("/api/files?path=" + encodeURIComponent(filesDir));
+    const d = await r.json();
+    $("filesPath").textContent = "/" + filesDir;
+    $("filesPreview").style.display = "none";
+    if (!r.ok || d.error) { $("files").innerHTML = `<span class="dim">${d.error || r.status}</span>`; return; }
+    if (d.isDir) {
+      const rows = d.children.map(c => c.isDir
+        ? `<span style="cursor:pointer;color:#79c0ff" onclick="loadFiles('${filesDir}/${c.name}')">📁 ${c.name}/</span>`
+        : `<span style="cursor:pointer" onclick="previewFile('${filesDir}/${c.name}')">📄 ${c.name}</span> ` +
+          `<span class="dim">(${fmtSize(c.size)})</span>`)
+        .join("<br>");
+      $("files").innerHTML = rows || `<span class="dim">（空目录）</span>`;
+    } else if (d.text) {
+      $("files").innerHTML = `<span class="dim">📄 ${d.path}（${fmtSize(d.size)}）</span> ` +
+        `<a class="btn" style="cursor:pointer;font-size:11px" href="/api/files?path=${encodeURIComponent(filesDir)}&raw=true" download="${encodeURIComponent(d.path.split('/').pop())}">下载</a>`;
+      $("filesPreview").style.display = "block";
+      $("filesPreview").textContent = d.content;
+    } else {
+      $("files").innerHTML = `<span class="dim">📄 ${d.path}（${fmtSize(d.size)}）二进制文件，请本地打开</span>`;
+    }
+  } catch (e) { $("files").innerHTML = `<span class="dim">加载失败：${e.message}</span>`; }
+}
+async function previewFile(rel) {
+  try {
+    const r = await fetch("/api/files?path=" + encodeURIComponent(rel));
+    const d = await r.json();
+    if (!r.ok || d.error) { $("filesPreview").style.display = "block"; $("filesPreview").textContent = d.error || r.status; return; }
+    if (d.text) {
+      $("files").innerHTML = `<span class="dim">📄 ${d.path}（${fmtSize(d.size)}）</span> ` +
+        `<a class="btn" style="cursor:pointer;font-size:11px" href="/api/files?path=${encodeURIComponent(rel)}&raw=true" download="${encodeURIComponent(d.path.split('/').pop())}">下载</a>`;
+      $("filesPreview").style.display = "block";
+      $("filesPreview").textContent = d.content;
+    } else {
+      $("filesPreview").style.display = "block";
+      $("filesPreview").textContent = `二进制文件（${fmtSize(d.size)}），不支持预览，请本地打开：${d.path}`;
+    }
+  } catch (e) { $("filesPreview").style.display = "block"; $("filesPreview").textContent = "加载失败：" + e.message; }
+}
+function fmtSize(n) {
+  if (n == null) return "-";
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+  return (n / 1048576).toFixed(1) + " MB";
+}
+$("filesRefresh").addEventListener("click", () => loadFiles(filesDir));
+$("filesUp").addEventListener("click", () => {
+  const idx = filesDir.lastIndexOf("/");
+  loadFiles(idx > 0 ? filesDir.slice(0, idx) : "");
+});
 
 openStream();
 refreshAll();

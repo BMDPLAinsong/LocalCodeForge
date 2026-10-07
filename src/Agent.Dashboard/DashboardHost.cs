@@ -50,6 +50,32 @@ public static class DashboardHost
     private static double Rate(Agent.Infrastructure.Routing.ServiceStats s) =>
         s.TotalCount > 0 ? (double)s.SuccessCount / s.TotalCount : 0;
 
+    // ── 任务产物浏览辅助（10-08 ①）：文本判定 + 预览截断 ──
+    private static readonly System.Collections.Generic.HashSet<string> TextExts = new(
+        new[] { ".cs", ".py", ".txt", ".md", ".json", ".xml", ".html", ".htm", ".js", ".ts", ".csproj",
+                ".sln", ".slnx", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".sh", ".ps1",
+                ".sql", ".csv", ".tsv", ".log", ".gitignore", ".env", ".editorconfig", ".props",
+                ".targets", ".css", ".scss", ".proto", ".bat", ".cmd" },
+        StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsTextFile(string name)
+    {
+        var ext = Path.GetExtension(name);
+        if (string.IsNullOrEmpty(ext)) return true;          // 无扩展名默认按文本预览（失败自会截断）
+        return TextExts.Contains(ext);
+    }
+
+    private const int PreviewMaxChars = 50_000;              // 预览上限 50KB 字符（超大文件不整读）
+    private static string PreviewText(string full)
+    {
+        using var fs = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var sr = new StreamReader(fs, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var buf = new char[PreviewMaxChars + 1];
+        var n = sr.Read(buf, 0, buf.Length);
+        var text = new string(buf, 0, n);
+        return n > PreviewMaxChars ? text + "\n…（预览截断，下载查看完整内容）" : text;
+    }
+
     /// <summary>启动 Kestrel（127.0.0.1:0 随机端口）。返回 (实际 URL, 停止委托)——Stop() 调用时才停服
     /// （app.StopAsync() 调用即开始执行，若直接返回其 Task 会在 StartAsync 返回后立刻关闭服务器）。</summary>
     public static async Task<(string Url, Func<Task> Stop)> StartAsync(DashboardOptions options, CancellationToken ct)
@@ -93,6 +119,52 @@ public static class DashboardHost
 
         // ── 备份列表（Diff 数据源定位）──
         app.MapGet("/api/backups", () => Results.Json(BackupService.ListBackups(o.WorkspaceRoot), JsonOpts));
+
+        // ── 任务产物浏览（10-08 ①）：run 工作目录文件浏览 + 文本预览 + 下载 ──
+        // 限定在 WorkspaceRoot 内（PathBoundary 逐段判定，杜绝 .. 跳脱/前缀误判）。
+        // path 为空 → 根 children；path 为目录 → children；path 为文本文件 → {file:true, content 前 50KB}；
+        // 二进制 → {file:true, text:false}；raw=true → 文件下载（octet-stream + 下载名）。
+        // 越界 → 400；不存在 → 404。数据源 = 磁盘真实文件（任务产物），非内存镜像——单一来源。
+        app.MapGet("/api/files", (string? path, bool? raw) =>
+        {
+            var root = PathBoundary.Normalize(o.WorkspaceRoot);
+            var full = string.IsNullOrWhiteSpace(path)
+                ? root
+                : PathBoundary.Normalize(Path.Combine(root, path.TrimStart('/', '\\')));
+            if (!PathBoundary.IsInside(root, full))
+                return Results.Json(new { error = "路径越界。" }, JsonOpts, statusCode: 400);
+            var rel = full == root ? "" : (full.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+                ? full.Substring(root.Length).TrimStart('\\') : Path.GetFileName(full));
+            if (Directory.Exists(full))
+            {
+                var children = Directory.EnumerateFileSystemEntries(full)
+                    .Select(p => new
+                    {
+                        name = Path.GetFileName(p),
+                        isDir = Directory.Exists(p),
+                        size = File.Exists(p) ? new FileInfo(p).Length : (long?)null,
+                        modifiedAt = File.Exists(p)
+                            ? (DateTimeOffset?)new FileInfo(p).LastWriteTimeUtc : null,
+                    })
+                    .OrderByDescending(c => c.isDir)
+                    .ThenBy(c => c.name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                return Results.Json(new { path = rel, isDir = true, children }, JsonOpts);
+            }
+            if (File.Exists(full))
+            {
+                var fi = new FileInfo(full);
+                if (raw == true)
+                    return Results.File(fi.FullName, "application/octet-stream", fi.Name);
+                var isText = IsTextFile(fi.Name);
+                return Results.Json(new
+                {
+                    path = rel, isDir = false, size = fi.Length, text = isText,
+                    content = isText ? PreviewText(fi.FullName) : null,
+                }, JsonOpts);
+            }
+            return Results.Json(new { error = "路径不存在。" }, JsonOpts, statusCode: 404);
+        });
 
         // ── 任务详情回放：完整事件序列（10-07 UI 层 #1/#2）──
         // 返回 StoredEvent 数组（payload 为 JSON 字符串，与 SSE 推送格式一致）——

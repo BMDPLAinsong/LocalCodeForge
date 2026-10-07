@@ -785,6 +785,18 @@ internal class Program
             // 监听随任务收尾（finally）停止；无头路径（sp==null）不启用。
             var sp = renderer as Agent.Infrastructure.Rendering.SpectreRenderer;
             var taskCts = new CancellationTokenSource();
+            // 【10-08 ② 任务级超时】Timer 自动触发 taskCts.Cancel——与 q/web 取消同一令牌；
+            // timeoutFired 区分来源（只有超时触发才打印提示，q/web 取消不误报）；
+            // 超时后 Orchestrator 阶段间响应取消 → cancelled → 照常走失败回滚承接。
+            var timeoutFired = false;
+            System.Threading.Timer? timeoutTimer = null;
+            if (options.TaskTimeoutMinutes > 0)
+            {
+                var timeout = TimeSpan.FromMinutes(options.TaskTimeoutMinutes);
+                timeoutTimer = new System.Threading.Timer(
+                    _ => { timeoutFired = true; taskCts.Cancel(); },
+                    null, timeout, System.Threading.Timeout.InfiniteTimeSpan);
+            }
             // 【P0·web 取消】挂载当前任务取消源——Dashboard POST /api/cancel 经 CommandHub 触发同一令牌
             // （与终端 q 键同一取消机制；任务结束 finally 摘除）。
             commandHub.AttachTaskCancellation(taskCts);
@@ -879,9 +891,15 @@ internal class Program
             }
             finally
             {
+                timeoutTimer?.Dispose();
                 listenCts.Cancel();
                 commandHub.DetachTaskCancellation();
                 commandHub.DetachTaskInfo();
+                if (timeoutFired)
+                {
+                    try { sp?.Notice($"[任务] 超过 {options.TaskTimeoutMinutes} 分钟未完成，已自动取消。"); }
+                    catch { /* 渲染失败忽略 */ }
+                }
             }
         }
     }

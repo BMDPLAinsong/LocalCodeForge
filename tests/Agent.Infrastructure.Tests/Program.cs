@@ -2629,6 +2629,8 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         var cur2 = hub3.CurrentTask;
         Check("CommandHub 当前任务归属：Detach 后 Seq=0/Input=null（任务结束清除）",
             cur2.Seq == 0 && cur2.Input is null);
+        Check("AgentOptions.TaskTimeoutMinutes 默认 30（任务级整体超时配置，0=禁用）",
+            new Agent.Core.Models.AgentOptions().TaskTimeoutMinutes == 30);
     }
 
     // ── 3. DashboardHost 冒烟：真起 Kestrel → HttpClient 验证 API ──
@@ -2641,6 +2643,8 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         var store = new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(ws, "metrics.db"));
         store.RecordAsync("hist1", 0, new Agent.Core.Models.AgentEvent.Thinking("t"));
         store.RecordAsync("hist1", 1, new Agent.Core.Models.AgentEvent.Error("boom"));
+        // 【10-08 ① 任务产物浏览】工作区预置产物文件——/api/files 断言数据源
+        System.IO.File.WriteAllText(Path.Combine(ws, "sample.cs"), "public class Sample { }");
         var (url, stop) = await Agent.Dashboard.DashboardHost.StartAsync(
             new Agent.Dashboard.DashboardOptions(ws, null, Path.Combine(ws, "symbol_index.db"), null, metrics, dashHub, store,
                 new Agent.Core.Models.AgentOptions(),
@@ -2660,6 +2664,17 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         Check("GET /api/tasks 200 + 数组", tasks.StartsWith("["));
         var backups = await http.GetStringAsync("api/backups");
         Check("GET /api/backups 200 + 数组", backups.StartsWith("["));
+        var files = await http.GetStringAsync("api/files");
+        Check("GET /api/files 根列表 200 + children 结构（任务产物浏览）",
+            files.Contains("\"children\"") && files.Contains("sample.cs"));
+        var fileBody = await http.GetStringAsync("api/files?path=sample.cs");
+        Check("GET /api/files 文本文件 → {text:true, content}（预览内容）",
+            fileBody.Contains("\"text\":true") && fileBody.Contains("public class Sample"));
+        var dl = await http.GetAsync("api/files?path=sample.cs&raw=true");
+        Check("GET /api/files raw=true → 下载 200", dl.StatusCode == System.Net.HttpStatusCode.OK);
+        var oob = await http.GetAsync("api/files?path=" + Uri.EscapeDataString("../../Windows/win.ini"));
+        Check("GET /api/files 越界路径 → 400（PathBoundary 逐段判定拒绝）",
+            oob.StatusCode == System.Net.HttpStatusCode.BadRequest);
         var noDiff = await http.GetAsync("api/diff?taskId=x&rel=y");
         Check("无工程根 diff → 400 BadRequest", noDiff.StatusCode == System.Net.HttpStatusCode.BadRequest);
         var evts = await http.GetStringAsync("api/tasks/hist1/events");
