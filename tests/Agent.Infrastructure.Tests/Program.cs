@@ -2707,6 +2707,34 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             curResp.StatusCode == System.Net.HttpStatusCode.OK && curBody.Contains("\"running\":false"));
         await stop();
 
+        // ── ③ 安全 token 加固：带 AuthToken 的迷你实例 → 无 token 401 / 带 token 200 ──
+        var authWs = Path.Combine(Path.GetTempPath(), "dash_auth_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(authWs);
+        var authMetrics = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(Path.Combine(authWs, "metrics.db"));
+        var authStore = new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(authWs, "metrics.db"));
+        var (authUrl, authStop) = await Agent.Dashboard.DashboardHost.StartAsync(
+            new Agent.Dashboard.DashboardOptions(authWs, null, Path.Combine(authWs, "symbol_index.db"), null, authMetrics,
+                new Agent.Infrastructure.Events.TaskEventHub(), authStore, new Agent.Core.Models.AgentOptions(),
+                Path.Combine(authWs, "agent_memory.db"), new Agent.Core.CommandHub(), "secret-token-123"),
+            CancellationToken.None);
+        try
+        {
+            using var authHttp = new HttpClient { BaseAddress = new Uri(authUrl + "/") };
+            var noTok = await authHttp.GetAsync("api/stats");
+            Check("③ AuthToken 鉴权：无 token 请求 → 401（中间件拒绝）",
+                noTok.StatusCode == System.Net.HttpStatusCode.Unauthorized);
+            var badTok = await authHttp.GetAsync("api/stats?token=wrong");
+            Check("③ AuthToken 鉴权：错误 token → 401", badTok.StatusCode == System.Net.HttpStatusCode.Unauthorized);
+            var okTok = await authHttp.GetAsync("api/stats?token=secret-token-123");
+            Check("③ AuthToken 鉴权：正确 token → 200", okTok.StatusCode == System.Net.HttpStatusCode.OK);
+            var hdrReq = new HttpRequestMessage(HttpMethod.Get, "api/stats");
+            hdrReq.Headers.Add("X-Dashboard-Token", "secret-token-123");
+            var okHeader = await authHttp.SendAsync(hdrReq);
+            Check("③ AuthToken 鉴权：header X-Dashboard-Token → 200（fetch 包装兼容）",
+                okHeader.StatusCode == System.Net.HttpStatusCode.OK);
+        }
+        finally { await authStop(); }
+
         // ── 4. /api/deps 工程依赖图谱：真工程（含类型级引用）+ 索引 → 概览 + 单文件依赖 ──
         var depWs = Path.Combine(Path.GetTempPath(), "dash_deps_" + Guid.NewGuid().ToString("N"));
         var depProj = Path.Combine(depWs, "proj");

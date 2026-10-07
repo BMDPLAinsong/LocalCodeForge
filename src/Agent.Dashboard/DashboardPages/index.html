@@ -157,6 +157,17 @@
 
 <script>
 "use strict";
+// ── ③ 安全 token（10-08）：CLI 打印的 URL 带 ?token=，此处取出并统一附带 ──
+// fetch 全局包装：所有请求自动拼 token query（零逐点改动）；EventSource 只能带 query，单独处理。
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+{
+  const origFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const u = (typeof input === "string") ? input : input.url;
+    const nu = TOKEN ? u + (u.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN) : u;
+    return origFetch(nu, init);
+  };
+}
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const cut = (s, n) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n) + "…" : s; };
@@ -315,7 +326,7 @@ $("depFile").addEventListener("change", (e) => { if (e.target.value) loadFileDep
 
 // ── SSE 实时流 ──
 function openStream() {
-  const es = new EventSource("/events");
+  const es = new EventSource("/events" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : ""));
   es.onmessage = (e) => {
     let evt; try { evt = JSON.parse(e.data); } catch { return; }
     eventsCache.push(evt);

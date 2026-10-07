@@ -32,7 +32,8 @@ public sealed record DashboardOptions(
     TaskEventStore EventStore,         // ← 10-07 UI 层 #1：任务事件持久化（详情回放数据源）
     AgentOptions Options,              // ← 10-07 UI 层：调权阈值配置（/api/tuning）
     string MemoryDbPath,               // ← 10-07 UI 层：agent_memory.db 路径（/api/memory）
-    CommandHub CommandHub);            // ← 10-07 webUI 交互：web 提交汇入 CLI 主循环命令通道
+    CommandHub CommandHub,             // ← 10-07 webUI 交互：web 提交汇入 CLI 主循环命令通道
+    string? AuthToken = null);         // ← 10-08 ③ 安全 token：非空时所有端点校验 query token / X-Dashboard-Token（401 拒绝）
 
 /// <summary>POST /api/commands 请求体（最小输入 DTO，非业务模型）。</summary>
 public sealed record CommandRequest(string? Input);
@@ -92,6 +93,28 @@ public static class DashboardHost
 
     private static void MapEndpoints(WebApplication app, DashboardOptions o)
     {
+        // ── ③ 安全 token 加固（10-08）：AuthToken 非空时所有端点鉴权 ──
+        // query token / header X-Dashboard-Token 任一匹配即放行；SSE（EventSource 只能带 query）与 fetch 统一兼容。
+        // 无 token 配置（tests / 无鉴权场景）→ 跳过中间件，行为与历史完全一致。
+        if (!string.IsNullOrEmpty(o.AuthToken))
+        {
+            var expected = o.AuthToken;
+            app.Use(async (ctx, next) =>
+            {
+                var q = ctx.Request.Query["token"].ToString();
+                var h = ctx.Request.Headers["X-Dashboard-Token"].ToString();
+                if (!string.Equals(q, expected, StringComparison.Ordinal)
+                    && !string.Equals(h, expected, StringComparison.Ordinal))
+                {
+                    ctx.Response.StatusCode = 401;
+                    ctx.Response.ContentType = "application/json; charset=utf-8";
+                    await ctx.Response.WriteAsync("{\"error\":\"未授权：缺少或错误的 dashboard token（从 CLI 打印的完整 URL 打开）。\"}");
+                    return;
+                }
+                await next();
+            });
+        }
+
         // ── 单页 ──
         app.MapGet("/", () => Results.Text(ReadEmbeddedPage(), "text/html; charset=utf-8"));
 

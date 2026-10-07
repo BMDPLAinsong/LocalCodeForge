@@ -490,6 +490,9 @@ internal class Program
                     Console.WriteLine($"Dashboard 已在运行：{dashboardUrl}（浏览器打开即可查看；Ctrl+C 退出 CLI 时停止）");
                     continue;
                 }
+                // 【10-08 ③ 安全 token】随机 token 拼入 URL——CLI 打印的完整 URL 即访问凭证；
+                // 前端 JS 从 location.search 取 token，所有请求自动附带（fetch 包装 + SSE query）。
+                var dashToken = Guid.NewGuid().ToString("N");
                 var (url, _) = await Agent.Dashboard.DashboardHost.StartAsync(
                     new Agent.Dashboard.DashboardOptions(workspace, options.ProjectRoot,
                         Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db"),
@@ -497,11 +500,20 @@ internal class Program
                         provider.GetRequiredService<IMetricsCollector>(), eventHub, eventStore,
                         options,
                         Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "agent_memory.db"),
-                        commandHub),
+                        commandHub,
+                        dashToken),
                     CancellationToken.None);
+                url = url + "?token=" + dashToken;
                 dashboardUrl = url;
                 // 【10-07 UI 层 #4】交互态 [link] 超链接样式；无头态 dashboard 命令已被无头守卫拦截（不会到此处）
-                renderer.Notice($"Dashboard 已启动（仅本机回环）：[link]{url}[/]\n  浏览器打开查看：任务实时流 / stats / 历史任务 / 备份 Diff / 任务详情回放");
+                // 【10-08 ④】交互态自动打开默认浏览器（失败静默——打不开不影响 dashboard 使用）
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
+                    { UseShellExecute = true });
+                }
+                catch { /* 浏览器打开失败忽略 */ }
+                renderer.Notice($"Dashboard 已启动（仅本机回环 + token 鉴权）：[link]{url}[/]\n  浏览器已自动打开（失败可手动复制上方 URL）；任务实时流 / stats / 历史任务 / 备份 Diff / 任务详情回放 / 任务产物浏览");
                 continue;
             }
 
@@ -1016,12 +1028,13 @@ internal class Program
             => Directory.Exists(Path.Combine(dir, "manifests")) &&
                Directory.EnumerateFileSystemEntries(Path.Combine(dir, "manifests")).Any();
 
-        // 收集所有本地端点（Provider == "ollama"）
+        // 收集所有本地端点（Provider == "ollama"）——【10-08 ⑤】补 Large：此前只查三角色，Large 配置错误不会被发现
         var localEndpoints = new List<(string Name, ModelEndpoint Endpoint)>
         {
             ("Classifier", options.Classifier),
             ("Small",      options.Small),
             ("AgentPro",   options.AgentPro),
+            ("Large",      options.Large),
         }
         .Where(x => x.Endpoint.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
         .ToList();
