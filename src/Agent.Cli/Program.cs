@@ -267,12 +267,23 @@ internal class Program
         // 【10-07 UI 层 #4】Tab 命令补全（交互态自制行编辑；无头/重定向退回 ReadLine 逐字节兼容 E2E）
         // 命令列表与主循环分支保持一致（use/rollback/stats/memory/plan/orch/diff/dashboard/help/exit/new）
         string[] cliCommands = { "use", "rollback", "stats", "memory", "plan", "orch", "diff", "dashboard", "help", "exit", "new" };
+        // 【10-07 UI 层】命令历史：↑/↓ 翻历史——进程内内存历史（退出即失，诚实降级不做磁盘持久化），上限 100 条防无限增长
+        var history = new List<string>();
+        var historyIndex = -1;   // -1 = 编辑态；否则浏览 history[historyIndex]
+        var historyDraft = "";   // 编辑态半行（↑ 时保存，↓ 回末尾后恢复）
         string? ReadLineWithTabCompletion()
         {
             // 无头路径（管道/重定向）：E2E 输出逐字节兼容，不做行编辑
             if (Console.IsInputRedirected || Console.IsOutputRedirected)
                 return Console.ReadLine();
             var buf = new System.Text.StringBuilder();
+            // 整行重写辅助：清当前行 → 写新内容（↑/↓ 浏览历史用）
+            void SetBuf(string s)
+            {
+                while (buf.Length > 0) { Console.Write("\b \b"); buf.Length--; }
+                buf.Append(s);
+                Console.Write(s);
+            }
             while (true)
             {
                 var key = Console.ReadKey(true);
@@ -280,9 +291,31 @@ internal class Program
                 {
                     case ConsoleKey.Enter:
                         Console.WriteLine();
-                        return buf.ToString();
+                        var line = buf.ToString();
+                        if (!string.IsNullOrWhiteSpace(line))
+                        {
+                            history.Add(line);
+                            if (history.Count > 100) history.RemoveAt(0);
+                        }
+                        historyIndex = -1;
+                        return line;
                     case ConsoleKey.Backspace:
                         if (buf.Length > 0) { buf.Length--; Console.Write("\b \b"); }
+                        break;
+                    case ConsoleKey.UpArrow:
+                        if (history.Count > 0)
+                        {
+                            if (historyIndex == -1) { historyDraft = buf.ToString(); historyIndex = history.Count; }
+                            if (historyIndex > 0) { historyIndex--; SetBuf(history[historyIndex]); }
+                        }
+                        break;
+                    case ConsoleKey.DownArrow:
+                        if (historyIndex != -1)
+                        {
+                            historyIndex++;
+                            if (historyIndex >= history.Count) { historyIndex = -1; SetBuf(historyDraft); }
+                            else SetBuf(history[historyIndex]);
+                        }
                         break;
                     case ConsoleKey.Tab:
                         if (buf.Length == 0) break;
@@ -423,7 +456,9 @@ internal class Program
                     new Agent.Dashboard.DashboardOptions(workspace, options.ProjectRoot,
                         Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db"),
                         options.LawUnifiedEpoch,
-                        provider.GetRequiredService<IMetricsCollector>(), eventHub, eventStore),
+                        provider.GetRequiredService<IMetricsCollector>(), eventHub, eventStore,
+                        options,
+                        Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "agent_memory.db")),
                     CancellationToken.None);
                 dashboardUrl = url;
                 // 【10-07 UI 层 #4】交互态 [link] 超链接样式；无头态 dashboard 命令已被无头守卫拦截（不会到此处）

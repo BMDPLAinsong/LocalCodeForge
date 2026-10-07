@@ -100,6 +100,16 @@
   </div>
 
   <div class="card">
+    <h2>路由调权状态（/api/tuning）</h2>
+    <div id="tuning"><div class="empty">加载中…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>记忆（/api/memory）</h2>
+    <div id="memory"><div class="empty">加载中…</div></div>
+  </div>
+
+  <div class="card">
     <h2>历史任务（/api/tasks · 最近 50）</h2>
     <div id="tasks"><div class="empty">加载中…</div></div>
   </div>
@@ -307,6 +317,36 @@ async function fetchTasks() {
   }
 }
 
+// ── 路由调权状态（10-07：与终端 stats 小节同语义，阈值来自 AgentOptions.Routing*）──
+async function fetchTuning() {
+  const r = await fetch("/api/tuning");
+  if (!r.ok) { $("tuning").innerHTML = `<div class="empty">tuning 不可用（${r.status}）</div>`; return; }
+  const d = await r.json();
+  const pct = (v) => (v * 100).toFixed(0) + "%";
+  const tag = (t) => t ? `<span class="ok">触发</span>` : `<span class="dim">保持</span>`;
+  const w = d.writeDowngrade, rd = d.readUpgrade, cd = d.complexDrop;
+  let html = "";
+  html += `<div class="statrow"><span>L0.5 写降级 small</span><span>样本 ${w.sampleCount} · 成功率 ${pct(w.successRate)} / 阈值 ${pct(w.threshold)} → ${tag(w.triggered)} ${esc(w.reason)}</span></div>`;
+  html += `<div class="statrow"><span>L0.5b 读升级 pro</span><span>small ${pct(rd.small.successRate)}（坏率阈 ${pct(rd.badRateThreshold)}）/ pro ${pct(rd.pro.successRate)}（阈 ${pct(rd.minSuccessRate)}）→ ${tag(rd.triggered)} ${esc(rd.reason)}</span></div>`;
+  html += `<div class="statrow"><span>P2 Complex 降级 large</span><span>样本 ${cd.sampleCount} · 成功率 ${pct(cd.successRate)} / 阈值 ${pct(cd.threshold)} → ${tag(cd.triggered)} ${esc(cd.reason)}</span></div>`;
+  html += `<div class="statrow" style="color:var(--dim)"><span>阈值来源</span><span>AgentOptions.Routing* 配置${d.epoch ? " · 样本仅统计 law-unified 30B 时代" : ""}</span></div>`;
+  $("tuning").innerHTML = html;
+}
+
+// ── 记忆（10-07：agent_memory.db 列表 + 统计）──
+async function fetchMemory() {
+  const r = await fetch("/api/memory?take=50");
+  if (!r.ok) { $("memory").innerHTML = `<div class="empty">memory 不可用（${r.status}）</div>`; return; }
+  const d = await r.json();
+  if (!d.rows.length) { $("memory").innerHTML = `<div class="empty">暂无记忆（模型使用 remember 工具 / 失败教训自动归档后出现）</div>`; return; }
+  const s = d.stats;
+  let html = `<div class="statrow"><span>统计</span><span>共 ${s.total} 条（模型 ${s.modelCount} / 任务 ${s.taskCount}）· 总命中 ${s.totalHits}</span></div>`;
+  html += `<table><thead><tr><th>#</th><th>kind</th><th>命中</th><th>次数</th><th>主题</th></tr></thead><tbody>`;
+  for (const m of d.rows)
+    html += `<tr><td>${m.id}</td><td>${esc(m.kind)}</td><td>${m.hitCount}</td><td>${m.count}</td><td class="inp" title="${esc(m.topic)}">${esc(cut(m.topic, 50))}</td></tr>`;
+  $("memory").innerHTML = html + "</tbody></table>";
+}
+
 // ── 备份 + Diff ──
 let backups = [];
 async function fetchBackups() {
@@ -353,7 +393,7 @@ async function showDiff(taskId, rel) {
   $("diff").innerHTML = html;
 }
 
-function refreshAll() { fetchStats(); fetchTasks(); fetchBackups(); }
+function refreshAll() { fetchStats(); fetchTasks(); fetchBackups(); fetchTuning(); fetchMemory(); }
 openStream();
 refreshAll();
 </script>

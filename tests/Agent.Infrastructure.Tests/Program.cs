@@ -2600,7 +2600,9 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         store.RecordAsync("hist1", 0, new Agent.Core.Models.AgentEvent.Thinking("t"));
         store.RecordAsync("hist1", 1, new Agent.Core.Models.AgentEvent.Error("boom"));
         var (url, stop) = await Agent.Dashboard.DashboardHost.StartAsync(
-            new Agent.Dashboard.DashboardOptions(ws, null, Path.Combine(ws, "symbol_index.db"), null, metrics, dashHub, store), CancellationToken.None);
+            new Agent.Dashboard.DashboardOptions(ws, null, Path.Combine(ws, "symbol_index.db"), null, metrics, dashHub, store,
+                new Agent.Core.Models.AgentOptions(),
+                Path.Combine(ws, "agent_memory.db")), CancellationToken.None);
         using var http = new HttpClient { BaseAddress = new Uri(url + "/") };
         var page = await http.GetStringAsync("");
         Check("GET / 返回嵌入单页（含标题 + 回放 API + 过滤/滚动开关）",
@@ -2641,7 +2643,9 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
                 new Agent.Dashboard.DashboardOptions(depWs, depProj, Path.Combine(depWs, "symbol_index.db"), null,
                     new Agent.Infrastructure.Metrics.SqliteMetricsCollector(Path.Combine(depWs, "metrics.db")),
                     new Agent.Infrastructure.Events.TaskEventHub(),
-                    new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(depWs, "metrics.db"))),
+                    new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(depWs, "metrics.db")),
+                    new Agent.Core.Models.AgentOptions(),
+                    Path.Combine(depWs, "agent_memory.db")),
                 CancellationToken.None);
             using var depHttp = new HttpClient { BaseAddress = new Uri(depUrl + "/") };
             var overview = await depHttp.GetStringAsync("api/deps");
@@ -2651,6 +2655,12 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             var single = await depHttp.GetStringAsync("api/deps?path=OrderService.cs");
             Check("GET /api/deps?path=OrderService.cs → direct 含 Customer.cs（类型级引用检测）",
                 single.Contains("Customer.cs") && single.Contains("reverse"));
+            var tuning = await depHttp.GetStringAsync("api/tuning");
+            Check("GET /api/tuning 200：三态 + 阈值结构（写降级/读升级/Complex 降级）",
+                tuning.Contains("writeDowngrade") && tuning.Contains("readUpgrade")
+                && tuning.Contains("complexDrop") && tuning.Contains("thresholds"));
+            var mem = await depHttp.GetStringAsync("api/memory?take=5");
+            Check("GET /api/memory 200：stats + rows 结构", mem.Contains("\"stats\"") && mem.Contains("\"rows\""));
             await depStop();
         }
         finally

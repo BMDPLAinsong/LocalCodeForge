@@ -28,7 +28,9 @@ public sealed record DashboardOptions(
     DateTimeOffset? LawUnifiedEpoch,
     IMetricsCollector Metrics,
     TaskEventHub Hub,
-    TaskEventStore EventStore);   // ← 10-07 UI 层 #1：任务事件持久化（详情回放数据源）
+    TaskEventStore EventStore,         // ← 10-07 UI 层 #1：任务事件持久化（详情回放数据源）
+    AgentOptions Options,              // ← 10-07 UI 层：调权阈值配置（/api/tuning）
+    string MemoryDbPath);              // ← 10-07 UI 层：agent_memory.db 路径（/api/memory）
 
 public static class DashboardHost
 {
@@ -38,6 +40,10 @@ public static class DashboardHost
 
     // 持有当前宿主引用：StartAsync 返回后 Kestrel 依赖 app 对象存活（防 GC 停止服务）
     private static WebApplication? _running;
+
+    /// <summary>成功率（0 样本 → 0）。/api/tuning 展示用。</summary>
+    private static double Rate(Agent.Infrastructure.Routing.ServiceStats s) =>
+        s.TotalCount > 0 ? (double)s.SuccessCount / s.TotalCount : 0;
 
     /// <summary>启动 Kestrel（127.0.0.1:0 随机端口）。返回 (实际 URL, 停止委托)——Stop() 调用时才停服
     /// （app.StopAsync() 调用即开始执行，若直接返回其 Task 会在 StartAsync 返回后立刻关闭服务器）。</summary>
@@ -110,6 +116,64 @@ public static class DashboardHost
             var current = Path.Combine(o.ProjectRoot, backup.Value.Rel);
             var result = FileDiffService.Compute(backup.Value.Full, current);
             return Results.Json(result, JsonOpts);
+        });
+
+        // ── 路由调权状态（10-07）：三处调权当前判定——与终端 stats"路由调权状态"小节同语义 ──
+        // 时代过滤：LawUnifiedEpoch 非空 → 只统计 30B 时代样本（与 ModelRouter.GetTuningStatsAsync 一致）；
+        // 阈值来自 DashboardOptions.Options（AgentOptions.Routing*），默认值与原硬编码一致。
+        app.MapGet("/api/tuning", async (CancellationToken ct) =>
+        {
+            var opt = o.Options;
+            async Task<Agent.Infrastructure.Routing.ServiceStats> TuningAsync(string svc, string tier) =>
+                o.LawUnifiedEpoch is { } e
+                    ? await o.Metrics.GetServiceStatsSinceAsync(svc, tier, e, 10, ct)
+                    : await o.Metrics.GetServiceStatsAsync(svc, tier, 10, ct);
+
+            var smallRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.Small, "Rule");
+            var largeRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.Large, "Rule");
+            var proRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.AgentPro, "Rule");
+            var proL3 = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.AgentPro, "SmallModel");
+
+            var downgrade = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDowngrade(
+                smallRule, largeRule, opt.RoutingTuningMinSamples, opt.RoutingDowngradeMinSuccessRate, out var dowReason);
+            var readUp = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestReadTier(
+                proRule, smallRule, opt.RoutingTuningMinSamples, opt.RoutingReadUpgradeBadRate, opt.RoutingReadUpgradeMinSuccessRate, out var readReason);
+            var dropPro = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDropAgentPro(
+                proL3, opt.RoutingDropAgentProMinSamples, opt.RoutingDropAgentProMinSuccessRate, out var dropReason);
+
+            return Results.Json(new
+            {
+                epoch = o.LawUnifiedEpoch,
+                thresholds = new
+                {
+                    minSamples = opt.RoutingTuningMinSamples,
+                    downgradeMinSuccessRate = opt.RoutingDowngradeMinSuccessRate,
+                    readUpgradeBadRate = opt.RoutingReadUpgradeBadRate,
+                    readUpgradeMinSuccessRate = opt.RoutingReadUpgradeMinSuccessRate,
+                    dropAgentProMinSamples = opt.RoutingDropAgentProMinSamples,
+                    dropAgentProMinSuccessRate = opt.RoutingDropAgentProMinSuccessRate,
+                },
+                writeDowngrade = new { sampleCount = smallRule.TotalCount, successRate = Rate(smallRule), threshold = opt.RoutingDowngradeMinSuccessRate, triggered = downgrade, reason = dowReason },
+                readUpgrade = new { small = new { sampleCount = smallRule.TotalCount, successRate = Rate(smallRule) }, pro = new { sampleCount = proRule.TotalCount, successRate = Rate(proRule) }, badRateThreshold = opt.RoutingReadUpgradeBadRate, minSuccessRate = opt.RoutingReadUpgradeMinSuccessRate, triggered = readUp, reason = readReason },
+                complexDrop = new { sampleCount = proL3.TotalCount, successRate = Rate(proL3), threshold = opt.RoutingDropAgentProMinSuccessRate, triggered = dropPro, reason = dropReason },
+            }, JsonOpts);
+        });
+
+        // ── 记忆视图（10-07）：列表 + 统计（与 CLI memory list/stats 同数据源 agent_memory.db）──
+        app.MapGet("/api/memory", (int take) =>
+        {
+            take = take is >= 1 and <= 100 ? take : 50;
+            var store = new Agent.Infrastructure.Memory.AgentMemoryStore(o.MemoryDbPath);
+            var rows = store.List(take);
+            var stats = store.GetStats();
+            return Results.Json(new
+            {
+                stats,
+                rows = rows.Select(m => new
+                {
+                    m.Id, m.Kind, m.Topic, m.HitCount, m.Count, m.CreatedAt, m.LastHitAt, m.Feature
+                }),
+            }, JsonOpts);
         });
 
         // ── 工程依赖图谱（10-07 UI 层 #3）：全工程边概览 / 单文件直接+反向依赖 ──
