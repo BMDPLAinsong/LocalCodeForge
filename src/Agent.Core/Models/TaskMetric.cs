@@ -40,6 +40,13 @@ public sealed class TaskMetric
     /// </summary>
     public bool IsSuspicious { get; set; }
 
+    /// <summary>
+    /// 【10-08 metrics 数据治理】是否 E2E 测试用例（CLI 由环境变量 LAW_E2E=1 标记，
+    /// 历史数据按 workspace\e2e 路径特征回填）。E2E 用例故意构造失败验证行为，
+    /// 计入 stats 会污染成功率/失败类别——真实统计必须剔除并单列。
+    /// </summary>
+    public bool IsE2E { get; set; }
+
     /// <summary>修复次数。</summary>
     public int RetryCount { get; set; }
 

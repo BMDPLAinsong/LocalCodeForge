@@ -114,6 +114,9 @@ public sealed class AgentLoopMetricsDecorator : IAgentLoop
             RoutingReason = routingReason,
             Success = success,
             IsSuspicious = isSuspicious,
+            // 【10-08 metrics 数据治理】E2E 冒烟用例由环境变量 LAW_E2E=1 标记（stats 剔除）
+            IsE2E = string.Equals(
+                Environment.GetEnvironmentVariable("LAW_E2E"), "1", StringComparison.Ordinal),
             RetryCount = routingChangeCount,
             TotalMs = sw.ElapsedMilliseconds,
             StartedAt = startedAt,

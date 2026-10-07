@@ -46,6 +46,7 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
                     routing_reason      TEXT NOT NULL,
                     success             INTEGER NOT NULL,
                     is_suspicious       INTEGER NOT NULL DEFAULT 0,
+                    is_e2e              INTEGER NOT NULL DEFAULT 0,
                     retry_count         INTEGER NOT NULL,
                     total_ms            INTEGER NOT NULL,
                     planner_ms          INTEGER NOT NULL,
@@ -89,6 +90,46 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
             }
         }
 
+        // 【10-08 metrics 数据治理】is_e2e 列迁移 + 历史回填：
+        // E2E 用例的工程根在 workspace\e2e\case_*（编译错误路径或 use 输入含该路径）——强特征回填。
+        if (!cols.Contains("is_e2e", StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                using var alterCmd = conn.CreateCommand();
+                alterCmd.CommandText =
+                    "ALTER TABLE task_metrics ADD COLUMN is_e2e INTEGER NOT NULL DEFAULT 0";
+                alterCmd.ExecuteNonQuery();
+            }
+            catch
+            {
+                // 列已存在 → 忽略
+            }
+        }
+
+        // 历史回填（幂等：只回填未标记行；每次启动执行，605 行毫秒级）。
+        // 特征：E2E 用例的工程根在 workspace\e2e\case_*（编译错误路径/use 输入），
+        // 或 E2E 专属任务输入（ShippingService/OrderSummary/use --write 冒烟——
+        // 这些是 E2E 用例构造，真实任务从未以此开头）。
+        try
+        {
+            using var backfillCmd = conn.CreateCommand();
+            backfillCmd.CommandText = """
+                UPDATE task_metrics SET is_e2e = 1
+                WHERE is_e2e = 0
+                  AND (error_summary LIKE '%workspace\e2e%'
+                       OR user_input LIKE '%workspace\e2e%'
+                       OR user_input LIKE '%ShippingService%'
+                       OR user_input LIKE '%OrderSummary%'
+                       OR user_input LIKE 'use --write%')
+                """;
+            backfillCmd.ExecuteNonQuery();
+        }
+        catch
+        {
+            // 旧库无 is_e2e 列时忽略（ALTER 失败场景）
+        }
+
         if (!cols.Contains("failure_category", StringComparer.OrdinalIgnoreCase))
         {
             try
@@ -129,14 +170,14 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
             INSERT OR REPLACE INTO task_metrics(
                 task_id, session_id, user_input, mode,
                 routing_tier, service_id, routing_reason,
-                success, is_suspicious, retry_count,
+                success, is_suspicious, is_e2e, retry_count,
                 total_ms, planner_ms, executor_ms, validator_ms,
                 lint_blocking_errors, lint_warning_errors,
                 error_summary, failure_category, started_at, finished_at
             ) VALUES (
                 $task_id, $session_id, $user_input, $mode,
                 $routing_tier, $service_id, $routing_reason,
-                $success, $is_suspicious, $retry_count,
+                $success, $is_suspicious, $is_e2e, $retry_count,
                 $total_ms, $planner_ms, $executor_ms, $validator_ms,
                 $lint_blocking_errors, $lint_warning_errors,
                 $error_summary, $failure_category, $started_at, $finished_at
@@ -152,6 +193,7 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         cmd.Parameters.AddWithValue("$routing_reason", metric.RoutingReason);
         cmd.Parameters.AddWithValue("$success", metric.Success ? 1 : 0);
         cmd.Parameters.AddWithValue("$is_suspicious", metric.IsSuspicious ? 1 : 0);
+        cmd.Parameters.AddWithValue("$is_e2e", metric.IsE2E ? 1 : 0);
         cmd.Parameters.AddWithValue("$retry_count", metric.RetryCount);
         cmd.Parameters.AddWithValue("$total_ms", metric.TotalMs);
         cmd.Parameters.AddWithValue("$planner_ms", metric.PlannerMs);
@@ -202,10 +244,21 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         await conn.OpenAsync(ct);
 
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT * FROM task_metrics ORDER BY started_at DESC LIMIT $take;";
+        cmd.CommandText = "SELECT * FROM task_metrics WHERE is_e2e = 0 ORDER BY started_at DESC LIMIT $take;";
         cmd.Parameters.AddWithValue("$take", take);
 
         return await ReadAllAsync(cmd, ct);
+    }
+
+    /// <summary>【10-08 metrics 数据治理】E2E 用例计数（stats 单列展示，不污染真实统计）。</summary>
+    public async Task<int> GetE2ECountAsync(CancellationToken ct)
+    {
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM task_metrics WHERE is_e2e = 1;";
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
     }
 
     /// <summary>
@@ -242,7 +295,7 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         await conn.OpenAsync(ct);
 
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT * FROM task_metrics WHERE success = 0 ORDER BY started_at DESC LIMIT $take;";
+        cmd.CommandText = "SELECT * FROM task_metrics WHERE success = 0 AND is_e2e = 0 ORDER BY started_at DESC LIMIT $take;";
         cmd.Parameters.AddWithValue("$take", take);
 
         return await ReadAllAsync(cmd, ct);
@@ -266,7 +319,8 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
                 AVG(executor_ms) AS avg_executor,
                 AVG(validator_ms) AS avg_validator
             FROM task_metrics
-            WHERE ($since IS NULL OR started_at >= $since);
+            WHERE is_e2e = 0
+              AND ($since IS NULL OR started_at >= $since);
         """;
 
         object sinceParam = since.HasValue
@@ -406,6 +460,7 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
                 Success = reader.GetInt32(reader.GetOrdinal("success")) == 1,
                 // 用 GetOrdinal 而不是数字索引，兼容旧数据库
                 IsSuspicious = SafeGetInt(reader, "is_suspicious") == 1,
+                IsE2E = SafeGetInt(reader, "is_e2e") == 1,
                 RetryCount = reader.GetInt32(reader.GetOrdinal("retry_count")),
                 TotalMs = reader.GetInt64(reader.GetOrdinal("total_ms")),
                 PlannerMs = reader.GetInt64(reader.GetOrdinal("planner_ms")),

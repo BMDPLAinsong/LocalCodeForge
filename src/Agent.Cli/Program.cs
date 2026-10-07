@@ -545,6 +545,8 @@ internal class Program
                         var s = await metrics.GetSummaryAsync(null, CancellationToken.None);
                         if (s.TotalCount > 0)
                         {
+                            // 【10-08 metrics 数据治理】stats 概览为真实统计（E2E 已剔除）；E2E 用例数单列
+                            var e2eCount = await metrics.GetE2ECountAsync(CancellationToken.None);
                             spec.StatsPanel("任务指标概览",
                                 new List<(string, double)>
                                 {
@@ -553,6 +555,7 @@ internal class Program
                                     ("失败", s.FailureCount),
                                     ("成功率 %", Math.Round(s.SuccessRate * 100, 1)),
                                     ("可疑", s.SuspiciousCount),
+                                    ("E2E 用例（已单列）", e2eCount),
                                 });
                         }
                     }
@@ -1313,6 +1316,22 @@ internal class Program
 
         Console.Write("  总任务数:  ");
         Console.WriteLine(summary.TotalCount);
+
+        // 【10-08 metrics 数据治理】E2E 用例数单列（真实统计已剔除）
+        try
+        {
+            var e2e = await metrics.GetE2ECountAsync(CancellationToken.None);
+            if (e2e > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"  E2E 用例:  {e2e} 条（故意构造的验证用例，已从真实统计剔除）");
+                Console.ResetColor();
+            }
+        }
+        catch
+        {
+            // 旧库无 is_e2e 时忽略
+        }
 
         Console.Write("  成功 / 失败: ");
         Console.ForegroundColor = ConsoleColor.Green;

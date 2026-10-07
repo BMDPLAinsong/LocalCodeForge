@@ -1182,6 +1182,40 @@ Console.WriteLine("== 3 FailureCategorizer 失败类别归类 ==");
     Check("可疑成功落库 → GetRecentAsync 可过滤出明细",
         susRecent.Count == 1 && susRecent[0].TaskId == "fc_sus_1");
 
+    // 【10-08 metrics 数据治理】E2E 标记：is_e2e 落库 + 真实统计剔除 + 单列计数
+    var e2eMetrics = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(
+        Path.Combine(fcDir, "e2e.db"));
+    var e2eNow = DateTimeOffset.UtcNow;
+    Agent.Core.Models.TaskMetric MkE2E(string tid, bool ok) => new Agent.Core.Models.TaskMetric
+    {
+        TaskId = tid, SessionId = "s1", UserInput = "E2E 用例", Mode = "agent",
+        RoutingTier = "Rule", ServiceId = "small", RoutingReason = "test",
+        Success = ok, IsSuspicious = false, IsE2E = true, RetryCount = 0,
+        TotalMs = 10, PlannerMs = 0, ExecutorMs = 0, ValidatorMs = 0,
+        LintBlockingErrors = 0, LintWarningErrors = 0,
+        ErrorSummary = ok ? "" : "case_incremental 故意失败", StartedAt = e2eNow, FinishedAt = e2eNow
+    };
+    e2eMetrics.RecordAsync(MkE2E("e2e_ok", true), ctNone3).Wait();
+    e2eMetrics.RecordAsync(MkE2E("e2e_fail", false), ctNone3).Wait();
+    e2eMetrics.RecordAsync(new Agent.Core.Models.TaskMetric
+    {
+        TaskId = "real_1", SessionId = "s1", UserInput = "真实任务", Mode = "agent",
+        RoutingTier = "Rule", ServiceId = "small", RoutingReason = "test",
+        Success = true, IsSuspicious = false, IsE2E = false, RetryCount = 0,
+        TotalMs = 20, PlannerMs = 0, ExecutorMs = 0, ValidatorMs = 0,
+        LintBlockingErrors = 0, LintWarningErrors = 0,
+        ErrorSummary = "", StartedAt = e2eNow, FinishedAt = e2eNow
+    }, ctNone3).Wait();
+    var e2eSummary = e2eMetrics.GetSummaryAsync(null, ctNone3).Result;
+    Check("E2E 治理：真实统计剔除 E2E（1 真实成功 / 0 失败）",
+        e2eSummary.TotalCount == 1 && e2eSummary.SuccessCount == 1 && e2eSummary.FailureCount == 0);
+    Check("E2E 治理：E2E 计数单列 = 2", e2eMetrics.GetE2ECountAsync(ctNone3).Result == 2);
+    var e2eRecent = e2eMetrics.GetRecentAsync(10, ctNone3).Result;
+    Check("E2E 治理：GetRecentAsync 过滤 E2E（仅真实任务）",
+        e2eRecent.Count == 1 && e2eRecent[0].TaskId == "real_1");
+    var e2eFail = e2eMetrics.GetRecentFailuresAsync(10, ctNone3).Result;
+    Check("E2E 治理：GetRecentFailuresAsync 过滤 E2E（E2E 故意失败不计入）", e2eFail.Count == 0);
+
     // 批次3·C 父失败回填：顶层失败 → Executor 子记录成功回填为失败
     var bfMetrics = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(
         Path.Combine(fcDir, "backfill.db"));

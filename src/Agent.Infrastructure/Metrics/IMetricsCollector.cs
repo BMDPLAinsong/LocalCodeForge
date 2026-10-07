@@ -47,6 +47,9 @@ public interface IMetricsCollector
     /// <summary>【失败类别】失败任务按 failure_category 分布（供 stats 面板 / 3B 按类别调权）。</summary>
     Task<IReadOnlyList<(string Category, int Count)>> GetFailureBreakdownAsync(CancellationToken ct);
 
+    /// <summary>【10-08 metrics 数据治理】E2E 用例计数（stats 单列展示，不污染真实统计）。</summary>
+    Task<int> GetE2ECountAsync(CancellationToken ct);
+
     /// <summary>
     /// 【批次3·C 父失败回填】顶层 orchestrator 失败时，把本任务窗口内（FinishedAt ≥ since 且
     /// UserInput 匹配）的 Executor 子记录成功回填为失败，附父失败说明——让子指标反映真实达成。
