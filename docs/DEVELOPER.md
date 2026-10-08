@@ -316,6 +316,27 @@ SQLite 数据层（sessions/metrics/project_context/agent_memory/symbol_index，
 
 **生命周期**：runs 保留最近 10（启动 CleanOldRuns）；test-tmp >7 天清理；备份 keepLastN=8；记忆 prune（默认 90 天 / 2 命中）。
 
+### 7.1 数据治理三层原则（新表/新查询上线前必读）
+
+**一句话铁律：新表/新查询上线前先问"测试/E2E 数据会不会进来、口径在哪一层定死"——能源头隔离就源头隔离，能下沉视图就下沉视图，绝不把"每个查询自己记得过滤"当约定。**
+
+三层手段按优先级（后一层是前一层做不到时的兜底）：
+
+| 层 | 手段 | 做法 | 已落地实例 |
+| --- | --- | --- | --- |
+| ① 源头隔离（最强） | 污染数据在产生处就不存在 | 落库入口加守卫：E2E 物理上不写；或写入时带标记列 | `ModelRouter.RecordDecisionAsync` E2E 直接 return；`is_e2e` 列在 RecordMetric 层标记 |
+| ② 视图下沉（次强） | 口径定义进 SQL 视图 | 查询一律 FROM 视图，不重复写 WHERE | `task_metrics_real`（`WHERE is_e2e=0`，必须在 is_e2e 列 ALTER 之后建，见 SqliteMetricsCollector.Initialize 注释） |
+| ③ 单点过滤（兜底） | 只能代码过滤时收拢到唯一入口 | 过滤逻辑只出现一处，不散落各查询 | Backfill UPDATE 加 `AND is_e2e=0`（视图不支持 UPDATE，唯一手动点） |
+
+**新表 3 问（检查清单）**：
+1. 有没有 `is_e2e` 或等价标记列？——没有 → 源头数据不可区分，E2E 一跑就污染，先加列。
+2. 落库入口是无条件写入吗？——是 → 加守卫：E2E 物理上不写（比"读时过滤"强一个量级）。
+3. 未来查询会重复写同一过滤条件吗？——会 → 建视图，口径单点定义。
+
+**踩过的坑（别重蹈）**：
+- `routing_decisions` 曾无 is_e2e 列 + 无条件落库，靠结构性安全（orchestrator 任务不经 ModelRouter）才只污染 2/96；一旦新增 agent 模式 E2E 用例即不可区分灌入——已用源头守卫封死。
+- `task_metrics` 曾 3 处查询漏 `is_e2e`（数据闭环调权 / 时代隔离面板 / 父失败回填 UPDATE 会把 E2E 子记录改写），已用视图 + UPDATE 过滤封死。
+
 
 
 ***
