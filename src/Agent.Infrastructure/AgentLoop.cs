@@ -1119,9 +1119,11 @@ public sealed class AgentLoop : IAgentLoop
                     }
                     if (hadEvidence)
                     {
-                        _logger.LogWarning(
-                            "输出含失败信号但存在成功证据（边缘成功，不判失败）：{Reason}",
-                            genericFailureReason);
+                        // 【B 阶段】边缘成功：命中软信号但存在成功证据——按成功处理，
+                        // 但注入 [边缘成功] 标记（与 [检测] 同构），metrics 装饰器据此标 is_suspicious=1
+                        // （数据回流：可疑成功从日志升级为可统计、可审计的数据）。
+                        return (output + "\n[边缘成功] 输出含失败信号（" + genericFailureReason +
+                                "）但存在成功证据（演示分支/成功报告），按成功处理。", true);
                     }
                 }
             }

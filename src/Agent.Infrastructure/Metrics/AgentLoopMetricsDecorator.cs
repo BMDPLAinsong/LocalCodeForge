@@ -72,9 +72,10 @@ public sealed class AgentLoopMetricsDecorator : IAgentLoop
                     break;
 
                 case AgentEvent.ToolResultEvent tr:
-                    // 检测可疑信号：ToolResultEvent 里的 Output 含 [检测] 标记
+                    // 检测可疑信号：ToolResultEvent 里的 Output 含 [检测] / 边缘成功 标记
                     if (!string.IsNullOrEmpty(tr.Output) &&
                         (tr.Output.Contains("[检测]") ||
+                         tr.Output.Contains("边缘成功") ||
                          tr.Output.Contains("疑似模板") ||
                          tr.Output.Contains("未真正实现")))
                     {

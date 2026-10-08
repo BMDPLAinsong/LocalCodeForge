@@ -183,10 +183,10 @@ public static class OutputVerifier
     /// 调用方语义：返回 true → 失败；返回 false 且 hadEvidence → 标记可疑（数据回流，防容错误放被静默吞掉）。</summary>
     public static bool HasGenericFailure(string stdout, string? expectedOutput, out string reason, out bool hadEvidence)
     {
+        reason = ""; // 兜底：干净输出/边缘成功默认（各路径按需覆盖，保证编译流分析）
         hadEvidence = false;
         if (string.IsNullOrWhiteSpace(stdout))
         {
-            reason = "";
             return false;
         }
 
@@ -211,6 +211,7 @@ public static class OutputVerifier
                 return true;
             }
             hadEvidence = true;
+            reason = lookupHit; // 边缘成功保留信号描述（供调用方标记/落库）
             // 查找豁免成立，继续检查通用词路径（保守：不因查找豁免吞掉其他失败词）
         }
 
@@ -230,9 +231,11 @@ public static class OutputVerifier
                 return true;
             }
             hadEvidence = true;
+            reason = "失败/failed/error"; // 边缘成功保留信号描述（供调用方标记/落库）
         }
 
-        reason = "";
+        // 无软信号或无证据 → 干净输出；reason 已在开头兜底为 ""
+        // （hadEvidence=true 时 reason 已在各路径覆盖为信号描述，不得再清空）。
         return false;
     }
 

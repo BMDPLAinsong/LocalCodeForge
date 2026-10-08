@@ -63,6 +63,7 @@ public sealed class OrchestratorMetricsDecorator : IOrchestrator
                     // 检测可疑信号
                     if (!string.IsNullOrEmpty(tr.Output) &&
                         (tr.Output.Contains("[检测]") ||
+                         tr.Output.Contains("边缘成功") ||
                          tr.Output.Contains("疑似模板") ||
                          tr.Output.Contains("未真正实现")))
                     {

@@ -804,9 +804,9 @@ public sealed class Orchestrator : IOrchestrator
             }
             if (hadEvidence)
             {
-                _logger.LogWarning(
-                    "输出含失败信号但存在成功证据（边缘成功，不判失败）：{Reason}",
-                    genericFailureReason);
+                // 【B 阶段】边缘成功：命中软信号但存在成功证据——按成功处理，
+                // 注入 [边缘成功] 标记，metrics 装饰器据此标 is_suspicious=1（数据回流）。
+                return (true, result + $"\n[边缘成功] 输出含失败信号「{genericFailureReason}」但存在成功证据（演示分支/成功报告），按成功处理。");
             }
 
             // （检查 3.5b 已并入检查 3.5：JSON 错误字段由 OutputVerifier.HasGenericFailure 统一判定）

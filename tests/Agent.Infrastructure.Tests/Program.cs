@@ -2106,11 +2106,23 @@ Console.WriteLine("== 10-08 A 证据链先行（HasSuccessEvidence + 4 参重载
         hadEvidence = (bool)args[3]!;
         return r;
     }
+    string? G4Reason(string stdout, string? expected, out bool hadEvidence)
+    {
+        var args = new object?[] { stdout, expected, null, null };
+        _ = (bool)G4.Invoke(null, args)!;
+        hadEvidence = (bool)args[3]!;
+        return (string?)args[2];
+    }
 
     Check("4参：真失败（软信号无证据）→ true + 无证据",
         G4Call("错误: 无法连接服务器\n重试中", null, out var he1) && !he1);
     Check("4参：边缘成功（软信号+证据）→ false + 有证据",
         !G4Call("10 + 5 = 15\n错误: 除数不能为零", null, out var he2) && he2);
+    Check("4参：边缘成功时 reason 保留信号描述（供标记/落库）",
+        !G4Call("10 + 5 = 15\n错误: 除数不能为零", null, out _) &&
+        !string.IsNullOrWhiteSpace(G4Reason("10 + 5 = 15\n错误: 除数不能为零", null, out _)));
+    Check("4参：查找类边缘成功 reason 保留信号描述",
+        !string.IsNullOrWhiteSpace(G4Reason("未找到该图书\nID: 1, 标题: 数据结构与算法", null, out _)));
     Check("4参：干净输出 → false + 无证据",
         !G4Call("IP: 8.8.8.8 / Temperature: 21°C / Humidity: 65%", null, out var he3) && !he3);
     Check("4参：查找豁免 + 通用失败词独立判定（保守，不被吞）→ true",
