@@ -414,10 +414,16 @@ internal class Program
         }
 
         int currentSeq = 0;   // 当前命令的提交序号（web 归属标记：任务执行期间 /api/current-task 可见）
+        string? pendingTask = null;   // 【10-08 C】use <path> <任务> 一步到位：use 后的后续任务自动执行
         while (true)
         {
             string? input;
-            if (Console.IsInputRedirected || Console.IsOutputRedirected)
+            if (pendingTask is not null)
+            {
+                input = pendingTask;
+                pendingTask = null;
+            }
+            else if (Console.IsInputRedirected || Console.IsOutputRedirected)
             {
                 // 无头路径：原同步读-执行（管道输出逐字节兼容）
                 renderer.Prompt();
@@ -667,7 +673,17 @@ internal class Program
             if (Agent.Infrastructure.Project.UseCommandParser.TryParse(
                     trimmedInput, out var usePath, out var useWriteFlag))
             {
-                ApplyUse(provider, options, usePath, useWriteFlag, autoSource: null);
+                // 【10-08 C】use <path> <任务> 一步到位：路径 = Directory.Exists 校验的最长前缀
+                // （路径可含空格不误切，如 "X:\.NET AI\PDFTest 分析一下这个项目"→ 路径 + "分析一下这个项目"）；
+                // 剩余任务自动执行（主循环顶部 pendingTask 消费）。
+                Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask(
+                    usePath, out var realUsePath, out var followupTask);
+                ApplyUse(provider, options, realUsePath, useWriteFlag, autoSource: null);
+                if (!string.IsNullOrWhiteSpace(followupTask))
+                {
+                    renderer.System($"[续] 工程已切换，自动执行后续任务：{followupTask}");
+                    pendingTask = followupTask;
+                }
                 continue;
             }
             // 裸 use / use --write：命令层拦截打印用法，不进任务流（10-08 实证裸 use 漏进任务流跑 8 步）

@@ -1,0 +1,12 @@
+use 一步到位：路径+任务拆分（C）
+
+报错实证：use --write X:\.NET AI\PDFTest 分析一下这个项目 → 目录不存在（整串被当路径）
+
+UseCommandParser.TrySplitPathTask
+- 路径 = Directory.Exists 校验的最长前缀（含空格路径不误切）
+- 空格边界不存在跳过（路径内空格如 ".NET AI"），真实 \ 边界不存在才断链
+- 剩余段自动执行（pendingTask 主循环顶部消费，[续] 提示）
+
+边界注明：路径打错回退最近存在祖先（如盘根 X:），剩余全当任务，输出可见可纠正
+
+验证：构建 0 错误 + tests 643/643 + E2E（PDFTest 真实存在 → [工程] + [续] stats 自动执行）

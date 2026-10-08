@@ -3084,6 +3084,13 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             Agent.Infrastructure.Tools.RunCommandTool.ResolveTimeoutSeconds(null, "dotnet run") == 90
             && Agent.Infrastructure.Tools.RunCommandTool.ResolveTimeoutSeconds(null, "python main.py") == 30
             && Agent.Infrastructure.Tools.RunCommandTool.ResolveTimeoutSeconds("X:\\proj", "python main.py") == 90);
+        Check("use 一步到位（10-08 C）：路径+任务拆分——最长存在前缀为路径，剩余为任务（含空格路径不误切）",
+            Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask("X:\\.NET AI\\LocalAiWorkbench 分析一下这个项目", out var useSplit1, out var useTask1)
+            && useSplit1 == "X:\\.NET AI\\LocalAiWorkbench" && useTask1 == "分析一下这个项目");
+        Check("use 一步到位（10-08 C）：纯路径无任务 → false；路径打错回退最长存在祖先（盘根），剩余全当任务（边界文档注明）",
+            !Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask("X:\\.NET AI\\LocalAiWorkbench", out _, out _)
+            && Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask("X:\\NoSuchDirZZZ 任务", out var useSplit2, out var useTask2)
+            && useSplit2 == "X:" && useTask2 == "NoSuchDirZZZ 任务");
     }
 
     // ── 3. DashboardHost 冒烟：真起 Kestrel → HttpClient 验证 API ──
