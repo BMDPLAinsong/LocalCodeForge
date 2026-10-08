@@ -1109,11 +1109,19 @@ public sealed class AgentLoop : IAgentLoop
                     }
 
                     // ─────────── 检查 3.5：stdout 通用失败判定 ───────────
-                    // 通用失败词（失败/failed/error/JSON 字段）+ 成功信号容错；
+                    // 通用失败词（失败/failed/error/JSON 字段）+ 成功证据判定；
                     // 公共判定由 OutputVerifier.HasGenericFailure 提供（双路径统一，单一来源）。
-                    if (OutputVerifier.HasGenericFailure(stdout, null, out var genericFailureReason))
+                    // 【10-08 A 证据链先行】4 参版本：hasEvidence=true 表示"命中软信号但存在
+                    // 成功证据"（边缘成功）——不判失败，打 warning 可观测（任务级可疑落库在 B 阶段）。
+                    if (OutputVerifier.HasGenericFailure(stdout, null, out var genericFailureReason, out var hadEvidence))
                     {
                         return (output + "\n[检测] 程序输出了失败结果（" + genericFailureReason + "），但没有成功输出。请检查逻辑并修复。", false);
+                    }
+                    if (hadEvidence)
+                    {
+                        _logger.LogWarning(
+                            "输出含失败信号但存在成功证据（边缘成功，不判失败）：{Reason}",
+                            genericFailureReason);
                     }
                 }
             }

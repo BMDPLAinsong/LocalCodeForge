@@ -129,12 +129,15 @@ public static class OutputVerifier
     }
 
     // ──────────────────────────────────────────────────────────
-    // 检查 3.5：通用失败词 + JSON 错误字段 + 双容错
-    // 收敛 AgentLoop 检查 3.5（通用词 + JSON + success 容错，无 expected）
-    // 与 Orchestrator 检查 3.5 / 3.5b（查找类 + expected/success 双容错）。
-    // expectedOutput 传 null 表示无预期文本（agent 路径）。
-    // 查找类信号（未找到/not found/not exist）命中即失败，
-    // 除非预期文本同样包含（演示查找失败场景）。
+    // 检查 3.5：通用失败词 + JSON 错误字段 + 成功证据判定
+    // 【10-08 证据链先行（A 方案）】结构收敛：原 4 层容错（expected 含失败词 /
+    // 成功信号 / 演示计算行 / 演示查找行）合并为统一的"成功证据"检测器
+    // HasSuccessEvidence——语义从"豁免魔法"变为"证据存在性"：
+    //   命中软失败信号（失败词/查找信号/JSON 字段）时，
+    //   有成功证据 → 边缘成功（不判失败，调用方可标记可疑）；
+    //   无成功证据 → 判失败。
+    // 行为与历史容错完全等价（tests A/L 区块 20 断言逐条核对），
+    // 规则堆从"4 个并列容错分支"收敛为"1 个证据函数 + 4 个证据形态"。
     // ──────────────────────────────────────────────────────────
     private static readonly string[] LookupFailSignals =
     {
@@ -156,77 +159,99 @@ public static class OutputVerifier
         "\"error\"", "\"error_"
     };
 
+    /// <summary>文本是否含软失败信号（查找类 / 通用失败词 / JSON 错误字段）。expected 例外由调用方处理。</summary>
+    private static bool ContainsSoftSignal(string text)
+    {
+        if (LookupFailSignals.Any(s => text.Contains(s, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (GenericFailHits.Any(s => text.Contains(s, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (GenericFailRegexes.Any(p => Regex.IsMatch(text, p, RegexOptions.IgnoreCase)))
+            return true;
+        if (JsonErrorFields.Any(f => text.Contains(f, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        return false;
+    }
+
+    /// <summary>3 参版本（保留签名，tests 反射兼容）：命中软信号且无成功证据 → true（判失败）。</summary>
     public static bool HasGenericFailure(string stdout, string? expectedOutput, out string reason)
     {
-        // 查找类：命中即失败（除非预期同样含该信号，或演示程序形态豁免）。
-        // 容错 3b（10-08）：教学演示程序（图书系统/产品查询）常演示"查找不存在的 ID"分支，
-        // 如"查找 ID 为 99 的图书：未找到该图书"——这是业务演示不是真实失败。
-        // 实证样本：10-03 图书管理系统（完整演示 + 未找到该图书被判 not_found 白跑修复循环）、
-        // 09-22 产品查询（任务本身要求打印"未找到该产品"被误杀）。
-        // 豁免条件：stdout 含正向输出形态（找到/列表条目/成功操作词）——说明"未找到"行
-        // 是演示流程的一部分（有正常流程数据并存），非孤立失败。
-        // 结构性错误层（error CS / Traceback / 找不到文件）由前置检查硬拦，不受本容错影响。
-        foreach (var s in LookupFailSignals)
+        return HasGenericFailure(stdout, expectedOutput, out reason, out _);
+    }
+
+    /// <summary>4 参版本（调用方推荐）：多输出 hadEvidence——命中软信号但存在成功证据（边缘成功，不判失败）。
+    /// 调用方语义：返回 true → 失败；返回 false 且 hadEvidence → 标记可疑（数据回流，防容错误放被静默吞掉）。</summary>
+    public static bool HasGenericFailure(string stdout, string? expectedOutput, out string reason, out bool hadEvidence)
+    {
+        hadEvidence = false;
+        if (string.IsNullOrWhiteSpace(stdout))
         {
-            if (stdout.Contains(s, StringComparison.OrdinalIgnoreCase) &&
-                !(expectedOutput != null &&
-                  expectedOutput.Contains(s, StringComparison.OrdinalIgnoreCase)))
+            reason = "";
+            return false;
+        }
+
+        // 双路径独立判定（保持历史保守语义）：
+        // 路径 1 查找类信号——命中且预期未含该信号时，查"演示查找"证据（证据 1/4）判定；
+        // 路径 2 通用失败词/JSON 字段——命中时查"演示计算/成功报告/预期含失败词"证据（证据 1/2/3）判定。
+        // 两条路径各自独立：查找豁免只豁免查找信号本身，通用失败词仍独立判定（防叠加信号被吞）。
+
+        // 路径 1：查找类
+        var lookupHit = LookupFailSignals.FirstOrDefault(s =>
+            stdout.Contains(s, StringComparison.OrdinalIgnoreCase) &&
+            !(expectedOutput != null &&
+              expectedOutput.Contains(s, StringComparison.OrdinalIgnoreCase)));
+        if (lookupHit is not null)
+        {
+            // 证据：预期含失败信号（演示查找失败场景）或 正向条目形态（演示查找流程）
+            var evidence = (expectedOutput != null && ContainsSoftSignal(expectedOutput)) ||
+                HasDemoLookupSuccess(stdout);
+            if (!evidence)
             {
-                if (HasDemoLookupSuccess(stdout))
-                    continue; // 演示分支豁免，继续检查其余信号
-                reason = s;
+                reason = lookupHit;
                 return true;
             }
+            hadEvidence = true;
+            // 查找豁免成立，继续检查通用词路径（保守：不因查找豁免吞掉其他失败词）
         }
 
-        // 通用失败词 + JSON 错误字段
-        var hasFail =
-            GenericFailHits.Any(s => stdout.Contains(s, StringComparison.OrdinalIgnoreCase)) ||
+        // 路径 2：通用失败词 + JSON 错误字段
+        var genericHit = GenericFailHits.Any(s => stdout.Contains(s, StringComparison.OrdinalIgnoreCase)) ||
             GenericFailRegexes.Any(p => Regex.IsMatch(stdout, p, RegexOptions.IgnoreCase)) ||
             JsonErrorFields.Any(f => stdout.Contains(f, StringComparison.OrdinalIgnoreCase));
-
-        if (!hasFail)
+        if (genericHit)
         {
-            reason = "";
-            return false;
+            // 证据：预期含失败信号 / 成功计数报告 / 演示计算程序
+            var evidence = (expectedOutput != null && ContainsSoftSignal(expectedOutput)) ||
+                Regex.IsMatch(stdout, @"成功\s*\d", RegexOptions.IgnoreCase) ||
+                (HasDemoCalcLine(stdout) && HasDemoFailMessage(stdout));
+            if (!evidence)
+            {
+                reason = "失败/failed/error";
+                return true;
+            }
+            hadEvidence = true;
         }
 
-        // 容错 1：预期文本含失败词（演示失败场景，如"取款失败"样例）
-        var expectedHasFail = expectedOutput != null &&
-            (GenericFailHits.Any(s => expectedOutput.Contains(s, StringComparison.OrdinalIgnoreCase)) ||
-             GenericFailRegexes.Any(p => Regex.IsMatch(expectedOutput, p, RegexOptions.IgnoreCase)) ||
-             JsonErrorFields.Any(f => expectedOutput.Contains(f, StringComparison.OrdinalIgnoreCase)));
+        reason = "";
+        return false;
+    }
 
-        // 容错 2：stdout 含成功信号（正常报告，如"失败 0 条，成功 5 条"）
-        var hasSuccess = stdout.Contains("成功", StringComparison.OrdinalIgnoreCase) ||
-            Regex.IsMatch(stdout, @"\b(success|completed)\b", RegexOptions.IgnoreCase);
-
-        if (expectedHasFail || hasSuccess)
-        {
-            reason = "";
-            return false;
-        }
-
-        // 容错 3：演示程序容错（10-08 真实样本：Python 计算器教学演示）
-        // 程序输出同时含「成功计算行」与「异常分支演示行」——如
-        //   10 + 5 = 15
-        //   错误: 除数不能为零          ← 真实模型形态：错误行为独立业务消息行（无算式前缀）
-        //   10 / 0 -> 错误: 除数不能为零 ← 早期样本形态：错误行带算式前缀
-        // 失败词命中的是业务演示行（捕获异常后打印的错误消息），非真实失败。
-        // 双条件都满足才放行：① 至少一行 数字 op 数字 = 数字 成功计算形态；
-        // ② 至少一行业务错误消息（错误/失败/error/fail + 冒号 + 具体内容，
-        //    排除「错误: 0」等否定/计数形态）。不再要求算式前缀——真实模型
-        //    演示程序常把错误行打印为独立消息（A' 10-08 复测实证：tests 原
-        //    形态假设过窄，真实输出 `错误: 除数不能为零` 无算式前缀被误杀）。
-        // 结构性错误层（Traceback / error CS / 未捕获异常）由前置检查硬拦，不受本容错影响。
+    /// <summary>
+    /// 成功证据检测（【10-08 A 方案】统一证据层）：
+    /// 判断 stdout 是否呈现"程序正常运行 + 业务分支"的证据形态（边缘成功）。
+    /// 供调用方在 hasEvidence=true 时标记可疑；证据形态与历史容错逐条等价。
+    /// </summary>
+    public static bool HasSuccessEvidence(string stdout, string? expectedOutput)
+    {
+        if (expectedOutput != null && ContainsSoftSignal(expectedOutput))
+            return true;
+        if (Regex.IsMatch(stdout, @"成功\s*\d", RegexOptions.IgnoreCase))
+            return true;
         if (HasDemoCalcLine(stdout) && HasDemoFailMessage(stdout))
-        {
-            reason = "";
-            return false;
-        }
-
-        reason = "失败/failed/error";
-        return true;
+            return true;
+        if (HasDemoLookupSuccess(stdout))
+            return true;
+        return false;
     }
 
     /// <summary>演示程序的成功计算行：`数字 op 数字 = 数字`（如 `10 + 5 = 15` / `15 / 3 = 5.0`）。</summary>

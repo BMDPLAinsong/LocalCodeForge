@@ -784,10 +784,13 @@ public sealed class Orchestrator : IOrchestrator
             // ─────────── 检查 3.5：输出语义有效性（防"假阳性成功"） ───────────
             // 退出码 0 不代表逻辑正确：程序可能走了"失败路径"（查询未找到、操作失败）却正常退出。
             // 若 stdout 出现强失败信号（通用失败词 / JSON 错误字段），而 expected_output 并未预期该信号
-            // → 判失败，触发修复。双容错：预期含失败词（演示）或 stdout 含成功信号（正常报告）→ 放行。
+            // → 判失败，触发修复。成功证据判定（【10-08 A 证据链先行】）：
+            // 命中软信号但存在成功证据（演示分支/成功报告）→ 不判失败，打 warning 可观测。
             // 公共判定由 OutputVerifier.HasGenericFailure 提供（双路径统一，单一来源，含查找类信号）。
+            string genericFailureReason = "";
+            bool hadEvidence = false;
             if (!string.IsNullOrWhiteSpace(stdout) &&
-                OutputVerifier.HasGenericFailure(stdout, expectedOutput, out var genericFailureReason))
+                OutputVerifier.HasGenericFailure(stdout, expectedOutput, out genericFailureReason, out hadEvidence))
             {
                 _logger.LogWarning(
                     "输出含失败信号「{Reason}」且预期未包含，判为逻辑失败（假阳性防护）。",
@@ -798,6 +801,12 @@ public sealed class Orchestrator : IOrchestrator
                     : $"\n请修改程序，使实际输出与计划预期一致。\n计划预期输出：\n{expectedOutput}";
 
                 return (false, result + $"\n[检测] 输出含失败信号「{genericFailureReason}」，与预期不符（防假阳性）。{expectedBlock}");
+            }
+            if (hadEvidence)
+            {
+                _logger.LogWarning(
+                    "输出含失败信号但存在成功证据（边缘成功，不判失败）：{Reason}",
+                    genericFailureReason);
             }
 
             // （检查 3.5b 已并入检查 3.5：JSON 错误字段由 OutputVerifier.HasGenericFailure 统一判定）

@@ -2073,6 +2073,50 @@ Console.WriteLine("== 10-08 Lookup 演示容错（OutputVerifier.HasGenericFailu
     Check("L8 否定前缀陷阱：未找到 不被当作 正向找到 → 仍判失败", Generic("未找到该图书", null));
 }
 
+Console.WriteLine("== 10-08 A 证据链先行（HasSuccessEvidence + 4 参重载） ==");
+{
+    // 证据检测器（public HasSuccessEvidence）各形态
+    var V = typeof(Agent.Infrastructure.Quality.OutputVerifier);
+    var E = V.GetMethod("HasSuccessEvidence")!;
+    bool Ev(string stdout, string? expected) => (bool)E.Invoke(null, new object?[] { stdout, expected })!;
+
+    Check("证据1：expected 含失败词 → 有证据（任务要求演示失败）",
+        Ev("取款失败：余额不足", "取款失败：余额不足"));
+    Check("证据2：成功计数报告（成功+数字）→ 有证据",
+        Ev("处理 6 条：成功 5 条，失败 1 条", null));
+    Check("证据4：操作成功词（查找/流程语境）→ 有证据",
+        Ev("操作成功", null));
+    Check("证据3：计算行 + 业务错误消息 → 有证据",
+        Ev("10 + 5 = 15\n错误: 除数不能为零", null));
+    Check("证据3 否定形态：错误: 0 计数 → 无证据",
+        !Ev("10 + 5 = 15\n错误: 0", null));
+    Check("证据4：查找正向形态（ID 列表）→ 有证据",
+        Ev("未找到该图书\nID: 1, 标题: 数据结构与算法", null));
+    Check("证据4 否定前缀：孤立未找到 → 无证据",
+        !Ev("未找到该图书", null));
+    Check("无任何成功形态 + 失败词 → 无证据",
+        !Ev("失败: 连接超时\n重试中", null));
+
+    // 4 参重载语义
+    var G4 = V.GetMethod("HasGenericFailure", new[] { typeof(string), typeof(string), typeof(string).MakeByRefType(), typeof(bool).MakeByRefType() })!;
+    bool G4Call(string stdout, string? expected, out bool hadEvidence)
+    {
+        var args = new object?[] { stdout, expected, null, null };
+        var r = (bool)G4.Invoke(null, args)!;
+        hadEvidence = (bool)args[3]!;
+        return r;
+    }
+
+    Check("4参：真失败（软信号无证据）→ true + 无证据",
+        G4Call("错误: 无法连接服务器\n重试中", null, out var he1) && !he1);
+    Check("4参：边缘成功（软信号+证据）→ false + 有证据",
+        !G4Call("10 + 5 = 15\n错误: 除数不能为零", null, out var he2) && he2);
+    Check("4参：干净输出 → false + 无证据",
+        !G4Call("IP: 8.8.8.8 / Temperature: 21°C / Humidity: 65%", null, out var he3) && !he3);
+    Check("4参：查找豁免 + 通用失败词独立判定（保守，不被吞）→ true",
+        G4Call("未找到该图书\nID: 1, 标题: 数据结构与算法\n处理失败: 数据库连接错误", null, out var he4));
+}
+
 Console.WriteLine("== 10-08 B 同文件内自重复类型定义检测（P-D 扩展） ==");
 {
     // 真实样本：LetterCaseChecker.cs 900 字符内 2×class LetterCaseChecker → CS0101。
