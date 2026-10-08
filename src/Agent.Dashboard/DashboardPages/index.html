@@ -51,6 +51,9 @@
   #detail { max-height:240px; overflow-y:auto; font-size:12px; }
   .ev.error.bad { outline:1px solid var(--red); outline-offset:-1px; }
   #backups { max-height:220px; overflow-y:auto; }
+  .bk-roll { margin-left:8px; padding:1px 10px; font-size:12px; cursor:pointer;
+             border:1px solid #888; border-radius:4px; background:#333; color:#eee; }
+  .bk-roll:hover { background:#c0392b; border-color:#c0392b; }
   .bk-task { cursor:pointer; padding:3px 6px; border-radius:3px; }
   .bk-task:hover { background:#21262d; }
   .bk-task.open { background:#1f3a2a; }
@@ -451,13 +454,52 @@ async function fetchBackups() {
   for (const b of backups) (byTask[b.taskId] = byTask[b.taskId] || []).push(b);
   let html = "";
   for (const [taskId, files] of Object.entries(byTask)) {
-    html += `<div class="bk-task" onclick="toggleTask('${taskId}', this)">▸ ${taskId} <span class="bk-meta">${files.length} 个文件</span></div>`;
+    html += `<div class="bk-task" onclick="toggleTask('${taskId}', this)">▸ ${taskId} <span class="bk-meta">${files.length} 个文件</span>`;
+    html += ` <button class="bk-roll" onclick="event.stopPropagation();rollbackPreview('${taskId}')">回滚</button></div>`;
     html += `<div class="bk-files" data-task="${taskId}" style="display:none">`;
     for (const f of files)
       html += `<div class="bk-file" onclick="showDiff('${taskId}', '${esc(f.rel).replace(/'/g, "\\'")}')">${esc(f.rel)} <span class="bk-meta">@{stamp}</span></div>`.replace("{stamp}", f.stamp);
     html += `</div>`;
   }
   $("backups").innerHTML = html;
+}
+// ── Web 端回滚（10-10）：两步确认——dry-run 预览（不执行）→ 确认执行（有风险操作）──
+async function rollbackPreview(taskId) {
+  $("diff").innerHTML = `<div class="empty">加载回滚预览…</div>`;
+  const r = await fetch("/api/rollback/dry-run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ taskId })
+  });
+  if (!r.ok) { $("diff").innerHTML = `<div class="empty">回滚预览不可用（${r.status}）</div>`; return; }
+  const d = await r.json();
+  if (!d.restoreTargets.length && !d.removeTargets.length) {
+    $("diff").innerHTML = `<div class="empty">该任务无可用备份（${esc(taskId)}）</div>`; return;
+  }
+  let html = `<div class="d-hunk">回滚预览 · 任务 ${esc(taskId)}（最早备份 = 任务前状态，未执行任何改动）</div>`;
+  if (d.restoreTargets.length) {
+    html += `<div class="bk-meta">将恢复 ${d.restoreTargets.length} 个文件：</div>`;
+    for (const f of d.restoreTargets) html += `<div class="d-del">恢复 ${esc(f)}</div>`;
+  }
+  if (d.removeTargets.length) {
+    html += `<div class="bk-meta">将删除 ${d.removeTargets.length} 个新建文件：</div>`;
+    for (const f of d.removeTargets) html += `<div class="d-del">删除 ${esc(f)}</div>`;
+  }
+  html += `<div style="margin-top:10px"><button class="bk-roll" onclick="rollbackExec('${taskId}')">确认回滚（恢复任务前状态）</button>`;
+  html += ` <button onclick="$('diff').innerHTML='<div class=\\"empty\\">已取消，未执行改动</div>'">取消</button></div>`;
+  $("diff").innerHTML = html;
+}
+async function rollbackExec(taskId) {
+  $("diff").innerHTML = `<div class="empty">执行回滚…</div>`;
+  const r = await fetch("/api/rollback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ taskId })
+  });
+  if (!r.ok) { $("diff").innerHTML = `<div class="empty">回滚失败（${r.status}）</div>`; return; }
+  const d = await r.json();
+  $("diff").innerHTML = `<div class="d-hunk">回滚完成：恢复 ${d.restored} 个文件，删除 ${d.removedNew} 个新建文件。</div>`;
+  fetchBackups();
 }
 function toggleTask(taskId, el) {
   const files = document.querySelector(`.bk-files[data-task="${taskId}"]`);

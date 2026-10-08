@@ -3111,6 +3111,20 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             oob.StatusCode == System.Net.HttpStatusCode.BadRequest);
         var noDiff = await http.GetAsync("api/diff?taskId=x&rel=y");
         Check("无工程根 diff → 400 BadRequest", noDiff.StatusCode == System.Net.HttpStatusCode.BadRequest);
+
+        // 【10-10 Web 端回滚】端点注册 + 工程根守卫（有工程根的真实 dry-run/回滚行为由 BackupService 单元覆盖）
+        var rbDry = await http.PostAsync("api/rollback/dry-run",
+            new StringContent("{\"taskId\":\"x\"}", System.Text.Encoding.UTF8, "application/json"));
+        Check("POST /api/rollback/dry-run 无工程根 → 400（端点已注册）",
+            rbDry.StatusCode == System.Net.HttpStatusCode.BadRequest);
+        var rbEmpty = await http.PostAsync("api/rollback/dry-run",
+            new StringContent("{\"taskId\":\"\"}", System.Text.Encoding.UTF8, "application/json"));
+        Check("POST /api/rollback/dry-run 空 taskId → 400", rbEmpty.StatusCode == System.Net.HttpStatusCode.BadRequest);
+        var rbExec = await http.PostAsync("api/rollback",
+            new StringContent("{\"taskId\":\"x\"}", System.Text.Encoding.UTF8, "application/json"));
+        Check("POST /api/rollback 无工程根 → 400（端点已注册）",
+            rbExec.StatusCode == System.Net.HttpStatusCode.BadRequest);
+
         var evts = await http.GetStringAsync("api/tasks/hist1/events");
         Check("GET /api/tasks/{id}/events 200 + 事件数组（payload 为 JSON 字符串）",
             evts.StartsWith("[") && evts.Contains("\"type\":\"Thinking\"") && evts.Contains("boom"));
@@ -3216,6 +3230,62 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
     finally
     {
         try { Directory.Delete(ws, true); } catch { }
+    }
+}
+
+// ── 3b. Web 端回滚（10-10）：有工程根的真实闭环——dry-run 预览（不执行）→ rollback 执行 → 文件复原 ──
+Console.WriteLine("== 3b Web 端回滚（dry-run → rollback 闭环） ==");
+{
+    var rbWs = Path.Combine(Path.GetTempPath(), "dash_rb_" + Guid.NewGuid().ToString("N"));
+    var rbProj = Path.Combine(Path.GetTempPath(), "dash_rb_proj_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(rbWs);
+    Directory.CreateDirectory(rbProj);
+    try
+    {
+        var rbFile = Path.Combine(rbProj, "Order.cs");
+        File.WriteAllText(rbFile, "class Order { public int Id { get; set; } }");
+        var rbOld = File.ReadAllText(rbFile);
+        Agent.Infrastructure.Project.BackupService.Backup(rbWs, rbFile, rbProj, "rbT1");
+        File.WriteAllText(rbFile, "class Order { public int Id { get; set; } public double Amount { get; set; } }");
+        var rbNew = Path.Combine(rbProj, "TaxService.cs");
+        File.WriteAllText(rbNew, "class TaxService { }");
+        Agent.Infrastructure.Project.BackupService.MarkNewFile(rbWs, rbNew, rbProj, "rbT1");
+
+        var (rbUrl, rbStop) = await Agent.Dashboard.DashboardHost.StartAsync(
+            new Agent.Dashboard.DashboardOptions(rbWs, rbProj, Path.Combine(rbWs, "symbol_index.db"), null,
+                new Agent.Infrastructure.Metrics.SqliteMetricsCollector(Path.Combine(rbWs, "metrics.db")),
+                new Agent.Infrastructure.Events.TaskEventHub(),
+                new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(rbWs, "metrics.db")),
+                new Agent.Core.Models.AgentOptions(),
+                Path.Combine(rbWs, "agent_memory.db"),
+                new Agent.Core.CommandHub()),
+            CancellationToken.None);
+        using var rbHttp = new HttpClient { BaseAddress = new Uri(rbUrl + "/") };
+
+        var rbDry = await rbHttp.PostAsync("api/rollback/dry-run",
+            new StringContent("{\"taskId\":\"rbT1\"}", System.Text.Encoding.UTF8, "application/json"));
+        Check("3b dry-run 200 + 清单含恢复 Order.cs / 删除 TaxService.cs",
+            rbDry.StatusCode == System.Net.HttpStatusCode.OK
+            && rbDry.Content.ReadAsStringAsync().Result.Contains("Order.cs")
+            && rbDry.Content.ReadAsStringAsync().Result.Contains("TaxService.cs"));
+        Check("3b dry-run 未执行改动（文件仍为新内容）",
+            File.ReadAllText(rbFile).Contains("Amount"));
+
+        var rbExec = await rbHttp.PostAsync("api/rollback",
+            new StringContent("{\"taskId\":\"rbT1\"}", System.Text.Encoding.UTF8, "application/json"));
+        Check("3b rollback 200 + 恢复 1 / 删除 1",
+            rbExec.StatusCode == System.Net.HttpStatusCode.OK
+            && rbExec.Content.ReadAsStringAsync().Result.Contains("\"restored\":1")
+            && rbExec.Content.ReadAsStringAsync().Result.Contains("\"removedNew\":1"));
+        Check("3b 回滚生效：Order.cs 复原 + TaxService.cs 已删除",
+            File.ReadAllText(rbFile) == rbOld && !File.Exists(rbNew));
+
+        await rbStop();
+    }
+    finally
+    {
+        try { Directory.Delete(rbWs, true); } catch { }
+        try { Directory.Delete(rbProj, true); } catch { }
     }
 }
 

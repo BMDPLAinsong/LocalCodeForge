@@ -38,6 +38,9 @@ public sealed record DashboardOptions(
 /// <summary>POST /api/commands 请求体（最小输入 DTO，非业务模型）。</summary>
 public sealed record CommandRequest(string? Input);
 
+/// <summary>POST /api/rollback[/dry-run] 请求体（最小输入 DTO）。</summary>
+public sealed record RollbackRequest(string? TaskId);
+
 public static class DashboardHost
 {
     // 【10-07 UI 层 #1】序列化单一来源在 TaskEventStore.JsonOpts（存储/SSE/回放共用同一格式，
@@ -142,6 +145,33 @@ public static class DashboardHost
 
         // ── 备份列表（Diff 数据源定位）──
         app.MapGet("/api/backups", () => Results.Json(BackupService.ListBackups(o.WorkspaceRoot), JsonOpts));
+
+        // ── Web 端回滚（10-10 补齐"看-改-回"闭环）：dry-run 预览（不执行）+ 执行恢复 ──
+        // 复用 CLI rollback 同一套 BackupService（taskId 隔离 / 最早备份 / 删新建标记），无并行实现。
+        // 有风险操作：前端两步确认（预览 → 确认）；鉴权走全局 AuthToken 中间件。
+        app.MapPost("/api/rollback/dry-run", (RollbackRequest? req) =>
+        {
+            if (o.ProjectRoot is null)
+                return Results.BadRequest(new { error = "当前未设置工程根（CLI 执行 use <路径> 后才有回滚作用域）。" });
+            var taskId = req?.TaskId?.Trim();
+            if (string.IsNullOrWhiteSpace(taskId))
+                return Results.BadRequest(new { error = "taskId 为空。" });
+            var (restoreTargets, removeTargets) =
+                BackupService.DryRunRollbackTask(o.WorkspaceRoot, o.ProjectRoot, taskId);
+            return Results.Json(new { taskId, restoreTargets, removeTargets }, JsonOpts);
+        });
+
+        app.MapPost("/api/rollback", (RollbackRequest? req) =>
+        {
+            if (o.ProjectRoot is null)
+                return Results.BadRequest(new { error = "当前未设置工程根（CLI 执行 use <路径> 后才有回滚作用域）。" });
+            var taskId = req?.TaskId?.Trim();
+            if (string.IsNullOrWhiteSpace(taskId))
+                return Results.BadRequest(new { error = "taskId 为空。" });
+            var (restored, removedNew) =
+                BackupService.RollbackTaskFull(o.WorkspaceRoot, o.ProjectRoot, taskId);
+            return Results.Json(new { taskId, restored, removedNew }, JsonOpts);
+        });
 
         // ── 任务产物浏览（10-08 ①）：run 工作目录文件浏览 + 文本预览 + 下载 ──
         // 限定在 WorkspaceRoot 内（PathBoundary 逐段判定，杜绝 .. 跳脱/前缀误判）。
