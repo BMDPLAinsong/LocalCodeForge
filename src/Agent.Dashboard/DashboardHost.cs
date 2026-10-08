@@ -86,6 +86,14 @@ public static class DashboardHost
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
+        // 【10-10 P0 日志治理】内嵌服务显式声明日志级别，不吃脚手架默认：
+        // Kestrel/Hosting 是 CLI 进程内"关注点 B"，其默认 Information 启动日志
+        // （Microsoft.Hosting.Lifetime "Now listening" 等 4~5 行）会与 CLI 交互渲染
+        // 共用 stdout 造成错乱——显式 ClearProviders + 压到 Warning（正常静默，
+        // Warn/Error 仍可排障）。CLI 自身日志（关注点 A）不受影响（独立 LoggerFactory）。
+        builder.Logging.ClearProviders();
+        builder.Logging.AddConsole(o => o.FormatterName = "simple");
+        builder.Logging.SetMinimumLevel(LogLevel.Warning);
         var app = builder.Build();
         _running = app;
         MapEndpoints(app, options);

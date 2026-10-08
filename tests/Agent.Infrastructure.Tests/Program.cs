@@ -3079,6 +3079,28 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         store.RecordAsync("hist1", 1, new Agent.Core.Models.AgentEvent.Error("boom"));
         // 【10-08 ① 任务产物浏览】工作区预置产物文件——/api/files 断言数据源
         System.IO.File.WriteAllText(Path.Combine(ws, "sample.cs"), "public class Sample { }");
+        // 【10-10 日志治理】内嵌服务显式日志级别（Warning）→ 启动 stdout 无 Kestrel 污染。
+        // 捕获 Console.Out：StartAsync（Kestrel 启动日志发生窗口）→ 首个请求后恢复。
+        var logCapture = new System.IO.StringWriter();
+        var prevOut = System.Console.Out;
+        System.Console.SetOut(logCapture);
+        try
+        {
+            var (url2, stop2) = await Agent.Dashboard.DashboardHost.StartAsync(
+                new Agent.Dashboard.DashboardOptions(ws, null, Path.Combine(ws, "symbol_index.db"), null, metrics, dashHub, store,
+                    new Agent.Core.Models.AgentOptions(),
+                    Path.Combine(ws, "agent_memory.db"),
+                    new Agent.Core.CommandHub()), CancellationToken.None);
+            using var probe = new HttpClient { BaseAddress = new Uri(url2 + "/") };
+            _ = await probe.GetStringAsync("");   // 触发一次请求，覆盖请求期日志窗口
+            await stop2();
+        }
+        finally { System.Console.SetOut(prevOut); }
+        var captured = logCapture.ToString();
+        Check("Dashboard 启动 stdout 无 Kestrel/Hosting 日志（显式日志级别 Warning，10-10 日志治理）",
+            !captured.Contains("Now listening") && !captured.Contains("Microsoft.Hosting.Lifetime")
+            && !captured.Contains("Application started") && !captured.Contains("Hosting environment"));
+
         var (url, stop) = await Agent.Dashboard.DashboardHost.StartAsync(
             new Agent.Dashboard.DashboardOptions(ws, null, Path.Combine(ws, "symbol_index.db"), null, metrics, dashHub, store,
                 new Agent.Core.Models.AgentOptions(),
