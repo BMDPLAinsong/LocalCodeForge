@@ -23,3 +23,6 @@ tests_c.txt
 cli_review_in.txt
 cli_review_out.txt
 cli_review_utf8.txt
+build_diag.txt
+demo_diag.txt
+tests_diag.txt

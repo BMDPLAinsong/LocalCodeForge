@@ -201,12 +201,16 @@ public static class OutputVerifier
         // 容错 3：演示程序容错（10-08 真实样本：Python 计算器教学演示）
         // 程序输出同时含「成功计算行」与「异常分支演示行」——如
         //   10 + 5 = 15
-        //   10 / 0 -> 错误: 除数不能为零
+        //   错误: 除数不能为零          ← 真实模型形态：错误行为独立业务消息行（无算式前缀）
+        //   10 / 0 -> 错误: 除数不能为零 ← 早期样本形态：错误行带算式前缀
         // 失败词命中的是业务演示行（捕获异常后打印的错误消息），非真实失败。
         // 双条件都满足才放行：① 至少一行 数字 op 数字 = 数字 成功计算形态；
-        // ② 至少一行 数字 op 数字 (=|->) 错误/失败 演示异常分支。
+        // ② 至少一行业务错误消息（错误/失败/error/fail + 冒号 + 具体内容，
+        //    排除「错误: 0」等否定/计数形态）。不再要求算式前缀——真实模型
+        //    演示程序常把错误行打印为独立消息（A' 10-08 复测实证：tests 原
+        //    形态假设过窄，真实输出 `错误: 除数不能为零` 无算式前缀被误杀）。
         // 结构性错误层（Traceback / error CS / 未捕获异常）由前置检查硬拦，不受本容错影响。
-        if (HasDemoCalcLine(stdout) && HasDemoErrorLine(stdout))
+        if (HasDemoCalcLine(stdout) && HasDemoFailMessage(stdout))
         {
             reason = "";
             return false;
@@ -222,10 +226,12 @@ public static class OutputVerifier
             @"\b\d+(?:\.\d+)?\s*[+\-*/%]\s*\d+(?:\.\d+)?\s*=\s*-?\d+(?:\.\d+)?\b",
             RegexOptions.IgnoreCase);
 
-    /// <summary>演示程序的异常分支行：`数字 op 数字 (=|->) 错误/失败/error`（如 `10 / 0 -> 错误: 除数不能为零`）。</summary>
-    private static bool HasDemoErrorLine(string stdout) =>
+    /// <summary>演示程序的异常分支消息行：业务错误消息形态（中文 错误/失败 或 英文 error/fail + 冒号 + 具体内容），
+    /// 排除「错误: 0 / 失败: 0 条」等否定/计数形态（0 后无描述）。10-08 A' 放宽：不再要求算式前缀
+    /// （`数字 op 数字 -> 错误`），真实模型演示程序常输出独立错误消息行。</summary>
+    private static bool HasDemoFailMessage(string stdout) =>
         Regex.IsMatch(stdout,
-            @"\b\d+(?:\.\d+)?\s*[+\-*/%]\s*\d+(?:\.\d+)?\s*(?:=|->)\s*(?:错误|失败|error|fail)",
+            @"(?:错误|失败)[:：](?!\s*0\b)\s*\S|(?:\berror\b|\bfail\w*)[:：](?!\s*0\b)\s*\S",
             RegexOptions.IgnoreCase);
 
     // ──────────────────────────────────────────────────────────

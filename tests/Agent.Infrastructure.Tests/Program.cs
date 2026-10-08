@@ -1944,6 +1944,21 @@ Console.WriteLine("== 10-08 A 演示分支容错（OutputVerifier.HasGenericFail
     // 演示容错不吞掉带 expected 的失败场景（expected 含失败词仍走容错 1）
     Check("A expected 含失败词（取款失败样例）→ 放行（容错 1 优先）",
         !Generic("取款失败：余额不足", "取款失败：余额不足"));
+    // ── 10-08 A' 放宽：真实模型输出形态——错误行为独立业务消息行（无算式前缀）──
+    // 复测实证：Python 计算器模型输出 `10 + 5 = 15 ... 错误: 除数不能为零`（raise ValueError
+    // 捕获后打印独立错误消息行），原 HasDemoErrorLine 要求算式前缀 → 容错 3 不触发 → 误杀。
+    var demoCalcReal = "计算器测试:\n10 + 5 = 15\n10 - 5 = 5\n10 * 5 = 50\n10 / 5 = 2.0\n错误: 除数不能为零";
+    Check("A' 独立错误消息行（无算式前缀）+ 成功计算行 → 放行",
+        !Generic(demoCalcReal, null));
+    // 英文 error 业务消息形态同样放行
+    Check("A' 英文 error 业务消息 + 成功计算行 → 放行",
+        !Generic("10 + 5 = 15\nerror: division by zero", null));
+    // 否定/计数形态排除：错误: 0 是计数，不是业务失败消息 → 仍判失败
+    Check("A' 否定计数形态排除：错误: 0 → 仍判失败",
+        Generic("10 + 5 = 15\n错误: 0", null));
+    // 无成功计算行 + 独立错误消息 → 仍判失败（保持保守）
+    Check("A' 独立错误消息但无成功计算行 → 仍判失败",
+        Generic("错误: 除数不能为零", null));
 }
 
 Console.WriteLine("== 10-08 B 同文件内自重复类型定义检测（P-D 扩展） ==");
