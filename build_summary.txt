@@ -1,0 +1,5 @@
+X:\.NET AI\LocalAiWorkbench\tests\Agent.Infrastructure.Tests\Program.cs(2553,82): warning CS8604: “void Directory.Delete(string path, bool recursive)”中的形参“path”可能传入 null 引用实参。 [X:\.NET AI\LocalAiWorkbench\tests\Agent.Infrastructure.Tests\Agent.Infrastructure.Tests.csproj]
+    7 个警告
+    0 个错误
+已用时间 00:00:04.00
+错误: 0

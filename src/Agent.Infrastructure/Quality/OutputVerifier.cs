@@ -158,13 +158,22 @@ public static class OutputVerifier
 
     public static bool HasGenericFailure(string stdout, string? expectedOutput, out string reason)
     {
-        // 查找类：命中即失败（除非预期同样含该信号）
+        // 查找类：命中即失败（除非预期同样含该信号，或演示程序形态豁免）。
+        // 容错 3b（10-08）：教学演示程序（图书系统/产品查询）常演示"查找不存在的 ID"分支，
+        // 如"查找 ID 为 99 的图书：未找到该图书"——这是业务演示不是真实失败。
+        // 实证样本：10-03 图书管理系统（完整演示 + 未找到该图书被判 not_found 白跑修复循环）、
+        // 09-22 产品查询（任务本身要求打印"未找到该产品"被误杀）。
+        // 豁免条件：stdout 含正向输出形态（找到/列表条目/成功操作词）——说明"未找到"行
+        // 是演示流程的一部分（有正常流程数据并存），非孤立失败。
+        // 结构性错误层（error CS / Traceback / 找不到文件）由前置检查硬拦，不受本容错影响。
         foreach (var s in LookupFailSignals)
         {
             if (stdout.Contains(s, StringComparison.OrdinalIgnoreCase) &&
                 !(expectedOutput != null &&
                   expectedOutput.Contains(s, StringComparison.OrdinalIgnoreCase)))
             {
+                if (HasDemoLookupSuccess(stdout))
+                    continue; // 演示分支豁免，继续检查其余信号
                 reason = s;
                 return true;
             }
@@ -233,6 +242,21 @@ public static class OutputVerifier
         Regex.IsMatch(stdout,
             @"(?:错误|失败)[:：](?!\s*0\b)\s*\S|(?:\berror\b|\bfail\w*)[:：](?!\s*0\b)\s*\S",
             RegexOptions.IgnoreCase);
+
+    /// <summary>演示程序的查找流程正向形态：stdout 含"找到"词 / ID 列表条目 / 成功操作词
+    /// （如"找到图书: 数据结构与算法"、"ID: 1, 标题:..."、"已添加 3 本图书"）。
+    /// 说明"未找到"行是演示分支而非孤立失败。10-08 新增：LookupFailSignals 演示容错（容错 3b）。
+    /// 注意排除否定前缀陷阱：`(?<!未)找到` 拒绝"未找到"的"找到"、"not found" 由 `(?<!not\s)found` 拒绝
+    /// ——否则正向形态永远命中（"未找到"本身含"找到"、not found 本身含 found），豁免形同虚设。</summary>
+    private static bool HasDemoLookupSuccess(string stdout) =>
+        Regex.IsMatch(stdout, @"(?<!未)找到", RegexOptions.IgnoreCase) ||
+        Regex.IsMatch(stdout, @"(?<!not\s)found", RegexOptions.IgnoreCase) ||
+        Regex.IsMatch(stdout, @"ID\s*[:：]", RegexOptions.IgnoreCase) ||
+        stdout.Contains("已添加", StringComparison.OrdinalIgnoreCase) ||
+        stdout.Contains("已成功", StringComparison.OrdinalIgnoreCase) ||
+        stdout.Contains("成功", StringComparison.OrdinalIgnoreCase) ||
+        stdout.Contains("added", StringComparison.OrdinalIgnoreCase) ||
+        stdout.Contains("removed", StringComparison.OrdinalIgnoreCase);
 
     // ──────────────────────────────────────────────────────────
     // 检查 4.1：占位 API Key（AgentLoop 检查 4.1 使用；

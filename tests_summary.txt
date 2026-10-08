@@ -1,0 +1,1 @@
+TAIL: == 3 FailureCategorizer 失败类别归类 == | == P0-1 工程失败自动回滚（RollbackTaskFull） == | 结果: 571 通过 / 0 失败

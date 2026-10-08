@@ -1961,6 +1961,37 @@ Console.WriteLine("== 10-08 A 演示分支容错（OutputVerifier.HasGenericFail
         Generic("错误: 除数不能为零", null));
 }
 
+Console.WriteLine("== 10-08 Lookup 演示容错（OutputVerifier.HasGenericFailure 容错 3b） ==");
+{
+    // 实证样本 1：10-03 图书管理系统——完整演示含"查找 ID=99 → 未找到该图书"分支，
+    // 原 LookupFailSignals 命中即失败 → 修复循环 → 任务失败（白跑 10 分钟）。
+    var bookDemo = "图书管理系统演示\n==================\n已添加 3 本图书\n\n所有图书列表：\n" +
+        "ID: 1, 标题: C#编程指南, 作者: 张三, 可借: True\n" +
+        "ID: 2, 标题: 数据结构与算法, 作者: 李四, 可借: True\n" +
+        "ID: 3, 标题: 设计模式详解, 作者: 王五, 可借: True\n\n" +
+        "查找 ID 为 2 的图书：\n找到图书: 数据结构与算法 - 李四\n\n" +
+        "查找 ID 为 99 的图书：\n未找到该图书\n\n" +
+        "移除 ID 为 1 的图书：\n图书已成功移除";
+    Check("L1 图书系统演示（找到+列表+未找到分支）→ 放行", !Generic(bookDemo, null));
+    // 实证样本 2：09-22 产品查询——任务本身要求打印"未找到该产品"，被"未找到"误杀
+    var productDemo = "未找到产品\n产品ID: 1, 名称: 笔记本电脑\n产品ID: 3, 名称: 智能手机";
+    Check("L2 产品查询演示（未找到产品+产品ID 列表）→ 放行", !Generic(productDemo, null));
+    // 孤立查找失败：只有"未找到"一行、无任何正向形态 → 仍判失败（保守）
+    Check("L3 孤立未找到（无正向形态）→ 仍判失败", Generic("未找到该图书", null));
+    // 未找到 + 无正向形态 + 其他失败词 → 失败
+    Check("L4 未找到+失败词但无正向形态 → 仍判失败", Generic("未找到该图书\n处理失败: 数据库连接错误", null));
+    // expected 含"未找到"（演示查找失败场景）→ 容错 1 优先放行（原逻辑回归）
+    Check("L5 expected 含未找到（查找失败样例）→ 放行",
+        !Generic("未找到该图书", "未找到该图书"));
+    // 英文 not found + 列表条目 → 放行
+    Check("L6 not found + ID 列表 → 放行",
+        !Generic("Product not found\nID: 1, Name: Laptop\nID: 3, Name: Phone", null));
+    // 仅 not found（无正向形态）→ 仍判失败
+    Check("L7 仅 not found → 仍判失败", Generic("Product not found", null));
+    // 否定前缀陷阱回归：确认"未找到"不被 (?<!未)找到 误当正向形态（否则豁免形同虚设）
+    Check("L8 否定前缀陷阱：未找到 不被当作 正向找到 → 仍判失败", Generic("未找到该图书", null));
+}
+
 Console.WriteLine("== 10-08 B 同文件内自重复类型定义检测（P-D 扩展） ==");
 {
     // 真实样本：LetterCaseChecker.cs 900 字符内 2×class LetterCaseChecker → CS0101。

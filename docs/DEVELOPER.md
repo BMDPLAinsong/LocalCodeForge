@@ -59,7 +59,7 @@
 | 核心依赖 | Microsoft.SemanticKernel 1.80.1 + SK OpenAI Connector（走 Ollama `/v1` 兼容端点，全本地）+ Microsoft.Data.Sqlite                                                               |
 | 模型   | Ollama：classifier=`qwen2.5:1.5b`；small/large/agent\_pro 三角色全部 = `law-unified`（30B Qwen3-Coder-A3B，同 tag 单驻，请求级 temperature 区分：small 0.3 /agent\_pro 0.5 /large 0.7） |
 | 版本控制 | 本机 git 仓库（main，91+ commits，无远端）                                                                                                                                     |
-| 测试   | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，563/563，`dotnet run --project` 一键回归）                                                                           |
+| 测试   | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，571/571，`dotnet run --project` 一键回归）                                                                           |
 | 数据落盘 | `workspace/`：sessions.db、runs/、project\_context.db、agent\_memory.db、symbol\_index.db、test-tmp/、e2e/                                                                 |
 
 ### 1.1 三层项目结构
