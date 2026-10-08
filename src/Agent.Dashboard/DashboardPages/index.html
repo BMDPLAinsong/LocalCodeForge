@@ -22,6 +22,17 @@
   .card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:10px 12px;
           box-shadow:0 1px 3px rgba(0,0,0,.25); }
   .card h2 { margin:0 0 8px; font-size:13px; color:var(--dim); font-weight:600; letter-spacing:.5px; }
+  /* 折叠卡片（10-10 UI 收纳）：点击标题展开/收起，首次展开懒加载 */
+  .card.collapsible { padding-bottom:6px; }
+  .card.collapsible > h2 { cursor:pointer; user-select:none; margin:0; padding:4px 0 6px;
+                           display:flex; align-items:center; gap:6px; }
+  .card.collapsible > h2:hover { color:var(--fg); }
+  .card.collapsible > h2 .chev { color:var(--blue); font-size:11px; transition:transform .15s; }
+  .card.collapsible > h2 .sp { flex:1; }
+  .card.collapsible > h2 .h2btns { font-weight:400; display:inline-flex; gap:6px; align-items:center; }
+  .cbody { display:none; }
+  .card.collapsible.open > .cbody { display:block; }
+  .card.collapsible.open > h2 .chev { transform:rotate(90deg); }
   /* 双栏容器：左侧主工作区 / 右侧信息区 */
   .colL { display:flex; flex-direction:column; gap:12px; min-width:0; }
   .colR { display:flex; flex-direction:column; gap:12px; min-width:0; }
@@ -174,39 +185,40 @@
   </div>
 
   <div class="colR">
-  <div class="card">
-    <h2>统计（/api/stats）</h2>
-    <div id="stats"><div class="empty">加载中…</div></div>
+  <div class="card collapsible" data-load="stats">
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>统计（/api/stats）<span class="sp"></span></h2>
+    <div class="cbody"><div id="stats"><div class="empty">加载中…</div></div></div>
   </div>
 
-  <div class="card">
-    <h2>路由调权状态（/api/tuning）</h2>
-    <div id="tuning"><div class="empty">加载中…</div></div>
+  <div class="card collapsible" data-load="tuning">
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>路由调权状态（/api/tuning）<span class="sp"></span></h2>
+    <div class="cbody"><div id="tuning"><div class="empty">加载中…</div></div></div>
   </div>
 
-  <div class="card">
-    <h2>记忆（/api/memory）</h2>
-    <div id="memory"><div class="empty">加载中…</div></div>
+  <div class="card collapsible" data-load="memory">
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>记忆（/api/memory）<span class="sp"></span></h2>
+    <div class="cbody"><div id="memory"><div class="empty">加载中…</div></div></div>
   </div>
 
-  <div class="card">
-    <h2>历史任务（/api/tasks · 最近 50）</h2>
-    <div id="tasks"><div class="empty">加载中…</div></div>
+  <div class="card collapsible" data-load="tasks">
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>历史任务（/api/tasks · 最近 50）<span class="sp"></span></h2>
+    <div class="cbody"><div id="tasks"><div class="empty">加载中…</div></div></div>
   </div>
 
-  <div class="card">
-    <h2>任务详情回放（点击左侧历史任务行 /api/tasks/{id}/events）</h2>
-    <div id="detail"><div class="empty">点击历史任务行回放完整事件序列；失败任务自动定位到第一个 error 事件</div></div>
+  <div class="card collapsible">
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>任务详情回放（点击左侧历史任务行 /api/tasks/{id}/events）<span class="sp"></span></h2>
+    <div class="cbody"><div id="detail"><div class="empty">点击历史任务行回放完整事件序列；失败任务自动定位到第一个 error 事件</div></div></div>
   </div>
 
-  <div class="card">
-    <h2>工程备份与 Diff（/api/backups + /api/diff）
-      <span style="float:right;font-weight:400">
-        <button class="btn" id="diffClear" title="清空 Diff 区">清空</button>
-      </span>
+  <div class="card collapsible" data-load="backups">
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>工程备份与 Diff（/api/backups + /api/diff）
+      <span class="sp"></span>
+      <span class="h2btns"><button class="btn" id="diffClear" onclick="event.stopPropagation()" title="清空 Diff 区">清空</button></span>
     </h2>
-    <div id="backups"><div class="empty">加载中…</div></div>
-    <div id="diff"><div class="empty">点击备份文件查看改动差异（红 = 删除，绿 = 新增）</div></div>
+    <div class="cbody">
+      <div id="backups"><div class="empty">加载中…</div></div>
+      <div id="diff"><div class="empty">点击备份文件查看改动差异（红 = 删除，绿 = 新增）</div></div>
+    </div>
   </div>
   </div>
 </main>
@@ -782,8 +794,24 @@ $("diffClear").addEventListener("click", () => {
   $("diff").innerHTML = `<div class="empty">已清空</div>`;
 });
 
+// ── 折叠卡片（10-10 UI 收纳）：点击标题展开/收起；首次展开才懒加载对应 API ──
+const collapsibleLoads = {
+  stats:   () => fetchStats(),
+  tuning:  () => fetchTuning(),
+  memory:  () => fetchMemory(),
+  tasks:   () => fetchTasks(),
+  backups: () => fetchBackups(),
+};
+function toggleCard(h2) {
+  const card = h2.closest(".card");
+  const open = card.classList.toggle("open");
+  if (open) {
+    const load = collapsibleLoads[card.dataset.load || ""];
+    if (load && !card.dataset.loaded) { card.dataset.loaded = "1"; load(); }
+  }
+}
+
 openStream();
-refreshAll();
 </script>
 </body>
 </html>
