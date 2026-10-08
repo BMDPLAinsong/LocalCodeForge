@@ -3117,6 +3117,11 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         Check("命令条吸顶结构：cmdBar 直属 colL（sticky 滚动容器直接子级，10-10 P1 修复）——防回退成卡片内嵌",
             page.Contains("<div class=\"colL\">\n  <div id=\"cmdBar\"")
             && page.Contains("#cmdBar { position:sticky; top:var(--headH)"));
+        Check("事件分组卡片（10-10 ①）：renderGrouped 统一渲染 + 分组函数 + 卡片结构 + boxKey 折叠隔离",
+            page.Contains("function renderGrouped") && page.Contains("function groupEvents")
+            && page.Contains("function toggleCard") && page.Contains("isCollapsed(boxKey, start)")
+            && page.Contains("className = \"taskcard\"") && page.Contains("tc-head") && page.Contains("tc-sep")
+            && page.Contains("renderGrouped(box, eventsCache, {") && page.Contains("boxKey: \"detail\""));
         var stats = await http.GetStringAsync("api/stats");
         Check("GET /api/stats 200 + JSON 结构", stats.Contains("\"summary\"") && stats.Contains("totalCount"));
         var tasks = await http.GetStringAsync("api/tasks?take=3");

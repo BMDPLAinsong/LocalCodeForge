@@ -59,6 +59,19 @@
   .btn.primary:hover { filter:brightness(1.1); background:var(--blue); }
   .btn.danger:hover { border-color:var(--red); background:#2d1416; }
   #events { height:340px; overflow-y:auto; font-size:12px; }
+  /* 任务节分组卡片（10-10 ①：平铺 → 卡片内分节）——后续 Markdown 渲染/工具配对/折叠的地基 */
+  .taskcard { background:#11161d; border:1px solid var(--border); border-radius:6px; margin:0 0 6px; overflow:hidden; }
+  .taskcard.collapsed .tc-body { display:none; }
+  .taskcard.done .tc-head { border-left:3px solid var(--green); }
+  .taskcard.fail .tc-head { border-left:3px solid var(--red); }
+  .tc-head { display:flex; align-items:center; gap:6px; padding:3px 8px; background:#1c232d;
+             cursor:pointer; user-select:none; font-size:12px; }
+  .tc-head:hover { background:#222b37; }
+  .tc-head .chev { color:var(--blue); font-size:10px; width:10px; text-align:center; }
+  .tc-head .tag { min-width:74px; }
+  .tc-head .hint { color:var(--dim); margin-left:auto; }
+  .tc-body { padding:2px 4px 4px; }
+  .tc-sep { border-top:1px dashed #2b333d; margin:2px 0 0; }
   .ev { white-space:pre-wrap; word-break:break-all; border-bottom:1px solid #21262d; padding:2px 0; }
   .ev .tag { display:inline-block; min-width:74px; color:var(--dim); }
   .ev.thinking  .tag { color:var(--dim); }
@@ -293,6 +306,93 @@ function expandEv(el) {
   d.innerHTML = `<span class="tag">${tag}</span> ${d.dataset.full}`;
 }
 
+// ── ① 任务节分组（10-10：平铺 → 卡片内分节）──
+// 分组边界确定性切分（不靠模型）：routing 开新卡片；finalAnswer/error 结束卡片并入档；
+// 其余事件归属当前卡片。节号 = 节首事件在源数组的 index（稳定）→ 折叠状态跨全量重建保留。
+// 折叠状态按 boxKey 隔离（实时流 events / 回放 detail 各自独立，防节号交叉污染）。
+let collapsed = new Map();
+function isCollapsed(boxKey, start) { return (collapsed.get(boxKey) || new Set()).has(start); }
+function toggleCard(boxKey, start) {
+  const s = collapsed.get(boxKey) || new Set();
+  if (s.has(start)) s.delete(start); else s.add(start);
+  collapsed.set(boxKey, s);
+  if (boxKey === "events") { renderEvents(); return; }
+  if (boxKey === "detail" && lastDetailList) {
+    const box = $("detail");
+    box.innerHTML = "";
+    renderGrouped(box, lastDetailList, { boxKey: "detail", onDone: (n) => afterDetailRender(box, lastDetailTaskId, lastDetailList.length) });
+  }
+}
+function groupEvents(events) {
+  const groups = []; let cur = null;
+  events.forEach((evt, i) => {
+    if (evt.type === "routing") {
+      if (cur && cur.items.length) { groups.push(cur); cur = null; }
+      cur = { start: i, head: evt, items: [], done: false, fail: false };
+    } else if (evt.type === "finalAnswer" || evt.type === "error") {
+      if (!cur) cur = { start: i, head: null, items: [], done: false, fail: false };
+      cur.items.push(evt);
+      cur.done = evt.type === "finalAnswer"; cur.fail = evt.type === "error";
+      groups.push(cur); cur = null;
+    } else {
+      if (!cur) cur = { start: i, head: null, items: [], done: false, fail: false };
+      cur.items.push(evt);
+    }
+  });
+  if (cur && cur.items.length) groups.push(cur);
+  return groups;
+}
+// 统一分组渲染：实时流（eventsCache + 过滤）与回放（任务事件列表）共用——消双路径漂移。
+// renderEventLine 核心逻辑不动，只在外层包分组容器。
+function renderGrouped(box, events, opts) {
+  const boxKey = (opts && opts.boxKey) || "events";
+  const filter = (opts && opts.filter) || null;
+  const keyword = (opts && opts.keyword) || "";
+  const onDone = (opts && opts.onDone) || null;
+  let n = 0;
+  for (const g of groupEvents(events)) {
+    const card = document.createElement("div");
+    card.className = "taskcard" + (g.fail ? " fail" : g.done ? " done" : "");
+    const isColl = isCollapsed(boxKey, g.start);
+    if (isColl) card.classList.add("collapsed");
+    const head = document.createElement("div");
+    head.className = "tc-head";
+    head.title = "点击折叠/展开任务节";
+    head.onclick = () => toggleCard(boxKey, g.start);
+    const chev = `<span class="chev">${isColl ? "▸" : "▾"}</span>`;
+    if (g.head) {
+      const line = renderEventLine(g.head);
+      const hay = (line.tag + " " + line.text).toLowerCase();
+      const pass = (!filter || filter(g.head)) && (!keyword || hay.includes(keyword));
+      head.innerHTML = pass
+        ? chev + `<span class="tag">${line.tag}</span> ${esc(line.text)}`
+        : chev + `<span class="tag">${g.fail ? "任务失败" : g.done ? "任务完成" : "任务事件"}</span><span class="hint">${g.items.length} 事件</span>`;
+    } else {
+      head.innerHTML = chev + `<span class="tag">${g.fail ? "任务失败" : g.done ? "任务完成" : "任务事件"}</span>` +
+        `<span class="hint">${g.items.length} 事件</span>`;
+    }
+    card.appendChild(head);
+    const tb = document.createElement("div");
+    tb.className = "tc-body";
+    let firstTail = true;
+    for (const evt of g.items) {
+      if (filter && !filter(evt)) continue;
+      const line = renderEventLine(evt);
+      const hay = (line.tag + " " + line.text).toLowerCase();
+      if (keyword && !hay.includes(keyword)) continue;   // 行被隐藏 → 不插分隔线（防残留空线）
+      if (evt.type === "finalAnswer" || evt.type === "error") {
+        if (!firstTail && n > 0) { const sep = document.createElement("div"); sep.className = "tc-sep"; tb.appendChild(sep); }
+        firstTail = false;
+      }
+      appendEventLine(tb, evt, false); n++;
+    }
+    card.appendChild(tb);
+    box.appendChild(card);
+  }
+  if (onDone) onDone(n);
+  return n;
+}
+
 // ── 事件流过滤 + 自动滚动（10-07 UI 层 #5）──
 // 过滤只影响展示不丢数据：eventsCache 保留最近 300 事件，切换过滤即时重渲染。
 let filterMode = "all";
@@ -307,16 +407,13 @@ let evKeyword = "";
 function renderEvents() {
   const box = $("events");
   box.innerHTML = "";
-  let n = 0;
-  for (const evt of eventsCache) {
-    if (!filterMap[filterMode](evt)) continue;
-    const line = renderEventLine(evt);
-    const hay = (line.tag + " " + line.text).toLowerCase();
-    if (evKeyword && !hay.includes(evKeyword)) continue;
-    appendEventLine(box, evt, false); n++;
-  }
+  const n = renderGrouped(box, eventsCache, {
+    boxKey: "events",
+    filter: (e) => filterMap[filterMode](e),
+    keyword: evKeyword,
+    onDone: () => { if ($("autoScroll").checked) box.scrollTop = box.scrollHeight; },
+  });
   if (n === 0) box.innerHTML = `<div class="empty">${eventsCache.length ? "当前过滤下无匹配事件" : "等待任务事件…（dashboard 不阻塞 CLI，任务照常执行）"}</div>`;
-  if ($("autoScroll").checked) box.scrollTop = box.scrollHeight;
 }
 document.querySelectorAll(".fbtn").forEach(btn => btn.addEventListener("click", () => {
   document.querySelectorAll(".fbtn").forEach(b => b.classList.remove("active"));
@@ -443,8 +540,20 @@ function openStream() {
   es.onerror = () => { const dot = $("liveDot"); dot.className = "dot yellow"; /* 无任务事件时 SSE 保持连接；错误自动重连 */ };
 }
 
-// ── 任务详情回放（10-07 UI 层 #2）──
+// ── 任务详情回放（10-07 UI 层 #2；10-10 ① 分组渲染）──
 let lastDetailTaskId = null;
+let lastDetailList = null;   // 回放事件缓存：折叠重渲染本地直画，不重复 fetch
+function afterDetailRender(box, taskId, totalCount) {
+  const err = box.querySelector(".ev.error");
+  if (err) {
+    err.classList.add("bad");
+    err.scrollIntoView({ block: "center" });
+    $("sub").textContent = `任务 ${taskId}：${totalCount} 事件，失败定位到 error`;
+  } else {
+    box.scrollTop = box.scrollHeight;
+    $("sub").textContent = `任务 ${taskId}：${totalCount} 事件`;
+  }
+}
 async function showTaskEvents(taskId) {
   lastDetailTaskId = taskId;
   const box = $("detail");
@@ -453,19 +562,14 @@ async function showTaskEvents(taskId) {
   if (!r.ok) { box.innerHTML = `<div class="empty">详情不可用（${r.status}）</div>`; return; }
   const list = await r.json();
   if (!list.length) { box.innerHTML = `<div class="empty">任务 ${esc(taskId)} 无事件记录（事件持久化从 10-07 起生效）</div>`; return; }
-  let firstErr = null;
-  // 10-10 P0：回放端点已补 type 短名，事件为平铺对象（不再 JSON.parse(payload)）
-  for (const evt of list) {
-    const div = appendEventLine(box, evt, false);
-    if (evt.type === "error" && !firstErr) { firstErr = div; div.classList.add("bad"); }
-  }
-  if (firstErr) {
-    firstErr.scrollIntoView({ block: "center" });
-    $("sub").textContent = `任务 ${taskId}：${list.length} 事件，失败定位到 error`;
-  } else {
-    box.scrollTop = box.scrollHeight;
-    $("sub").textContent = `任务 ${taskId}：${list.length} 事件`;
-  }
+  lastDetailList = list;
+  box.innerHTML = "";
+  // 10-10 ① 分组渲染：回放与实时流共用 renderGrouped（消双路径漂移）
+  renderGrouped(box, list, {
+    boxKey: "detail",
+    onDone: () => afterDetailRender(box, taskId, list.length),
+  });
+}
 }
 
 // ── stats ──
