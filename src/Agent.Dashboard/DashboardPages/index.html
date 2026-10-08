@@ -72,6 +72,27 @@
   .tc-head .hint { color:var(--dim); margin-left:auto; }
   .tc-body { padding:2px 4px 4px; }
   .tc-sep { border-top:1px dashed #2b333d; margin:2px 0 0; }
+  /* ② 轻量 Markdown 渲染（10-10：finalAnswer 结构化展示；转义先行防 XSS） */
+  .md { padding:2px 0; }
+  .md .md-h { color:var(--cyan); font-weight:600; margin:4px 0 2px; }
+  .md .md-p { margin:1px 0; }
+  .md ul, .md ol { margin:2px 0 2px 18px; padding:0; }
+  .md li { margin:1px 0; }
+  .md b { color:var(--fg); }
+  .md code { background:#21262d; border:1px solid var(--border); border-radius:3px; padding:0 3px; font-size:11px; }
+  .md .md-pre { background:#0d1117; border:1px solid var(--border); border-radius:4px; padding:6px 8px;
+                white-space:pre-wrap; word-break:break-all; margin:3px 0; font-size:11px; }
+  /* ③ 工具调用配对块（10-10：call+result 合成；④ 折叠挂载：tp-call 点击折叠/展开结果区） */
+  .toolpair { border:1px solid #21262d; border-radius:4px; margin:2px 0; background:#141b24; overflow:hidden; }
+  .toolpair .tp-call { display:flex; align-items:center; gap:6px; padding:2px 6px; color:var(--blue);
+                       cursor:pointer; user-select:none; }
+  .toolpair .tp-call:hover { background:#1c2333; }
+  .toolpair .tp-call .chev { color:var(--blue); font-size:10px; width:10px; text-align:center; }
+  .toolpair .tp-call .tag { min-width:74px; }
+  .toolpair .tp-res { padding:0 6px 3px 28px; color:var(--dim); white-space:pre-wrap; word-break:break-all; }
+  .toolpair .tp-res.fold { display:none; }
+  .toolpair .tp-res .okmark { color:var(--green); font-weight:600; }
+  .toolpair .tp-res .failmark { color:var(--red); font-weight:600; }
   .ev { white-space:pre-wrap; word-break:break-all; border-bottom:1px solid #21262d; padding:2px 0; }
   .ev .tag { display:inline-block; min-width:74px; color:var(--dim); }
   .ev.thinking  .tag { color:var(--dim); }
@@ -291,19 +312,63 @@ function appendEventLine(box, evt, bad) {
     div.innerHTML = `<span class="tag">${tag}</span> ${mark} ${esc(cut(evt.output ?? "", 300))}` +
       `<span class="exp" onclick="expandEv(this)">展开</span>`;
     div.dataset.full = esc(evt.output ?? "");
+  } else if (evt.type === "finalAnswer") {
+    // ② Markdown 渲染（10-10）：完成文本结构化展示；截断 500 字符 + 展开全量
+    div.innerHTML = `<span class="tag">${tag}</span> <div class="md">${mdToHtml(cut(evt.text ?? "", 500))}</div>` +
+      (String(evt.text ?? "").length > 500 ? `<span class="exp" onclick="expandMd(this)">展开全文</span>` : "");
+    div.dataset.full = evt.text ?? "";
   } else {
     div.innerHTML = `<span class="tag">${tag}</span> ${esc(text)}`;
   }
   box.appendChild(div);
   return div;
 }
-// 展开工具结果全文（点击"展开"→ 显示完整输出）
+// 展开工具结果全文（点击"展开"→ 显示完整输出；兼容无 .tag 的容器）
 function expandEv(el) {
   const d = el.parentElement;
   if (d.dataset.full === undefined) return;
   el.textContent = "已展开";
-  const tag = d.querySelector(".tag").textContent;
-  d.innerHTML = `<span class="tag">${tag}</span> ${d.dataset.full}`;
+  const tag = d.querySelector(".tag");
+  d.innerHTML = (tag ? `<span class="tag">${tag.textContent}</span> ` : "") + d.dataset.full;
+}
+// 展开 finalAnswer 全量 Markdown（②）
+function expandMd(el) {
+  const d = el.parentElement;
+  if (d.dataset.full === undefined) return;
+  el.remove();
+  const tag = d.querySelector(".tag");
+  d.innerHTML = (tag ? `<span class="tag">${tag.textContent}</span> ` : "") + `<div class="md">${mdToHtml(d.dataset.full)}</div>`;
+}
+// ② 轻量 Markdown → 安全 HTML（不引入第三方库；转义先行防 XSS；确定性规则）
+function escHtml(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function mdToHtml(src) {
+  if (!src) return "";
+  const lines = String(src).split(/\r?\n/);
+  let html = "", inCode = false, codeBuf = [], inList = false, listTag = "";
+  const flushList = () => { if (inList) { html += "</" + listTag + ">"; inList = false; } };
+  const inline = (s) => escHtml(s)
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+  for (const raw of lines) {
+    if (raw.trim().startsWith("```")) {
+      if (inCode) { html += `<pre class="md-pre">${escHtml(codeBuf.join("\n"))}</pre>`; codeBuf = []; inCode = false; }
+      else { flushList(); inCode = true; }
+      continue;
+    }
+    if (inCode) { codeBuf.push(raw); continue; }
+    const t = raw.trim();
+    if (!t) { flushList(); continue; }
+    const h = t.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { flushList(); html += `<div class="md-h">${inline(h[2])}</div>`; continue; }
+    const ul = t.match(/^[-*]\s+(.*)$/);
+    if (ul) { if (!inList) { html += "<ul>"; listTag = "ul"; inList = true; } html += `<li>${inline(ul[1])}</li>`; continue; }
+    const ol = t.match(/^\d+\.\s+(.*)$/);
+    if (ol) { if (!inList) { html += "<ol>"; listTag = "ol"; inList = true; } html += `<li>${inline(ol[1])}</li>`; continue; }
+    flushList(); html += `<div class="md-p">${inline(t)}</div>`;
+  }
+  if (inCode) html += `<pre class="md-pre">${escHtml(codeBuf.join("\n"))}</pre>`;
+  flushList();
+  return html;
 }
 
 // ── ① 任务节分组（10-10：平铺 → 卡片内分节）──
@@ -311,17 +376,28 @@ function expandEv(el) {
 // 其余事件归属当前卡片。节号 = 节首事件在源数组的 index（稳定）→ 折叠状态跨全量重建保留。
 // 折叠状态按 boxKey 隔离（实时流 events / 回放 detail 各自独立，防节号交叉污染）。
 let collapsed = new Map();
+let collapsedPairs = new Map();   // ③④ 工具块折叠（boxKey -> Set<call 在节内序号>）
 function isCollapsed(boxKey, start) { return (collapsed.get(boxKey) || new Set()).has(start); }
-function toggleCard(boxKey, start) {
-  const s = collapsed.get(boxKey) || new Set();
-  if (s.has(start)) s.delete(start); else s.add(start);
-  collapsed.set(boxKey, s);
+function isPairCollapsed(boxKey, idx) { return (collapsedPairs.get(boxKey) || new Set()).has(idx); }
+function rerenderBox(boxKey) {
   if (boxKey === "events") { renderEvents(); return; }
   if (boxKey === "detail" && lastDetailList) {
     const box = $("detail");
     box.innerHTML = "";
     renderGrouped(box, lastDetailList, { boxKey: "detail", onDone: (n) => afterDetailRender(box, lastDetailTaskId, lastDetailList.length) });
   }
+}
+function toggleCard(boxKey, start) {
+  const s = collapsed.get(boxKey) || new Set();
+  if (s.has(start)) s.delete(start); else s.add(start);
+  collapsed.set(boxKey, s);
+  rerenderBox(boxKey);
+}
+function togglePair(boxKey, idx) {
+  const s = collapsedPairs.get(boxKey) || new Set();
+  if (s.has(idx)) s.delete(idx); else s.add(idx);
+  collapsedPairs.set(boxKey, s);
+  rerenderBox(boxKey);
 }
 function groupEvents(events) {
   const groups = []; let cur = null;
@@ -341,6 +417,50 @@ function groupEvents(events) {
   });
   if (cur && cur.items.length) groups.push(cur);
   return groups;
+}
+// ③ 工具调用配对（10-10）：同一节内，toolCall 与其后第一个 toolResultEvent 合成一个渲染单元
+// （pair）；无结果就配对的 call / 无 call 的结果 → 独立单行（回放边界兼容）。
+function buildUnits(items) {
+  const units = []; let pending = null;
+  items.forEach((evt, i) => {
+    if (evt.type === "toolCall") {
+      if (pending) units.push({ kind: "single", evt: pending.call, start: pending.start });
+      pending = { call: evt, start: i };
+    } else if (evt.type === "toolResultEvent" && pending) {
+      units.push({ kind: "pair", call: pending.call, start: pending.start, res: evt });
+      pending = null;
+    } else if (evt.type === "toolResultEvent") {
+      units.push({ kind: "single", evt, start: i });
+    } else {
+      if (pending) { units.push({ kind: "single", evt: pending.call, start: pending.start }); pending = null; }
+      units.push({ kind: "single", evt, start: i });
+    }
+  });
+  if (pending) units.push({ kind: "single", evt: pending.call, start: pending.start });
+  return units;
+}
+// ④ 折叠挂载（工具块）：tp-call 点击折叠/展开结果区；结果"展开"看全量
+function renderPair(tb, u, boxKey, vis) {
+  const pair = document.createElement("div");
+  pair.className = "toolpair";
+  const isFold = isPairCollapsed(boxKey, u.start);
+  const callLine = renderEventLine(u.call);
+  const head = document.createElement("div");
+  head.className = "tp-call";
+  head.title = "点击折叠/展开工具结果";
+  head.onclick = () => togglePair(boxKey, u.start);
+  head.innerHTML = `<span class="chev">${isFold ? "▸" : "▾"}</span><span class="tag">${callLine.tag}</span> ${esc(callLine.text)}`;
+  pair.appendChild(head);
+  if (vis.showRes) {
+    const resBox = document.createElement("div");
+    resBox.className = "tp-res" + (isFold ? " fold" : "");
+    const mark = u.res.success ? `<span class="okmark">[ok]</span>` : `<span class="failmark">[fail]</span>`;
+    resBox.innerHTML = `${mark} ${esc(cut(u.res.output ?? "", 300))}<span class="exp" onclick="expandEv(this)">展开</span>`;
+    resBox.dataset.full = esc(u.res.output ?? "");
+    pair.appendChild(resBox);
+  }
+  tb.appendChild(pair);
+  return 1;
 }
 // 统一分组渲染：实时流（eventsCache + 过滤）与回放（任务事件列表）共用——消双路径漂移。
 // renderEventLine 核心逻辑不动，只在外层包分组容器。
@@ -375,16 +495,26 @@ function renderGrouped(box, events, opts) {
     const tb = document.createElement("div");
     tb.className = "tc-body";
     let firstTail = true;
-    for (const evt of g.items) {
-      if (filter && !filter(evt)) continue;
-      const line = renderEventLine(evt);
+    const units = buildUnits(g.items);
+    for (const u of units) {
+      if (u.kind === "pair") {
+        const cLine = renderEventLine(u.call);
+        const rLine = renderEventLine(u.res);
+        const passCall = (!filter || filter(u.call)) && (!keyword || (cLine.tag + " " + cLine.text).toLowerCase().includes(keyword));
+        const passRes = (!filter || filter(u.res)) && (!keyword || (rLine.tag + " " + rLine.text).toLowerCase().includes(keyword));
+        if (!passCall && !passRes) continue;
+        n += renderPair(tb, u, boxKey, { showRes: passRes });
+        continue;
+      }
+      if (filter && !filter(u.evt)) continue;
+      const line = renderEventLine(u.evt);
       const hay = (line.tag + " " + line.text).toLowerCase();
       if (keyword && !hay.includes(keyword)) continue;   // 行被隐藏 → 不插分隔线（防残留空线）
-      if (evt.type === "finalAnswer" || evt.type === "error") {
+      if (u.evt.type === "finalAnswer" || u.evt.type === "error") {
         if (!firstTail && n > 0) { const sep = document.createElement("div"); sep.className = "tc-sep"; tb.appendChild(sep); }
         firstTail = false;
       }
-      appendEventLine(tb, evt, false); n++;
+      appendEventLine(tb, u.evt, false); n++;
     }
     card.appendChild(tb);
     box.appendChild(card);

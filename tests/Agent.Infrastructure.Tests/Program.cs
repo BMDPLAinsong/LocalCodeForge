@@ -3122,6 +3122,11 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             && page.Contains("function toggleCard") && page.Contains("isCollapsed(boxKey, start)")
             && page.Contains("className = \"taskcard\"") && page.Contains("tc-head") && page.Contains("tc-sep")
             && page.Contains("renderGrouped(box, eventsCache, {") && page.Contains("boxKey: \"detail\""));
+        Check("②③④ Markdown/工具配对/折叠挂载（10-10）：mdToHtml 转义先行 + buildUnits 配对 + renderPair 块 + 两级折叠",
+            page.Contains("function mdToHtml") && page.Contains("function escHtml")
+            && page.Contains("function buildUnits") && page.Contains("function renderPair")
+            && page.Contains("className = \"toolpair\"") && page.Contains("collapsedPairs")
+            && page.Contains("function togglePair") && page.Contains("onclick=\"expandMd(this)\""));
         var stats = await http.GetStringAsync("api/stats");
         Check("GET /api/stats 200 + JSON 结构", stats.Contains("\"summary\"") && stats.Contains("totalCount"));
         var tasks = await http.GetStringAsync("api/tasks?take=3");
