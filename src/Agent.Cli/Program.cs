@@ -263,6 +263,54 @@ internal class Program
         // ─────────── 主循环 ───────────
         // 【10-07 Dashboard】已启动的 dashboard URL（幂等：重复 dashboard 命令只提示不重启）
         string? dashboardUrl = null;
+        // 【10-07 webUI 交互】命令通道（提前声明：StartDashboardAsync 与自动启动在 397 行通道化分支前使用）
+        var commandHub = new Agent.Core.CommandHub();
+
+        // 【10-10 自动启动】交互终端启动 CLI 即自动起 Web Dashboard（浏览器自动打开）——不用手动敲 dashboard；
+        // 无头态（管道/重定向）跳过（E2E 输出逐字节兼容）；LAW_NO_AUTODASH=1 可关。
+        // 局部函数与 dashboard 命令共用同一启动逻辑（消双路径漂移——启动行为只有一份）。
+        async Task<string?> StartDashboardAsync(bool silentIfRunning)
+        {
+            if (dashboardUrl is not null)
+            {
+                if (!silentIfRunning)
+                    renderer.Info($"Dashboard 已在运行：{dashboardUrl}");
+                return dashboardUrl;
+            }
+            // 【10-08 ③ 安全 token】随机 token 拼入 URL——CLI 打印的完整 URL 即访问凭证；
+            // 前端 JS 从 location.search 取 token，所有请求自动附带（fetch 包装 + SSE query）。
+            var dashToken = Guid.NewGuid().ToString("N");
+            var (url, _) = await Agent.Dashboard.DashboardHost.StartAsync(
+                new Agent.Dashboard.DashboardOptions(workspace, options.ProjectRoot,
+                    Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db"),
+                    options.LawUnifiedEpoch,
+                    provider.GetRequiredService<IMetricsCollector>(), eventHub, eventStore,
+                    options,
+                    Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "agent_memory.db"),
+                    commandHub,
+                    dashToken),
+                CancellationToken.None);
+            url = url + "?token=" + dashToken;
+            dashboardUrl = url;
+            // 交互态自动打开默认浏览器（失败静默——打不开不影响 dashboard 使用）
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
+                { UseShellExecute = true });
+            }
+            catch { /* 浏览器打开失败忽略 */ }
+            return url;
+        }
+
+        // 【10-10 自动启动入口】主循环前：交互终端 → 自动起 dashboard + 开浏览器
+        // （无头态由上方守卫跳过；E2E 管道运行完全不触发）
+        if (!Console.IsInputRedirected && !Console.IsOutputRedirected
+            && Environment.GetEnvironmentVariable("LAW_NO_AUTODASH") != "1")
+        {
+            var autoUrl = await StartDashboardAsync(silentIfRunning: true);
+            if (autoUrl is not null)
+                renderer.Notice($"Dashboard 已自动启动（仅本机回环 + token 鉴权）：[link]{autoUrl}[/]\n  浏览器已自动打开（失败可手动复制上方 URL）；任务实时流 / stats / 历史任务 / 备份 Diff / 回滚 / 任务详情回放");
+        }
 
         // 【10-07 UI 层 #4】Tab 命令补全（交互态自制行编辑；无头/重定向退回 ReadLine 逐字节兼容 E2E）
         // 命令列表与主循环分支保持一致（use/rollback/stats/memory/plan/orch/diff/dashboard/help/exit/new）
@@ -348,7 +396,6 @@ internal class Program
         // 交互态：控制台后台线程负责行编辑（Tab/↑↓/历史）并写入通道；web 提交也写入同一通道——
         // 主循环阻塞在 NextAsync 时 web 命令即时响应（用户无需碰终端）。
         // 无头（管道/重定向）：保持原同步读-执行循环（逐字节兼容 E2E）。
-        var commandHub = new Agent.Core.CommandHub();
         var consoleReaderStopped = false;
         if (!Console.IsInputRedirected && !Console.IsOutputRedirected)
         {
@@ -474,9 +521,7 @@ internal class Program
             }
             // ═══════════ Orchestrator 测试结束 ═══════════
 
-            // ═══════════ dashboard 命令（10-07 真 UI 层·本地 Web Dashboard） ═══════════
-            // 后台启动 Kestrel（127.0.0.1 随机端口，仅本机回环无认证）→ 打印 URL → 不阻塞主循环，
-            // 任务照常执行、浏览器实时看。SSE 只覆盖当前任务；历史走 /api/tasks；Diff 复用引擎模型。
+            // ═══════════ dashboard 命令（10-07 真 UI 层·本地 Web Dashboard；10-10 与自动启动共用 StartDashboardAsync） ═══════════
             if (input.Equals("dashboard", StringComparison.OrdinalIgnoreCase))
             {
                 // 无头守卫：管道/重定向模式下直接提示（不启动 Kestrel）——保护 E2E 输出逐字节兼容
@@ -485,35 +530,9 @@ internal class Program
                     Console.WriteLine("dashboard 需交互终端（当前为管道/重定向模式）。");
                     continue;
                 }
-                if (dashboardUrl is not null)
-                {
-                    Console.WriteLine($"Dashboard 已在运行：{dashboardUrl}（浏览器打开即可查看；Ctrl+C 退出 CLI 时停止）");
-                    continue;
-                }
-                // 【10-08 ③ 安全 token】随机 token 拼入 URL——CLI 打印的完整 URL 即访问凭证；
-                // 前端 JS 从 location.search 取 token，所有请求自动附带（fetch 包装 + SSE query）。
-                var dashToken = Guid.NewGuid().ToString("N");
-                var (url, _) = await Agent.Dashboard.DashboardHost.StartAsync(
-                    new Agent.Dashboard.DashboardOptions(workspace, options.ProjectRoot,
-                        Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db"),
-                        options.LawUnifiedEpoch,
-                        provider.GetRequiredService<IMetricsCollector>(), eventHub, eventStore,
-                        options,
-                        Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "agent_memory.db"),
-                        commandHub,
-                        dashToken),
-                    CancellationToken.None);
-                url = url + "?token=" + dashToken;
-                dashboardUrl = url;
-                // 【10-07 UI 层 #4】交互态 [link] 超链接样式；无头态 dashboard 命令已被无头守卫拦截（不会到此处）
-                // 【10-08 ④】交互态自动打开默认浏览器（失败静默——打不开不影响 dashboard 使用）
-                try
-                {
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
-                    { UseShellExecute = true });
-                }
-                catch { /* 浏览器打开失败忽略 */ }
-                renderer.Notice($"Dashboard 已启动（仅本机回环 + token 鉴权）：[link]{url}[/]\n  浏览器已自动打开（失败可手动复制上方 URL）；任务实时流 / stats / 历史任务 / 备份 Diff / 任务详情回放 / 任务产物浏览");
+                var url = await StartDashboardAsync(silentIfRunning: false);
+                if (url is not null)
+                    renderer.Notice($"Dashboard 已启动（仅本机回环 + token 鉴权）：[link]{url}[/]\n  浏览器已自动打开（失败可手动复制上方 URL）；任务实时流 / stats / 历史任务 / 备份 Diff / 回滚 / 任务详情回放 / 任务产物浏览");
                 continue;
             }
 
