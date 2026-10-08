@@ -383,7 +383,7 @@ public static class DashboardHost
                 return Results.BadRequest(new { error = "input 超过 2000 字符上限。" });
             if (o.CommandHub.Count >= 100)
                 return Results.Json(new { error = "命令通道已满（排队过多），稍后重试。" }, JsonOpts, statusCode: 429);
-            var seq = o.CommandHub.TrySubmit(input);
+            var seq = o.CommandHub.TrySubmit(input, "web");
             return Results.Accepted("/api/commands", new { queued = true, seq, pending = o.CommandHub.Count });
         });
 

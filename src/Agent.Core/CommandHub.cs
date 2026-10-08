@@ -8,8 +8,8 @@ namespace Agent.Core;
 /// </summary>
 public sealed class CommandHub
 {
-    /// <summary>队列条目：seq 提交序号（归属/位置）、Input（null = EOF/退出信号）、SubmittedAt 提交时间。</summary>
-    public readonly record struct QueuedCommand(int Seq, string? Input, DateTimeOffset SubmittedAt);
+    /// <summary>队列条目：seq 提交序号（归属/位置）、Input（null = EOF/退出信号）、SubmittedAt 提交时间、Source 来源（terminal/web）。</summary>
+    public readonly record struct QueuedCommand(int Seq, string? Input, DateTimeOffset SubmittedAt, string Source);
 
     private readonly object _lock = new();
     private readonly Queue<QueuedCommand> _queue = new();
@@ -18,14 +18,14 @@ public sealed class CommandHub
     private CancellationTokenSource? _taskCts;   // 当前任务的取消源（web 取消入口）
 
     /// <summary>提交一条命令（null = EOF，无头 stdin 关闭时由控制台线程写入）。有界 100：满时丢最旧（DropOldest）。返回 seq。</summary>
-    public int TrySubmit(string? command)
+    public int TrySubmit(string? command, string source = "terminal")
     {
         lock (_lock)
         {
             var seq = ++_nextSeq;
             if (_queue.Count >= 100)
                 _queue.Dequeue();   // 丢最旧（信号计数虚高由 NextAsync 空查循环容错，只多一次空唤醒）
-            _queue.Enqueue(new QueuedCommand(seq, command, DateTimeOffset.Now));
+            _queue.Enqueue(new QueuedCommand(seq, command, DateTimeOffset.Now, source));
             _signal.Release();
             return seq;
         }

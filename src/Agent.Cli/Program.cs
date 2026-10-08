@@ -428,6 +428,10 @@ internal class Program
                 if (next is null || next.Value.Input is null) { consoleReaderStopped = true; break; }
                 input = next.Value.Input;
                 currentSeq = next.Value.Seq;
+                // 【10-08】web 提交命令终端回显：终端输入由 ReadLine 天然回显（控制台回显键入）；
+                // web POST /api/commands 无回显 → 消费后补打一行（提示符 `> ` 已由后台线程打印，
+                // 正好连成 `> {input}`，CLI 端能看到任务内容，与交互态视觉一致）。
+                if (next.Value.Source == "web") Console.WriteLine(input);
             }
             // 【A-补强】统一剥离 BOM（U+FEFF）——PS 5.1 管道注入 UTF-8 BOM 到首行时
             // StartsWith("use ")/StartsWith("plan ") 等全部不命中、命令被当任务执行。

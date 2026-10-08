@@ -1,6 +1,7 @@
 # LocalAiWorkbench 项目交接文档
 
 > 撰写日期：2026-09-22（基于源码通读 + 真实构建验证 + workspace 运行数据核对）
+> **10-08 Web 提交任务 CLI 无回显修复：** web POST /api/commands 提交的任务在 CLI 端不显示任务内容（终端输入由 ReadLine 天然回显；web 注入走 CommandHub 无回显，直接跳 [工作目录] 开跑）。修复：QueuedCommand 增加 Source 字段（terminal/web，TrySubmit 可选参数向后兼容）；DashboardHost 提交标记 "web"；CLI 主循环消费时 if Source==web 补 Console.WriteLine(input)（提示符 `> ` 已由后台线程打印，连成 `> {任务内容}`，与交互态视觉一致）。terminal 来源不补打（ReadLine 已回显，防双重显示）。无头路径不走 hub，E2E 逐字节兼容不变。构建 0 错误 + tests 632/632。
 > **10-10 Web 页「加载中…」卡死修复（前端 JS SyntaxError）：** 上一轮改造 showTaskEvents 时替换边界未对齐，残留多余顶层 }，整个 <script> 块 SyntaxError → 全部 JS 失效（SSE/状态更新/卡片加载全挂），顶部状态栏永远停留在静态文本「加载中…」，CLI 本体不受影响。修复：删除多余 }；用 node --check 提取 script 块做语法门（一次通过）；新增防回归断言（顶层三连闭合模式「});
 }
 }

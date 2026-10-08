@@ -1,0 +1,11 @@
+Web 提交任务 CLI 补回显（Source 区分 terminal/web）
+
+问题：web POST /api/commands 提交的任务在 CLI 端不显示任务内容，
+  直接跳 [工作目录] 开跑（终端输入由 ReadLine 天然回显，web 注入无回显）
+修复：QueuedCommand 增加 Source 字段（terminal/web，TrySubmit 可选参数向后兼容）
+  DashboardHost 提交标记 "web"
+  CLI 主循环消费时 if Source==web 补 Console.WriteLine(input)——
+    提示符 `> ` 已由后台线程打印，连成 `> {任务内容}`，与交互态视觉一致
+  terminal 来源不补打（ReadLine 已回显，防双重显示）
+无头路径不走 hub，E2E 逐字节兼容不变
+构建 0 错误 + tests 632/632；HANDOVER 已同步

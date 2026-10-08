@@ -3027,11 +3027,16 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         var sa = cmdHub.TrySubmit("a");
         var sb = cmdHub.TrySubmit("b");
         Check("CommandHub seq 递增（web 提交归属标识）", sa == 1 && sb == 2);
+        Check("CommandHub Source 默认 terminal / web 显式（10-08 回显来源区分：web 提交需终端补回显，terminal 已由 ReadLine 回显）",
+            cmdHub.TrySubmit("w1", "web") == 3);
         var a = await cmdHub.NextAsync(CancellationToken.None);
         var b = await cmdHub.NextAsync(CancellationToken.None);
         Check("CommandHub FIFO：先提交先取回（终端输入与 web 提交同一队列）", a!.Value.Input == "a" && b!.Value.Input == "b");
         Check("CommandHub 条目含提交时间（/api/queue SubmittedAt 数据源）",
             a!.Value.SubmittedAt != default && b!.Value.SubmittedAt != default);
+        var w1 = await cmdHub.NextAsync(CancellationToken.None);
+        Check("CommandHub Source 透传 web（10-08：web 提交 → CLI 补回显的判定依据）",
+            w1!.Value.Input == "w1" && w1.Value.Source == "web");
         cmdHub.TrySubmit(null);
         Check("CommandHub EOF null 透传（无头 stdin 关闭 → 主循环退出）",
             (await cmdHub.NextAsync(CancellationToken.None))!.Value.Input is null);
