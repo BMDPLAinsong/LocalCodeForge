@@ -219,12 +219,25 @@ public static class DashboardHost
             return Results.Json(new { error = "路径不存在。" }, JsonOpts, statusCode: 404);
         });
 
-        // ── 任务详情回放：完整事件序列（10-07 UI 层 #1/#2）──
-        // 返回 StoredEvent 数组（payload 为 JSON 字符串，与 SSE 推送格式一致）——
-        // 前端 JSON.parse(payload) 后直接复用 renderEvent 渲染（单一渲染函数）。
-        // 无事件 → 空数组（200），前端显示"无事件记录"。
+        // ── 任务详情回放：完整事件序列（10-07 UI 层 #1/#2；10-10 P0 补 type）──
+        // P0 修复：AgentEvent 为 C# record，序列化无 type 判别字段——SSE/回放双出口统一补
+        // wire type 短名（源头隔离，前端单一渲染函数直接消费，消双路径漂移）。
+        // 返回平铺事件数组 [{type:"thinking"|"toolCall"|…, ...payload}]；无事件 → 空数组。
         app.MapGet("/api/tasks/{taskId}/events", (string taskId) =>
-            Results.Json(o.EventStore.GetEventsAsync(taskId), JsonOpts));
+        {
+            var list = o.EventStore.GetEventsAsync(taskId);
+            var arr = new System.Text.Json.Nodes.JsonArray();
+            foreach (var s in list)
+            {
+                var node = System.Text.Json.Nodes.JsonNode.Parse(s.Payload);
+                if (node is System.Text.Json.Nodes.JsonObject jo)
+                {
+                    jo.Insert(0, "type", WireType(s.Type));
+                    arr.Add(jo);
+                }
+            }
+            return Results.Json(arr, JsonOpts);
+        });
 
         // ── Diff：备份 vs 当前（直接序列化引擎模型，无 DTO）──
         app.MapGet("/api/diff", (string taskId, string rel, CancellationToken ct) =>
@@ -403,7 +416,8 @@ public static class DashboardHost
             {
                 await foreach (var evt in reader.ReadAllAsync(ct))
                 {
-                    var json = JsonSerializer.Serialize(evt, evt.GetType(), JsonOpts);
+                    // P0 修复：record 序列化无 type，此处补 wire type（与回放端点同一映射）
+                    var json = JsonSerializer.Serialize(ToWire(evt), JsonOpts);
                     await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
                     await ctx.Response.Body.FlushAsync(ct);
                 }
@@ -419,6 +433,36 @@ public static class DashboardHost
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
+
+    // ── P0 事件 wire type（10-10）：AgentEvent 是 record，JSON 无 type 判别字段；
+    //    SSE 与回放双出口用同一映射补短名（前端渲染单一入口消费）。
+    //    .NET 类名 → wire 短名；未知类名兜底原样（不吞）。
+    private static readonly Dictionary<string, string> WireTypeMap = new(StringComparer.Ordinal)
+    {
+        [nameof(Agent.Core.Models.AgentEvent.Thinking)] = "thinking",
+        [nameof(Agent.Core.Models.AgentEvent.ToolCall)] = "toolCall",
+        [nameof(Agent.Core.Models.AgentEvent.ToolResultEvent)] = "toolResultEvent",
+        [nameof(Agent.Core.Models.AgentEvent.FinalAnswer)] = "finalAnswer",
+        [nameof(Agent.Core.Models.AgentEvent.Error)] = "error",
+        [nameof(Agent.Core.Models.AgentEvent.Routing)] = "routing",
+        [nameof(Agent.Core.Models.AgentEvent.PlanGenerated)] = "planGenerated",
+        [nameof(Agent.Core.Models.AgentEvent.FileWritten)] = "fileWritten",
+    };
+    private static string WireType(string typeName) =>
+        WireTypeMap.TryGetValue(typeName, out var w) ? w : typeName;
+
+    private static object ToWire(Agent.Core.Models.AgentEvent evt) => evt switch
+    {
+        Agent.Core.Models.AgentEvent.Thinking e => new { type = "thinking", text = e.Text },
+        Agent.Core.Models.AgentEvent.ToolCall e => new { type = "toolCall", name = e.Name, args = e.Args },
+        Agent.Core.Models.AgentEvent.ToolResultEvent e => new { type = "toolResultEvent", name = e.Name, output = e.Output, success = e.Success },
+        Agent.Core.Models.AgentEvent.FinalAnswer e => new { type = "finalAnswer", text = e.Text },
+        Agent.Core.Models.AgentEvent.Error e => new { type = "error", message = e.Message },
+        Agent.Core.Models.AgentEvent.Routing e => new { type = "routing", serviceId = e.ServiceId, tier = e.Tier, reason = e.Reason, intent = e.Intent },
+        Agent.Core.Models.AgentEvent.PlanGenerated e => new { type = "planGenerated", summary = e.Summary, language = e.Language, filePaths = e.FilePaths },
+        Agent.Core.Models.AgentEvent.FileWritten e => new { type = "fileWritten", path = e.Path, size = e.Size },
+        _ => new { type = WireType(evt.GetType().Name) },
+    };
 
     private sealed record EpochBreakdown(
         Agent.Infrastructure.Routing.ServiceStats Current,

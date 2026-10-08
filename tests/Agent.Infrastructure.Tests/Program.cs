@@ -3126,8 +3126,8 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             rbExec.StatusCode == System.Net.HttpStatusCode.BadRequest);
 
         var evts = await http.GetStringAsync("api/tasks/hist1/events");
-        Check("GET /api/tasks/{id}/events 200 + 事件数组（payload 为 JSON 字符串）",
-            evts.StartsWith("[") && evts.Contains("\"type\":\"Thinking\"") && evts.Contains("boom"));
+        Check("GET /api/tasks/{id}/events 200 + 平铺事件（后端补 type 短名，10-10 P0）",
+            evts.StartsWith("[") && evts.Contains("\"type\":\"thinking\"") && evts.Contains("boom"));
         var noEvts = await http.GetStringAsync("api/tasks/none/events");
         Check("GET /api/tasks/{id}/events 无事件 → 空数组", noEvts == "[]");
         var noDeps = await http.GetAsync("api/deps");

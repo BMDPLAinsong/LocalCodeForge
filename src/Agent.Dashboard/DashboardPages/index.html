@@ -30,9 +30,15 @@
   .card.collapsible > h2 .chev { color:var(--blue); font-size:11px; transition:transform .15s; }
   .card.collapsible > h2 .sp { flex:1; }
   .card.collapsible > h2 .h2btns { font-weight:400; display:inline-flex; gap:6px; align-items:center; }
+  .badge { background:#21262d; color:var(--dim); border:1px solid var(--border); border-radius:10px;
+           font-size:11px; font-weight:600; padding:1px 8px; margin-left:8px; white-space:nowrap; }
+  .badge.hot { color:var(--green); border-color:var(--green); }
   .cbody { display:none; }
   .card.collapsible.open > .cbody { display:block; }
   .card.collapsible.open > h2 .chev { transform:rotate(90deg); }
+  /* 命令条吸顶（10-10 P1）：任务执行中命令入口随时可及 */
+  #cmdBar { position:sticky; top:0; z-index:50; background:var(--panel);
+            margin:6px 0 10px; padding:6px 0; border-bottom:1px solid var(--border); }
   /* 双栏容器：左侧主工作区 / 右侧信息区 */
   .colL { display:flex; flex-direction:column; gap:12px; min-width:0; }
   .colR { display:flex; flex-direction:column; gap:12px; min-width:0; }
@@ -147,13 +153,13 @@
              style="flex:1;background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:13px" />
       <button class="btn primary" id="cmdSend">提交</button>
       <button class="btn danger" id="cmdCancel" title="取消当前正在执行的任务（与终端 q 键同一机制）">取消任务</button>
+      <span id="cmdHint" class="dim" style="font-size:12px;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
       <span id="queueStatus" class="dim" style="font-size:12px"></span>
     </div>
     <div style="display:flex;gap:8px;margin:0 0 8px;align-items:center">
       <input id="evFilter" type="text" placeholder="过滤事件（关键词，本地）"
              style="flex:1;max-width:260px;background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:2px 8px;font-size:12px" />
       <button class="btn" id="evClear" title="清空当前事件显示（缓存同时清空）">清空</button>
-      <span id="cmdHint" class="dim" style="font-size:12px"></span>
     </div>
     <div id="events"><div class="empty">等待任务事件…（dashboard 不阻塞 CLI，任务照常执行）</div></div>
   </div>
@@ -186,22 +192,22 @@
 
   <div class="colR">
   <div class="card collapsible" data-load="stats">
-    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>统计（/api/stats）<span class="sp"></span></h2>
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>统计（/api/stats）<span class="sp"></span><span class="badge" id="badgeStats"></span></h2>
     <div class="cbody"><div id="stats"><div class="empty">加载中…</div></div></div>
   </div>
 
   <div class="card collapsible" data-load="tuning">
-    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>路由调权状态（/api/tuning）<span class="sp"></span></h2>
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>路由调权状态（/api/tuning）<span class="sp"></span><span class="badge" id="badgeTuning"></span></h2>
     <div class="cbody"><div id="tuning"><div class="empty">加载中…</div></div></div>
   </div>
 
   <div class="card collapsible" data-load="memory">
-    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>记忆（/api/memory）<span class="sp"></span></h2>
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>记忆（/api/memory）<span class="sp"></span><span class="badge" id="badgeMemory"></span></h2>
     <div class="cbody"><div id="memory"><div class="empty">加载中…</div></div></div>
   </div>
 
   <div class="card collapsible" data-load="tasks">
-    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>历史任务（/api/tasks · 最近 50）<span class="sp"></span></h2>
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>历史任务（/api/tasks · 最近 50）<span class="sp"></span><span class="badge" id="badgeTasks"></span></h2>
     <div class="cbody"><div id="tasks"><div class="empty">加载中…</div></div></div>
   </div>
 
@@ -212,7 +218,7 @@
 
   <div class="card collapsible" data-load="backups">
     <h2 onclick="toggleCard(this)"><span class="chev">▸</span>工程备份与 Diff（/api/backups + /api/diff）
-      <span class="sp"></span>
+      <span class="sp"></span><span class="badge" id="badgeBackups"></span>
       <span class="h2btns"><button class="btn" id="diffClear" onclick="event.stopPropagation()" title="清空 Diff 区">清空</button></span>
     </h2>
     <div class="cbody">
@@ -444,8 +450,8 @@ async function showTaskEvents(taskId) {
   const list = await r.json();
   if (!list.length) { box.innerHTML = `<div class="empty">任务 ${esc(taskId)} 无事件记录（事件持久化从 10-07 起生效）</div>`; return; }
   let firstErr = null;
-  for (const st of list) {
-    let evt; try { evt = JSON.parse(st.payload); } catch { continue; }
+  // 10-10 P0：回放端点已补 type 短名，事件为平铺对象（不再 JSON.parse(payload)）
+  for (const evt of list) {
     const div = appendEventLine(box, evt, false);
     if (evt.type === "error" && !firstErr) { firstErr = div; div.classList.add("bad"); }
   }
@@ -483,6 +489,7 @@ async function fetchStats() {
                <div class="bar"><i class="b-red" style="width:${(f.count / max * 100).toFixed(0)}%"></i></div>`;
   }
   $("stats").innerHTML = html;
+  badge("badgeStats", `${s.totalCount} · ${(s.successRate * 100).toFixed(0)}%`, s.successRate >= 0.8);
 }
 
 // ── 历史任务 ──
@@ -500,6 +507,7 @@ async function fetchTasks() {
              <td>${fmtMs(t.totalMs)}</td><td class="inp" title="${esc(t.userInput)}">${esc(cut(t.userInput, 60))}</td></tr>`;
   }
   $("tasks").innerHTML = html + "</tbody></table>";
+  badge("badgeTasks", `${list.length} 条`);
   if (lastDetailTaskId) {
     document.querySelectorAll("#tasksBody tr.sel").forEach(r => r.classList.remove("sel"));
     const row = document.querySelector(`#tasksBody tr[onclick*="${lastDetailTaskId}"]`);
@@ -521,6 +529,8 @@ async function fetchTuning() {
   html += `<div class="statrow"><span>P2 Complex 降级 large</span><span>样本 ${cd.sampleCount} · 成功率 ${pct(cd.successRate)} / 阈值 ${pct(cd.threshold)} → ${tag(cd.triggered)} ${esc(cd.reason)}</span></div>`;
   html += `<div class="statrow" style="color:var(--dim)"><span>阈值来源</span><span>AgentOptions.Routing* 配置${d.epoch ? " · 样本仅统计 law-unified 30B 时代" : ""}</span></div>`;
   $("tuning").innerHTML = html;
+  const acts = [w.triggered ? "写降级" : null, rd.triggered ? "读升级" : null, cd.triggered ? "复杂降级" : null].filter(Boolean);
+  badge("badgeTuning", acts.length ? acts.join("/") : "稳态");
 }
 
 // ── 记忆（10-07：agent_memory.db 列表 + 统计）──
@@ -535,6 +545,7 @@ async function fetchMemory() {
   for (const m of d.rows)
     html += `<tr><td>${m.id}</td><td>${esc(m.kind)}</td><td>${m.hitCount}</td><td>${m.count}</td><td class="inp" title="${esc(m.topic)}">${esc(cut(m.topic, 50))}</td></tr>`;
   $("memory").innerHTML = html + "</tbody></table>";
+  badge("badgeMemory", `${s.total} 条`);
 }
 
 // ── 备份 + Diff ──
@@ -544,6 +555,8 @@ async function fetchBackups() {
   if (!r.ok) { $("backups").innerHTML = `<div class="empty">backups 不可用（${r.status}）</div>`; return; }
   backups = await r.json();
   if (!backups.length) { $("backups").innerHTML = `<div class="empty">暂无工程备份（工程模式改动文件后出现）</div>`; return; }
+  // P2 空状态清理：刷新备份列表时 diff 区回到引导态（不留旧 diff 残留）
+  $("diff").innerHTML = `<div class="empty">点击备份文件查看改动差异（红 = 删除，绿 = 新增）</div>`;
   const byTask = {};
   for (const b of backups) (byTask[b.taskId] = byTask[b.taskId] || []).push(b);
   let html = "";
@@ -556,6 +569,7 @@ async function fetchBackups() {
     html += `</div>`;
   }
   $("backups").innerHTML = html;
+  badge("badgeBackups", `${backups.length} 条`);
 }
 // ── Web 端回滚（10-10）：两步确认——dry-run 预览（不执行）→ 确认执行（有风险操作）──
 async function rollbackPreview(taskId) {
@@ -623,7 +637,18 @@ async function showDiff(taskId, rel) {
   $("diff").innerHTML = html;
 }
 
-function refreshAll() { fetchStats(); fetchTasks(); fetchBackups(); fetchTuning(); fetchMemory(); }
+function refreshAll() {
+  fetchStats(); fetchTasks(); fetchBackups(); fetchTuning(); fetchMemory();
+  // 预加载即视为已加载：展开卡片直接显示，不再重复请求（懒加载分支留给异常路径）
+  document.querySelectorAll(".card.collapsible[data-load]").forEach(c => c.dataset.loaded = "1");
+}
+// 折叠卡片标题预览数字（10-10 P1）：各 fetch 成功后更新
+function badge(id, text, hot) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle("hot", !!hot);
+}
 
 // ── 全局 toast 反馈（10-10 UI 优化）：提交/取消/回滚等操作的统一醒目标识 ──
 function toast(msg, kind = "info") {
@@ -812,6 +837,7 @@ function toggleCard(h2) {
 }
 
 openStream();
+refreshAll();
 </script>
 </body>
 </html>
