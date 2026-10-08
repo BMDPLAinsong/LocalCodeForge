@@ -50,6 +50,9 @@ public sealed class AgentLoop : IAgentLoop
     private string? _writeTarget;
     private bool _writeTargetIsFile;
 
+    // 【10-08 内容符合性】本轮成功写过的文件路径列表（完成门 D 判定输入：修改内容须含需求 token）。
+    private readonly List<string> _writtenFiles = new();
+
     public AgentLoop(
         Kernel kernel,
         IToolRegistry tools,
@@ -413,7 +416,16 @@ public sealed class AgentLoop : IAgentLoop
 
                     // 【H2】写/改文件成功 → 记录；run_command 结果 → 记录最近验证状态
                     if (ok && (cleanName is "write_file" or "edit_file" or "append_file"))
+                    {
                         _everWroteFile = true;
+                        // 【10-08 内容符合性】记录写过的文件路径（完成门 D 检查对象）
+                        if (argsJson.TryGetProperty("path", out var p) &&
+                            p.ValueKind == System.Text.Json.JsonValueKind.String &&
+                            !string.IsNullOrWhiteSpace(p.GetString()))
+                        {
+                            _writtenFiles.Add(p.GetString()!);
+                        }
+                    }
                     // 【批次1·C】写工具被拒 → 记录（完成门判"被拒未重试 → 失败"）
                     if (!ok && (cleanName is "write_file" or "edit_file" or "append_file" or "create_dir"))
                         _writeRejected = true;
@@ -443,7 +455,9 @@ public sealed class AgentLoop : IAgentLoop
                                 wroteAny: _everWroteFile,
                                 writeRejected: _writeRejected,
                                 target: _writeTarget,
-                                targetIsFile: _writeTargetIsFile);
+                                targetIsFile: _writeTargetIsFile,
+                                requirementTokens: Project.ContentConformance.ExtractRequirementTokens(request.Input),
+                                writtenFiles: _writtenFiles);
                             if (fuseGate is not null)
                             {
                                 _logger.LogWarning("[完成门·熔断] {Message}", fuseGate.message);
@@ -875,7 +889,9 @@ public sealed class AgentLoop : IAgentLoop
                 wroteAny: _everWroteFile,
                 writeRejected: _writeRejected,
                 target: _writeTarget,
-                targetIsFile: _writeTargetIsFile);
+                targetIsFile: _writeTargetIsFile,
+                requirementTokens: Project.ContentConformance.ExtractRequirementTokens(request.Input),
+                writtenFiles: _writtenFiles);
             if (gateVerdict is not null)
             {
                 await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", text), ct);
@@ -898,7 +914,9 @@ public sealed class AgentLoop : IAgentLoop
             wroteAny: _everWroteFile,
             writeRejected: _writeRejected,
             target: _writeTarget,
-            targetIsFile: _writeTargetIsFile);
+            targetIsFile: _writeTargetIsFile,
+            requirementTokens: Project.ContentConformance.ExtractRequirementTokens(request.Input),
+            writtenFiles: _writtenFiles);
         if (maxGate is not null)
         {
             _logger.LogWarning("[完成门·最大步数] {Message}", maxGate.message);

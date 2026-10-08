@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace Agent.Infrastructure.Project;
 
@@ -19,13 +21,17 @@ public static class CompletionGate
     /// <param name="writeRejected">本轮写工具是否被拒过（越界/敏感/只读/项目文件/类型冲突等）。</param>
     /// <param name="target">提取到的显式写目标（TryGetWriteTarget 输出；无目标为 null）。</param>
     /// <param name="targetIsFile">目标是否为文件级（目录级按 Directory.Exists 验证）。</param>
+    /// <param name="requirementTokens">需求内容 token（ContentConformance.ExtractRequirementTokens；空集跳过 D 门）。</param>
+    /// <param name="writtenFiles">本轮成功写过的文件路径列表（内容符合性检查对象）。</param>
     /// <returns>不阻断返回 null；阻断返回 (shouldFail, message, isSuspicious)。</returns>
     public static CompletionVerdict? Evaluate(
         bool isWriteTask,
         bool wroteAny,
         bool writeRejected,
         string? target,
-        bool targetIsFile)
+        bool targetIsFile,
+        IReadOnlyList<string>? requirementTokens = null,
+        IReadOnlyList<string>? writtenFiles = null)
     {
         // 非写任务不过门（读任务/设计问答正常收尾）
         if (!isWriteTask) return null;
@@ -48,6 +54,26 @@ public static class CompletionGate
                 return new CompletionVerdict(
                     shouldFail: true,
                     message: $"任务要求写入 {target}，但该目标不存在（本轮写入位置与用户指定不符）。",
+                    isSuspicious: true);
+            }
+        }
+
+        // D：内容符合性门（2026-10-08 验证层补洞）
+        // 任务输入含"用户显式要求写入的文本"（引号/反引号包裹）且本轮写过文件时，
+        // 修改后的文件必须包含该内容——否则"编译通过"也会假成功（BigService 实证：
+        // 模型把 x + 1500 改成 x + 15000 且漏加 // 已审查，dotnet run 通过被放行）。
+        // 无需求 token / 未写文件 → 跳过（不误伤普通生成任务）。
+        if (requirementTokens is { Count: > 0 } && writtenFiles is { Count: > 0 })
+        {
+            var anyHit = writtenFiles.Any(f => ContentConformance.FileContainsTokens(f, requirementTokens));
+            if (!anyHit)
+            {
+                var sample = requirementTokens.Count > 1
+                    ? string.Join(" / ", requirementTokens)
+                    : requirementTokens[0];
+                return new CompletionVerdict(
+                    shouldFail: true,
+                    message: $"任务要求文件中包含内容「{sample}」，但本轮写过的文件均未包含（修改内容与需求不符）。请用 edit_file 精确修改后再验证。",
                     isSuspicious: true);
             }
         }

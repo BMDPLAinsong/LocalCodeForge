@@ -2568,6 +2568,75 @@ Console.WriteLine("== 批次1：完成门（CompletionGate） ==");
     Directory.Delete(baseTmp, true);
 }
 
+Console.WriteLine("== 10-08 内容符合性（ContentConformance + 完成门 D） ==");
+{
+    // ① token 提取：加注释任务（无引号，注释形态）→ 提取 "// 已审查"（归一化 "已审查"）
+    var t1 = Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokens(
+        "在 BigService.cs 的 Method1500 方法里加一行注释 // 已审查");
+    Check("提取：注释形态任务 → 命中注释内容",
+        t1.Count == 1 && t1[0] == "已审查");
+    // ①b 提取：URL 不误提取（// 在 https:// 里）
+    var t1b = Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokens(
+        "参考 https://example.com/docs 实现功能");
+    Check("提取：URL 中的 // 不误提取",
+        t1b.Count == 0);
+    // ①c 提取：C# 语言名不误提取（# 前是字母 → 非注释）
+    var t1c = Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokens(
+        "用 C# 写一个判断奇数偶数函数");
+    Check("提取：C# 语言名不误提取",
+        t1c.Count == 0);
+    // ② token 提取：中文引号 + 多 token
+    var t2 = Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokens(
+        "把标题改成 “欢迎” 并加上 “2026”");
+    Check("提取：中文引号多 token",
+        t2.Count == 2 && t2.Contains("欢迎") && t2.Contains("2026"));
+    // ③ token 提取：无引号 → 跳过（不误伤普通生成任务）
+    var t3 = Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokens(
+        "写一个 Python 计算器方法");
+    Check("提取：无引号 → 空集（不误伤）",
+        t3.Count == 0);
+    // ④ token 提取：文件名形态过滤（BigService.cs 是目标不是内容）
+    var t4 = Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokens(
+        "把内容改成 BigService.cs 里的 “已审查”");
+    Check("提取：文件名形态被过滤 + 引号内容保留",
+        t4.Count == 1 && t4[0] == "已审查" && !t4.Contains("bigservice cs"));
+    // ⑤ 包含检查：文件含 token → true
+    var dirD = Path.Combine(TestTmp, "tests_d_gate");
+    if (Directory.Exists(dirD)) Directory.Delete(dirD, true);
+    Directory.CreateDirectory(dirD);
+    var okFile = Path.Combine(dirD, "BigService.cs");
+    File.WriteAllText(okFile, "public int Method1500(int x) { return x + 1500; } // 已审查\n");
+    Check("包含：文件含需求内容 → true",
+        Agent.Infrastructure.Project.ContentConformance.FileContainsTokens(okFile, new[] { "已审查" }));
+    // ⑥ 包含检查：缺 token（改错/漏注释场景）→ false
+    var badFile = Path.Combine(dirD, "BigService_bad.cs");
+    File.WriteAllText(badFile, "public int Method1500(int x) { return x + 15000; }\n");
+    Check("包含：文件缺需求内容（改错漏注释）→ false",
+        !Agent.Infrastructure.Project.ContentConformance.FileContainsTokens(badFile, new[] { "已审查" }));
+    // ⑦ 完成门 D：写了文件但不含需求 token → 拦截
+    var dMiss = Agent.Infrastructure.Project.CompletionGate.Evaluate(
+        true, true, false, Path.GetFullPath(badFile), true,
+        requirementTokens: new[] { "已审查" }, writtenFiles: new[] { badFile });
+    Check("完成门 D：修改内容不含需求 → 判失败+可疑",
+        dMiss is not null && dMiss.shouldFail && dMiss.isSuspicious && dMiss.message.Contains("已审查"));
+    // ⑧ 完成门 D：文件含需求 token → 放行
+    Check("完成门 D：修改内容含需求 → 放行",
+        Agent.Infrastructure.Project.CompletionGate.Evaluate(
+            true, true, false, Path.GetFullPath(okFile), true,
+            requirementTokens: new[] { "已审查" }, writtenFiles: new[] { okFile }) is null);
+    // ⑨ 完成门 D：无需求 token → 跳过（不误伤）
+    Check("完成门 D：无需求 token → 放行",
+        Agent.Infrastructure.Project.CompletionGate.Evaluate(
+            true, true, false, Path.GetFullPath(okFile), true,
+            requirementTokens: Array.Empty<string>(), writtenFiles: new[] { badFile }) is null);
+    // ⑩ 归一化：文件含 "// 已审查" 匹配 token "已审查"（符号折叠）
+    Check("完成门 D：归一化匹配（注释符号折叠）→ 放行",
+        Agent.Infrastructure.Project.CompletionGate.Evaluate(
+            true, true, false, Path.GetFullPath(okFile), true,
+            requirementTokens: new[] { "已审查" }, writtenFiles: new[] { okFile }) is null);
+    Directory.Delete(dirD, true);
+}
+
 Console.WriteLine("== 批次1：显式写授权（explicitWriteRoots）+ 敏感兜底 ==");
 {
     var baseTmp = Path.Combine(TestTmp, "tests_b1_auth");

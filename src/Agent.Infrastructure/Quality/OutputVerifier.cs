@@ -351,8 +351,8 @@ public static class OutputVerifier
         return false;
     }
 
-    /// <summary>归一化：小写 + 非字母数字折叠为空白 + 折叠连续空白。中文保留。</summary>
-    private static string NormalizeForMatch(string s)
+    /// <summary>归一化：小写 + 非字母数字折叠为空白 + 折叠连续空白。中文保留。供文件内容符合性检查复用。</summary>
+    public static string NormalizeForMatch(string s)
     {
         if (string.IsNullOrEmpty(s))
             return string.Empty;
