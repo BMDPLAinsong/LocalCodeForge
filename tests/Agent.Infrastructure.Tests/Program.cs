@@ -3127,6 +3127,8 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             && page.Contains("function buildUnits") && page.Contains("function renderPair")
             && page.Contains("className = \"toolpair\"") && page.Contains("collapsedPairs")
             && page.Contains("function togglePair") && page.Contains("onclick=\"expandMd(this)\""));
+        Check("前端 JS 顶层闭合无漂移（10-10 修复：showTaskEvents 残留多余 } 导致 script SyntaxError，整页 JS 失效卡'加载中…'）——防替换边界错位再犯",
+            !page.Contains("});\n}\n}\n// ── stats ──"));
         var stats = await http.GetStringAsync("api/stats");
         Check("GET /api/stats 200 + JSON 结构", stats.Contains("\"summary\"") && stats.Contains("totalCount"));
         var tasks = await http.GetStringAsync("api/tasks?take=3");
