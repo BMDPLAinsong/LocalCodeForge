@@ -218,7 +218,7 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    /// <summary>失败类别分布（成功任务不统计，供 stats 面板 / 3B 按类别调权）。</summary>
+    /// <summary>失败类别分布（成功任务不统计；E2E 用例单列剔除——与 GetSummaryAsync 口径一致，防污染调权数据）。</summary>
     public async Task<IReadOnlyList<(string Category, int Count)>> GetFailureBreakdownAsync(CancellationToken ct)
     {
         var list = new List<(string, int)>();
@@ -230,6 +230,7 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
             SELECT failure_category, COUNT(*)
             FROM task_metrics
             WHERE success = 0
+              AND is_e2e = 0
             GROUP BY failure_category
             ORDER BY COUNT(*) DESC
             """;

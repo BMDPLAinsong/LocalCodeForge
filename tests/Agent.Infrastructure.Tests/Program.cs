@@ -1250,6 +1250,31 @@ Console.WriteLine("== 3 FailureCategorizer 失败类别归类 ==");
     var e2eFail = e2eMetrics.GetRecentFailuresAsync(10, ctNone3).Result;
     Check("E2E 治理：GetRecentFailuresAsync 过滤 E2E（E2E 故意失败不计入）", e2eFail.Count == 0);
 
+    // 【10-10 失败类别统计补洞】GetFailureBreakdownAsync 此前漏 is_e2e=0 过滤，
+    // 导致 compile_error/validator_failed 被 E2E 用例严重污染（实测 21→2、19→0）。
+    // 同库并存真实失败 + 2 条 E2E 失败，断言失败类别只统计真实记录。
+    e2eMetrics.RecordAsync(new Agent.Core.Models.TaskMetric
+    {
+        TaskId = "e2e_fail_cs", SessionId = "s1", UserInput = "E2E 用例", Mode = "agent",
+        RoutingTier = "Rule", ServiceId = "small", RoutingReason = "test",
+        Success = false, IsSuspicious = false, IsE2E = true, RetryCount = 0,
+        TotalMs = 10, PlannerMs = 0, ExecutorMs = 0, ValidatorMs = 0,
+        LintBlockingErrors = 0, LintWarningErrors = 0,
+        ErrorSummary = "error CS0101: E2E 重复定义", StartedAt = e2eNow, FinishedAt = e2eNow
+    }, ctNone3).Wait();
+    e2eMetrics.RecordAsync(new Agent.Core.Models.TaskMetric
+    {
+        TaskId = "real_fail_1", SessionId = "s1", UserInput = "真实任务", Mode = "agent",
+        RoutingTier = "Rule", ServiceId = "small", RoutingReason = "test",
+        Success = false, IsSuspicious = false, IsE2E = false, RetryCount = 0,
+        TotalMs = 20, PlannerMs = 0, ExecutorMs = 0, ValidatorMs = 0,
+        LintBlockingErrors = 0, LintWarningErrors = 0,
+        ErrorSummary = "error CS0201: 真实类型冲突", StartedAt = e2eNow, FinishedAt = e2eNow
+    }, ctNone3).Wait();
+    var e2eFb = e2eMetrics.GetFailureBreakdownAsync(ctNone3).Result;
+    Check("失败类别统计排除 E2E：仅 1 条真实 compile_error（2 条 E2E 失败不计入）",
+        e2eFb.Count == 1 && e2eFb[0].Category == "compile_error" && e2eFb[0].Count == 1);
+
     // 批次3·C 父失败回填：顶层失败 → Executor 子记录成功回填为失败
     var bfMetrics = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(
         Path.Combine(fcDir, "backfill.db"));
