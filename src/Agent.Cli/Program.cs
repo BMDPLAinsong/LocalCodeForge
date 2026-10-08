@@ -391,10 +391,13 @@ internal class Program
             }
         }
 
-        // ═══════════ 输入通道化（10-07 webUI 交互）：终端输入与 Dashboard POST /api/commands
+        // 输入通道化（10-07 webUI 交互）：终端输入与 Dashboard POST /api/commands
         // 统一汇入 CommandHub，主循环一次消费一条（一次一任务串行语义不变）。
         // 交互态：控制台后台线程负责行编辑（Tab/↑↓/历史）并写入通道；web 提交也写入同一通道——
         // 主循环阻塞在 NextAsync 时 web 命令即时响应（用户无需碰终端）。
+        // 【10-08】提示符统一由主循环打印（空闲等待 NextAsync 前）：任务完成后必然出现新 `> `；
+        //   后台线程不再自打 prompt（终端输入回显由控制台层负责，ReadLine 会回显键入字符）。
+        //   修复：web 提交任务完成后无提示符（旧实现后台线程阻塞在 ReadLine，无人补 prompt）。
         // 无头（管道/重定向）：保持原同步读-执行循环（逐字节兼容 E2E）。
         var consoleReaderStopped = false;
         if (!Console.IsInputRedirected && !Console.IsOutputRedirected)
@@ -403,7 +406,6 @@ internal class Program
             {
                 while (!consoleReaderStopped)
                 {
-                    renderer.Prompt();
                     var line = ReadLineWithTabCompletion();
                     if (line is null) { commandHub.TrySubmit(null); break; }   // stdin EOF
                     commandHub.TrySubmit(line);
@@ -423,13 +425,15 @@ internal class Program
             }
             else
             {
-                // 交互态：从通道取（终端输入 / web 提交先到先执行）；null/EOF = 退出
+                // 交互态：空闲等待前打提示符（统一来源——任务完成后总显示 `> `，可继续输入）；
+                // 终端输入回显由控制台层负责。null/EOF = 退出
+                renderer.Prompt();
                 var next = await commandHub.NextAsync(CancellationToken.None);
                 if (next is null || next.Value.Input is null) { consoleReaderStopped = true; break; }
                 input = next.Value.Input;
                 currentSeq = next.Value.Seq;
                 // 【10-08】web 提交命令终端回显：终端输入由 ReadLine 天然回显（控制台回显键入）；
-                // web POST /api/commands 无回显 → 消费后补打一行（提示符 `> ` 已由后台线程打印，
+                // web POST /api/commands 无回显 → 消费后补打一行（提示符 `> ` 已由主循环打印，
                 // 正好连成 `> {input}`，CLI 端能看到任务内容，与交互态视觉一致）。
                 if (next.Value.Source == "web") Console.WriteLine(input);
             }

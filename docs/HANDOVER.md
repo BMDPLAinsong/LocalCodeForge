@@ -1,6 +1,7 @@
 # LocalAiWorkbench 项目交接文档
 
 > 撰写日期：2026-09-22（基于源码通读 + 真实构建验证 + workspace 运行数据核对）
+> **10-08 任务完成后无提示符修复（prompt 统一主循环）：** web 提交任务完成后终端不显示新 `> `，看似无法开展下一次任务。根因：交互态 prompt 由后台线程在 ReadLine 前打印，任务执行期间后台线程阻塞在 ReadLine（web 场景用户不碰终端）→ 任务完成后无人补 prompt（终端输入场景 ReadLine 返回后下一轮会打，故此前无感）。修复：prompt 统一由主循环打印（空闲等待 NextAsync 前）——任务完成后必然出现新 `> `；后台线程不再自打 prompt（终端输入回显由控制台层负责，ReadLine 会回显键入字符；ReadLineWithTabCompletion 内部本就不打 prompt，Enter 仅 WriteLine 结束行、Tab 分支重绘——无双 prompt 风险）。无头路径不走 hub 保持同步读-执行，E2E 逐字节兼容。构建 0 错误 + tests 632/632。
 > **10-08 Web 提交任务 CLI 无回显修复：** web POST /api/commands 提交的任务在 CLI 端不显示任务内容（终端输入由 ReadLine 天然回显；web 注入走 CommandHub 无回显，直接跳 [工作目录] 开跑）。修复：QueuedCommand 增加 Source 字段（terminal/web，TrySubmit 可选参数向后兼容）；DashboardHost 提交标记 "web"；CLI 主循环消费时 if Source==web 补 Console.WriteLine(input)（提示符 `> ` 已由后台线程打印，连成 `> {任务内容}`，与交互态视觉一致）。terminal 来源不补打（ReadLine 已回显，防双重显示）。无头路径不走 hub，E2E 逐字节兼容不变。构建 0 错误 + tests 632/632。
 > **10-10 Web 页「加载中…」卡死修复（前端 JS SyntaxError）：** 上一轮改造 showTaskEvents 时替换边界未对齐，残留多余顶层 }，整个 <script> 块 SyntaxError → 全部 JS 失效（SSE/状态更新/卡片加载全挂），顶部状态栏永远停留在静态文本「加载中…」，CLI 本体不受影响。修复：删除多余 }；用 node --check 提取 script 块做语法门（一次通过）；新增防回归断言（顶层三连闭合模式「});
 }
