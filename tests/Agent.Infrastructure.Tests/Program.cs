@@ -1032,6 +1032,24 @@ Console.WriteLine("== 3A RoutingDecisionStore 路由决策落库 ==");
     using var rdReader = rdCmd.ExecuteReader();
     var truncated = rdReader.Read();
     Check("落库：超长输入截断到 200", truncated && rdReader.GetString(0).Length == 200);
+
+    // 【10-10 真实口径下沉】路由决策 E2E 源头隔离：ModelRouter 判定开关（RecordDecisionAsync 的唯一守卫，
+    // E2E 物理上不落库 → 未来 3B 调权按特征类/服务分布时不会踩 E2E 污染坑；orchestrator 任务本就不经
+    // ModelRouter，决策表仅 agent 模式任务产生记录）。
+    var rdEnvBefore = Environment.GetEnvironmentVariable("LAW_E2E");
+    try
+    {
+        Environment.SetEnvironmentVariable("LAW_E2E", "1");
+        Check("路由决策守卫：LAW_E2E=1 → 判定 E2E 运行（跳过落库）",
+            Agent.Infrastructure.Routing.ModelRouter.IsE2ERun);
+        Environment.SetEnvironmentVariable("LAW_E2E", null);
+        Check("路由决策守卫：LAW_E2E 清除 → 判定非 E2E（正常落库）",
+            !Agent.Infrastructure.Routing.ModelRouter.IsE2ERun);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("LAW_E2E", rdEnvBefore);
+    }
 }
 
 // ── C：ToolRejectionStore 工具拒绝事件落库 ──

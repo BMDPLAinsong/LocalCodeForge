@@ -58,9 +58,20 @@ public sealed class ModelRouter : IModelRouter
             : await _metrics.GetServiceStatsAsync(serviceId, routingTier, take, ct);
     }
 
+    /// <summary>E2E 冒烟运行判定（LAW_E2E=1）。路由决策落库守卫的唯一逻辑源，
+    /// public static 供 tests 行为验证（见 3A 块"路由决策 E2E 源头隔离"）。</summary>
+    public static bool IsE2ERun =>
+        string.Equals(Environment.GetEnvironmentVariable("LAW_E2E"), "1", StringComparison.Ordinal);
+
     /// <summary>路由决策落库（fail-safe：记录失败不影响主流程）。</summary>
     private async Task RecordDecisionAsync(RoutingDecision d, string input, CancellationToken ct)
     {
+        // 【10-10 真实口径下沉】E2E 冒烟用例不产生路由决策记录（与 AgentLoopMetricsDecorator /
+        // OrchestratorMetricsDecorator 同款 LAW_E2E 环境变量标记）。routing_decisions 无 is_e2e 列、
+        // 属行为观测表——源头隔离：E2E 物理上不落库，防未来 3B 调权（按特征类/服务分布）踩 E2E 污染坑。
+        if (IsE2ERun)
+            return;
+
         try
         {
             await _decisions.RecordAsync(d, input, sessionId: null, ct);
