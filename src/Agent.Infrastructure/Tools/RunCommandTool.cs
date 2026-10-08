@@ -38,8 +38,19 @@ public sealed class RunCommandTool : AgentToolBase
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
     }
 
-    /// <summary>当前超时秒数（工程模式放宽，防编译/测试被 30s 误杀）。</summary>
-    private int TimeoutSeconds => _projectRoot is not null ? TimeoutSecondsProject : TimeoutSecondsSandbox;
+    /// <summary>
+    /// 解析命令超时秒数（10-08 B）：工程模式 90s；沙箱模式仅 dotnet 验证命令放宽到 90s——
+    /// 实证：倒计时任务 dotnet run 冷编译（restore+build+run）在 30B 推理占 CPU 下 >30s 卡线、两次必败；
+    /// 其余命令保持 30s（交互/死循环快速失败，不拖慢失败反馈）。
+    /// </summary>
+    public static int ResolveTimeoutSeconds(string? projectRoot, string command)
+    {
+        if (!string.IsNullOrWhiteSpace(projectRoot)) return TimeoutSecondsProject;
+        var head = (command ?? "").TrimStart();
+        if (head.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+            || head.StartsWith("dotnet ", StringComparison.OrdinalIgnoreCase)) return TimeoutSecondsProject;
+        return TimeoutSecondsSandbox;
+    }
 
     /// <summary>工具名。</summary>
     public override string Name => "run_command";
@@ -152,7 +163,8 @@ public sealed class RunCommandTool : AgentToolBase
 
         // 用 Task.WhenAny 实现超时
         var waitTask = process.WaitForExitAsync(ct);
-        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(TimeoutSeconds), ct);
+        var timeoutSeconds = ResolveTimeoutSeconds(_projectRoot, command);
+        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(timeoutSeconds), ct);
 
         // 哪个先完成
         var completed = await Task.WhenAny(waitTask, timeoutTask);
@@ -163,7 +175,7 @@ public sealed class RunCommandTool : AgentToolBase
             try { process.Kill(entireProcessTree: true); } catch { /* 忽略 */ }
             // 【修复】带非 0 退出码（124 = timeout 惯用码），
             // 并注明常见原因：交互式程序（ReadLine/input）等待输入会一直挂起
-            return $"错误：命令执行超时（>{TimeoutSeconds}秒）。常见原因：程序含交互输入（Console.ReadLine/input）或死循环。\n退出码：124";
+            return $"错误：命令执行超时（>{timeoutSeconds}秒）。常见原因：程序含交互输入（Console.ReadLine/input）或死循环。\n退出码：124";
         }
 
         // 拿到输出

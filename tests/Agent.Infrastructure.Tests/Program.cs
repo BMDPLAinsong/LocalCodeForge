@@ -3070,6 +3070,20 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             new Agent.Core.Models.AgentOptions().TaskTimeoutMinutes == 30);
         Check("AgentOptions.OllamaHttpTimeoutMinutes 默认 20（本地 Ollama HttpClient 超时，10-04 600s 腰斩实证后配置化加长）",
             new Agent.Core.Models.AgentOptions().OllamaHttpTimeoutMinutes == 20);
+        Check("use 命令解析（10-08 A）：裸 use / use --write / 纯空格缺路径 → false（命令层拦截，不进任务流——实证裸 use 漏进任务流跑 8 步）",
+            !Agent.Infrastructure.Project.UseCommandParser.TryParse("use", out _, out _)
+            && !Agent.Infrastructure.Project.UseCommandParser.TryParse("use --write", out _, out _)
+            && !Agent.Infrastructure.Project.UseCommandParser.TryParse("use   ", out _, out _));
+        Check("use 命令解析（10-08 A）：带路径命中 + writeFlag 解析 + 普通输入不误判",
+            Agent.Infrastructure.Project.UseCommandParser.TryParse("use X:\\myproj", out var usePath1, out var useWrite1) && usePath1 == "X:\\myproj" && !useWrite1
+            && Agent.Infrastructure.Project.UseCommandParser.TryParse("use --write X:\\myproj", out var usePath2, out var useWrite2) && usePath2 == "X:\\myproj" && useWrite2
+            && Agent.Infrastructure.Project.UseCommandParser.IsUseCommand("use")
+            && !Agent.Infrastructure.Project.UseCommandParser.IsUseCommand("useful 命令")
+            && !Agent.Infrastructure.Project.UseCommandParser.IsUseCommand("使用Python写一个天气方法"));
+        Check("run_command 超时档位（10-08 B）：沙箱 dotnet 验证命令 → 90s（对齐工程模式，防冷编译卡 30s 两次必败实证）；其余沙箱 30s 快速失败；工程模式 90s",
+            Agent.Infrastructure.Tools.RunCommandTool.ResolveTimeoutSeconds(null, "dotnet run") == 90
+            && Agent.Infrastructure.Tools.RunCommandTool.ResolveTimeoutSeconds(null, "python main.py") == 30
+            && Agent.Infrastructure.Tools.RunCommandTool.ResolveTimeoutSeconds("X:\\proj", "python main.py") == 90);
     }
 
     // ── 3. DashboardHost 冒烟：真起 Kestrel → HttpClient 验证 API ──

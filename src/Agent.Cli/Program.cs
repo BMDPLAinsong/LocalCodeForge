@@ -660,16 +660,23 @@ internal class Program
                 continue;
             }
 
-            // ═══════════ use 命令（工程感知 P0/P1） ═══════════
+            // ═══════════ use 命令（工程感知 P0/P1；10-08 A：裸 use 缺路径命令层拦截） ═══════════
             // E2E 基建：PS 5.1 -File 模式向子进程 stdin 注入 UTF-8 BOM（EF BB BF）到首行
-            // → 剥离 BOM（U+FEFF），否则 StartsWith("use ") 不命中、use 行被当任务执行
+            // → 剥离 BOM（U+FEFF），否则 use 行被当任务执行
             var trimmedInput = input.TrimStart('\uFEFF');
-            if (trimmedInput.StartsWith("use ", StringComparison.OrdinalIgnoreCase))
+            if (Agent.Infrastructure.Project.UseCommandParser.TryParse(
+                    trimmedInput, out var usePath, out var useWriteFlag))
             {
-                var rest = trimmedInput.Substring(4).Trim();
-                var writeFlag = rest.StartsWith("--write ", StringComparison.OrdinalIgnoreCase);
-                if (writeFlag) rest = rest.Substring(8).Trim();
-                ApplyUse(provider, options, rest, writeFlag, autoSource: null);
+                ApplyUse(provider, options, usePath, useWriteFlag, autoSource: null);
+                continue;
+            }
+            // 裸 use / use --write：命令层拦截打印用法，不进任务流（10-08 实证裸 use 漏进任务流跑 8 步）
+            if (Agent.Infrastructure.Project.UseCommandParser.IsUseCommand(trimmedInput))
+            {
+                Console.WriteLine("use <路径> [--write]：设置工程根。裸 use 不执行任务——请带上路径，例如：");
+                Console.WriteLine("  use X:\\myproject            只读感知工程（读放开 + 写白名单）");
+                Console.WriteLine("  use --write X:\\myproject    可写工程（改动前自动备份，可 rollback）");
+                Console.WriteLine("当前工程根：" + (options.ProjectRoot ?? "未设置（沙箱模式）"));
                 continue;
             }
 
