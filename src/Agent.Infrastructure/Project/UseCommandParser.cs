@@ -86,6 +86,10 @@ public static class UseCommandParser
         }
         if (best is null) { path = s; return false; }   // 全串无目录前缀：保持原行为（ApplyUse 报"目录不存在"）
 
+        // 【10-08 盘符归一化】盘符形态 "X:" → "X:\"：.NET 的 Path.GetFullPath("X:") 按盘符相对语义
+        // 解析成"X 盘上的当前目录"（cwd），而非盘根——Directory.Exists("X:") 为 true 会掩盖错位。
+        if (best.Length == 2 && best[1] == ':') { best += "\\"; bestLen += 1; }
+
         path = best;
         task = s.Substring(bestLen).TrimStart('\\', ' ');
         return task.Length > 0;

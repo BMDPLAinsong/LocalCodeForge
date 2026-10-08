@@ -6,6 +6,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.IO;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
@@ -238,6 +239,11 @@ public sealed class AgentLoop : IAgentLoop
             if (target is not null)
                 userMsg += $"\n\n（任务目标文件：{target}——本次任务只需读取/修改此文件，其余文件与本任务无关，请勿阅读。）";
         }
+        // 【10-08 会话写目标延续】CLI 已授权的显式写目标（含"这个文件"指代继承的上轮目标）注入：
+        // 模型拿到真实路径事实，知道"这个文件"指什么、往哪写——达成门同一 _writeTarget 做落地校验。
+        if (request.ExplicitWriteTarget is not null)
+            userMsg += $"\n\n（本次任务显式写目标：{request.ExplicitWriteTarget}" +
+                $"{(request.ExplicitWriteTargetIsFile ? "（文件）" : "（目录）")}——请直接对该路径执行写操作。）";
         chatHistory.AddUserMessage(userMsg);
         await _store.AppendTurnAsync(request.SessionId, new ChatTurn("user", request.Input), ct);
 
@@ -418,12 +424,24 @@ public sealed class AgentLoop : IAgentLoop
                     if (ok && (cleanName is "write_file" or "edit_file" or "append_file"))
                     {
                         _everWroteFile = true;
-                        // 【10-08 内容符合性】记录写过的文件路径（完成门 D 检查对象）
+                        // 【10-08 内容符合性】记录写过的文件路径（完成门 D 检查对象）。
+                        // 归一化为绝对路径（与 WriteFileTool baseRoot 逻辑对称：工程可写以工程根
+                        // 为基准，否则任务目录）——完成门 B 按"本轮写入目标"判定需要绝对路径。
                         if (argsJson.TryGetProperty("path", out var p) &&
                             p.ValueKind == System.Text.Json.JsonValueKind.String &&
                             !string.IsNullOrWhiteSpace(p.GetString()))
                         {
-                            _writtenFiles.Add(p.GetString()!);
+                            try
+                            {
+                                var baseRoot = _options.ProjectWriteEnabled && _options.ProjectRoot is not null
+                                    ? _options.ProjectRoot
+                                    : request.WorkspaceRoot;
+                                _writtenFiles.Add(Path.GetFullPath(Path.Combine(baseRoot, p.GetString()!)));
+                            }
+                            catch (Exception)
+                            {
+                                _writtenFiles.Add(p.GetString()!);
+                            }
                         }
                     }
                     // 【批次1·C】写工具被拒 → 记录（完成门判"被拒未重试 → 失败"）
@@ -456,7 +474,9 @@ public sealed class AgentLoop : IAgentLoop
                                 writeRejected: _writeRejected,
                                 target: _writeTarget,
                                 targetIsFile: _writeTargetIsFile,
-                                requirementTokens: Project.ContentConformance.ExtractRequirementTokens(request.Input),
+                                requirementTokens: (_writeTarget is not null
+                    ? Project.ContentConformance.ExtractRequirementTokensExtended(request.Input)
+                    : Project.ContentConformance.ExtractRequirementTokens(request.Input)),
                                 writtenFiles: _writtenFiles);
                             if (fuseGate is not null)
                             {
@@ -890,7 +910,9 @@ public sealed class AgentLoop : IAgentLoop
                 writeRejected: _writeRejected,
                 target: _writeTarget,
                 targetIsFile: _writeTargetIsFile,
-                requirementTokens: Project.ContentConformance.ExtractRequirementTokens(request.Input),
+                requirementTokens: (_writeTarget is not null
+                    ? Project.ContentConformance.ExtractRequirementTokensExtended(request.Input)
+                    : Project.ContentConformance.ExtractRequirementTokens(request.Input)),
                 writtenFiles: _writtenFiles);
             if (gateVerdict is not null)
             {
@@ -915,7 +937,9 @@ public sealed class AgentLoop : IAgentLoop
             writeRejected: _writeRejected,
             target: _writeTarget,
             targetIsFile: _writeTargetIsFile,
-            requirementTokens: Project.ContentConformance.ExtractRequirementTokens(request.Input),
+            requirementTokens: (_writeTarget is not null
+                    ? Project.ContentConformance.ExtractRequirementTokensExtended(request.Input)
+                    : Project.ContentConformance.ExtractRequirementTokens(request.Input)),
             writtenFiles: _writtenFiles);
         if (maxGate is not null)
         {

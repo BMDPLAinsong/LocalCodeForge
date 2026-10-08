@@ -96,6 +96,48 @@ public static class ContentConformance
         return tokens;
     }
 
+    // 扩展提取（10-08）：显式写目标场景允许"内容：xxx" / "写入一句 xxx" 冒号/动词形态。
+    // 只在 CompletionGate 判定有显式写目标（target != null）时启用——普通生成任务无目标不
+    // 启用，避免"内容：判断奇偶"这类功能描述误伤。正则保守：仅"内容[：:]+非标点串"与
+    // "写入/写上/添加/加上/补上/改成/改为 + 一句/一行/以下内容/内容 + 非标点串"两种。
+    private static readonly Regex[] BareContentRe =
+    {
+        new(@"内容[:：]\s*([^\s，。；、,.;!?！？]{2,80})", RegexOptions.Compiled),
+        new(@"(?:写入|写上|添加|加上|补上|改成|改为)\s*(?:一句|一行|以下内容|内容)?[:：]?\s*([^\s，。；、,.;!?！？]{2,80})", RegexOptions.Compiled),
+    };
+
+    /// <summary>
+    /// 扩展提取（10-08 内容符合性）：在 ExtractRequirementTokens 基础上，额外支持
+    /// "内容：xxx" / "写入一句 xxx" 冒号/动词形态。仅用于有显式写目标的任务
+    /// （"向 X:\test.txt 写入 内容：hello"——无引号包裹但字面量明确）。
+    /// 已有引号/注释 token 时原样返回（不叠加减少噪声）。
+    /// </summary>
+    public static IReadOnlyList<string> ExtractRequirementTokensExtended(string input)
+    {
+        var baseTokens = ExtractRequirementTokens(input);
+        if (string.IsNullOrWhiteSpace(input) || baseTokens.Count > 0)
+            return baseTokens;
+
+        var tokens = new List<string>(baseTokens);
+        var seen = new HashSet<string>(baseTokens, StringComparer.OrdinalIgnoreCase);
+        foreach (var re in BareContentRe)
+        {
+            foreach (Match m in re.Matches(input))
+            {
+                var raw = m.Groups[1].Value.Trim();
+                if (raw.Length < 2 || raw.Length > 120)
+                    continue;
+                if (FileLikeRe.IsMatch(raw))
+                    continue;
+                var norm = OutputVerifier.NormalizeForMatch(raw);
+                if (norm.Length < 2) continue;
+                if (seen.Add(norm))
+                    tokens.Add(norm);
+            }
+        }
+        return tokens;
+    }
+
     /// <summary>
     /// 检查文件内容（归一化后）是否包含需求 token（归一化后）。
     /// 文件不存在 / 读取失败按"不含"处理（调用方决定语义）。

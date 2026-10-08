@@ -415,6 +415,9 @@ internal class Program
 
         int currentSeq = 0;   // 当前命令的提交序号（web 归属标记：任务执行期间 /api/current-task 可见）
         string? pendingTask = null;   // 【10-08 C】use <path> <任务> 一步到位：use 后的后续任务自动执行
+        // 【10-08 会话写目标延续】会话内最近文件级写目标（去重、最近 3 条）。
+        // 清理时机：new 开新会话 / use 切换工程根 → 清空；exit/重启 → 进程级自然清空；任务失败 → 保留。
+        var sessionWriteTargets = new List<(string Path, bool IsFile)>();
         while (true)
         {
             string? input;
@@ -458,6 +461,7 @@ internal class Program
             if (input.Equals("new", StringComparison.OrdinalIgnoreCase))
             {
                 sessionId = Guid.NewGuid().ToString("N");
+                sessionWriteTargets.Clear();   // 【10-08】开新会话 → 清空会话写目标（不跨会话继承）
                 renderer.System("[系统] 已开启新会话。");
                 continue;
             }
@@ -679,6 +683,7 @@ internal class Program
                 Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask(
                     usePath, out var realUsePath, out var followupTask);
                 ApplyUse(provider, options, realUsePath, useWriteFlag, autoSource: null);
+                sessionWriteTargets.Clear();   // 【10-08】切换工程根 → 清空会话写目标（旧目标不跨工程继承）
                 if (!string.IsNullOrWhiteSpace(followupTask))
                 {
                     renderer.System($"[续] 工程已切换，自动执行后续任务：{followupTask}");
@@ -908,6 +913,29 @@ internal class Program
                     renderer.Info($"[显式授权] 检测到写目标 {wt}，本次任务临时白名单。");
                 }
 
+                // 【10-08 会话写目标延续】"这个文件/该文件/刚建的文件…"指代词命中 → 继承上一轮文件级
+                // 写目标（白名单 + 达成门 + 上下文注入三处同开关）；未命中保持任务隔离（显式优于隐式）。
+                var referPronoun = Agent.Infrastructure.Project.ProjectPathDetector.HasReferentialPronoun(input);
+                if (referPronoun && writeTarget is null)
+                {
+                    var inherited = sessionWriteTargets.LastOrDefault();
+                    if (inherited.IsFile
+                        && !Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(inherited.Path))
+                    {
+                        writeTarget = inherited.Path;
+                        writeTargetIsFile = true;
+                        explicitWriteRoots.Add(inherited.Path);
+                        renderer.Info($"[会话写目标] 检测到指代（\"这个文件\"），继承上轮写目标 {inherited.Path}。");
+                    }
+                }
+                // 本轮解析出的文件级写目标记入会话（去重，最近 3 条）——任务失败也保留（用户可能重试）。
+                if (writeTarget is not null && writeTargetIsFile)
+                {
+                    sessionWriteTargets.RemoveAll(s => string.Equals(s.Path, writeTarget, StringComparison.OrdinalIgnoreCase));
+                    sessionWriteTargets.Add((writeTarget, true));
+                    while (sessionWriteTargets.Count > 3) sessionWriteTargets.RemoveAt(0);
+                }
+
                 // 【关键修复】为每个任务创建独立 DI 容器（工具绑定 run 根）——P-B 工具层注入 taskId 隔离备份
                 var taskServices = new ServiceCollection();
                 taskServices.AddAgent(options, workspace, dbPath, options.ProjectRoot, options.ProjectWriteEnabled, taskId, explicitWriteRoots);
@@ -976,7 +1004,17 @@ internal class Program
     static void ApplyUse(IServiceProvider provider, AgentOptions options,
         string rest, bool writeFlag, string? autoSource)
     {
-        var proj = Path.GetFullPath(rest);
+        // 【10-08 盘符防御】盘符形态 "X:" → "X:\"：.NET Path.GetFullPath("X:") 按盘符相对语义
+        // 解析成"X 盘上的当前目录"（cwd），而非盘根——Directory.Exists("X:") 为 true 会掩盖静默错位。
+        var raw = rest;
+        if (raw.Length == 2 && raw[1] == ':') raw += "\\";
+        var proj = Path.GetFullPath(raw);
+        // 防静默错位：解析结果与输入首段盘符不一致（如 cwd 在别的盘时 "X:" 解析成 C:\...）→ 判失败。
+        if (proj.Length >= 2 && proj[1] == ':' && char.ToUpperInvariant(proj[0]) != char.ToUpperInvariant(raw[0]))
+        {
+            Console.WriteLine($"错误：路径解析异常（盘符不一致）：{rest}");
+            return;
+        }
         if (!Directory.Exists(proj))
         {
             Console.WriteLine($"错误：目录不存在：{proj}");

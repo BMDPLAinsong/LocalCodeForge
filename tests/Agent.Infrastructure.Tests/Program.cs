@@ -813,6 +813,8 @@ Console.WriteLine("== IntentOverride 写任务判定（§14-3w 直连 large） =
         Wr("修改 AgentOptions.cs 中 ProjectWriteEnabled 属性的注释说明"));
     Check("创建新文件 → 写任务",
         Wr("创建一个 Program.cs 文件"));
+    Check("新建文件 → 写任务（10-08 词表补全：缺'新建'致写任务误判 SimpleQA 幻觉完成）",
+        Wr("在X盘根目录新建一个空的 _law_e2e_test.txt 文件"));
     Check("纯问答 → 非写任务",
         !Wr("今天天气怎么样"));
     Check("读取文件 → 非写任务（读保持 small）",
@@ -2827,10 +2829,10 @@ Console.WriteLine("== 10-08 内容符合性（ContentConformance + 完成门 D�
         Agent.Infrastructure.Project.CompletionGate.Evaluate(
             true, true, false, Path.GetFullPath(okFile), true,
             requirementTokens: new[] { "已审查" }, writtenFiles: new[] { okFile }) is null);
-    // ⑨ 完成门 D：无需求 token → 跳过（不误伤）
+    // ⑨ 完成门 D：无需求 token → 跳过（不误伤）——且本轮写了目标文件
     Check("完成门 D：无需求 token → 放行",
         Agent.Infrastructure.Project.CompletionGate.Evaluate(
-            true, true, false, Path.GetFullPath(okFile), true,
+            true, true, false, Path.GetFullPath(badFile), true,
             requirementTokens: Array.Empty<string>(), writtenFiles: new[] { badFile }) is null);
     // ⑩ 归一化：文件含 "// 已审查" 匹配 token "已审查"（符号折叠）
     Check("完成门 D：归一化匹配（注释符号折叠）→ 放行",
@@ -3087,10 +3089,38 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         Check("use 一步到位（10-08 C）：路径+任务拆分——最长存在前缀为路径，剩余为任务（含空格路径不误切）",
             Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask("X:\\.NET AI\\LocalAiWorkbench 分析一下这个项目", out var useSplit1, out var useTask1)
             && useSplit1 == "X:\\.NET AI\\LocalAiWorkbench" && useTask1 == "分析一下这个项目");
-        Check("use 一步到位（10-08 C）：纯路径无任务 → false；路径打错回退最长存在祖先（盘根），剩余全当任务（边界文档注明）",
+        Check("use 一步到位（10-08 C）：纯路径无任务 → false；路径打错回退最长存在祖先（盘根，归一化为 X:\\），剩余全当任务（边界文档注明）",
             !Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask("X:\\.NET AI\\LocalAiWorkbench", out _, out _)
             && Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask("X:\\NoSuchDirZZZ 任务", out var useSplit2, out var useTask2)
-            && useSplit2 == "X:" && useTask2 == "NoSuchDirZZZ 任务");
+            && useSplit2 == "X:\\" && useTask2 == "NoSuchDirZZZ 任务");
+        Check("use 盘符归一化（10-08）：盘符形态 X: 补 \\ 为 X:\\（Path.GetFullPath(\"X:\") 盘符相对语义会解析成 cwd，静默错位）",
+            Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask("X:\\ 在X盘根目录新建一个空的test.txt 文件", out var useSplit3, out var useTask3)
+            && useSplit3 == "X:\\" && useTask3 == "在X盘根目录新建一个空的test.txt 文件");
+        Check("会话写目标指代检测（10-08）：这个文件/该文件/刚建的文件 → true；新建文件（无指代）→ false",
+            Agent.Infrastructure.Project.ProjectPathDetector.HasReferentialPronoun("向这个文件里面写入一句内容")
+            && Agent.Infrastructure.Project.ProjectPathDetector.HasReferentialPronoun("读取一下该文件的内容")
+            && Agent.Infrastructure.Project.ProjectPathDetector.HasReferentialPronoun("刚建的文件里补一行")
+            && !Agent.Infrastructure.Project.ProjectPathDetector.HasReferentialPronoun("新建一个 notes.txt 文件"));
+        Check("内容符合性·扩展提取（10-08）：内容：xxx 冒号形态与 写入一句 xxx 动词形态可提取（token 为归一化形态）；引号形态不受影响",
+            Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokensExtended("向这个文件写入 内容：hello-e2e-20261008").Any(t => t == "hello e2e 20261008")
+            && Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokensExtended("写入一句 上零休七，财富自由").Any(t => t.Contains("上零休七"))
+            && Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokensExtended("写一个函数，内容：判断两个数相加").Any(t => t.Contains("判断两个数相加")));
+        Check("完成门 B·本轮写入语义（10-08）：目标历史存在但本轮未写 → 失败（防假完成）；本轮写了目标 → 放行",
+            Agent.Infrastructure.Project.CompletionGate.Evaluate(
+                isWriteTask: true, wroteAny: true, writeRejected: false,
+                target: "X:\\_law_e2e_test.txt", targetIsFile: true,
+                requirementTokens: null,
+                writtenFiles: new[] { "X:\\other.txt" }) is not null
+            && Agent.Infrastructure.Project.CompletionGate.Evaluate(
+                isWriteTask: true, wroteAny: true, writeRejected: false,
+                target: "X:\\_law_e2e_test.txt", targetIsFile: true,
+                requirementTokens: null,
+                writtenFiles: new[] { "X:\\_law_e2e_test.txt" }) is null
+            && Agent.Infrastructure.Project.CompletionGate.Evaluate(
+                isWriteTask: true, wroteAny: true, writeRejected: false,
+                target: "X:\\_law_e2e_test.txt", targetIsFile: true,
+                requirementTokens: new[] { "hello-e2e-20261008" },
+                writtenFiles: new[] { "X:\\other.txt" }) is not null);
     }
 
     // ── 3. DashboardHost 冒烟：真起 Kestrel → HttpClient 验证 API ──

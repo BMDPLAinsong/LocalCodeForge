@@ -15,7 +15,8 @@ public static class ProjectScanner
     private static readonly HashSet<string> ExcludedDirs = new(StringComparer.OrdinalIgnoreCase)
     {
         "obj", "bin", ".git", ".vs", ".vscode", ".idea",
-        "node_modules", "dist", "build", "packages", "__pycache__", ".venv", "venv", "workspace"
+        "node_modules", "dist", "build", "packages", "__pycache__", ".venv", "venv", "workspace",
+        "$recycle.bin", "system volume information"   // 盘根扫描：系统隐藏目录（无权限/无意义）
     };
 
     /// <summary>入口/说明文件（精确名匹配）。</summary>
@@ -164,14 +165,26 @@ public static class ProjectScanner
         return (files.Count, dirs.Count, totalBytes, maxMtimeTicks);
     }
 
-    /// <summary>递归遍历（限深度）。</summary>
+    /// <summary>递归遍历（限深度）。无权限子目录（回收站/系统隐藏）跳过不崩溃（10-08：use 盘根实证）。</summary>
     private static void Walk(string root, string rel, int depth,
         List<(string Rel, long Size, long MtimeTicks)> files, List<string> dirs, ref int excluded)
     {
         if (depth > MaxDepth) return;
         var full = Path.Combine(root, rel);
 
-        foreach (var d in Directory.GetDirectories(full))
+        string[] subDirs;
+        try
+        {
+            subDirs = Directory.GetDirectories(full);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            excluded++;   // 无权限目录（如 $RECYCLE.BIN）跳过，不计入统计
+            return;
+        }
+        catch (IOException) { return; }   // 目录被占用/已删除等瞬时异常，同样容忍
+
+        foreach (var d in subDirs)
         {
             var name = Path.GetFileName(d);
             if (ExcludedDirs.Contains(name))
@@ -185,13 +198,18 @@ public static class ProjectScanner
         }
 
         if (files.Count >= MaxFiles) return;
-        foreach (var f in Directory.GetFiles(full))
+        try
         {
-            if (files.Count >= MaxFiles) break;
-            var childRel = rel.Length == 0 ? Path.GetFileName(f) : rel + "\\" + Path.GetFileName(f);
-            var fi = new FileInfo(f);
-            files.Add((childRel, fi.Length, fi.LastWriteTimeUtc.Ticks));
+            foreach (var f in Directory.GetFiles(full))
+            {
+                if (files.Count >= MaxFiles) break;
+                var childRel = rel.Length == 0 ? Path.GetFileName(f) : rel + "\\" + Path.GetFileName(f);
+                var fi = new FileInfo(f);
+                files.Add((childRel, fi.Length, fi.LastWriteTimeUtc.Ticks));
+            }
         }
+        catch (UnauthorizedAccessException) { /* 目录内个别文件无权限：跳过该目录文件枚举 */ }
+        catch (IOException) { }
     }
 
     /// <summary>目录树（缩进 + 截断）。</summary>

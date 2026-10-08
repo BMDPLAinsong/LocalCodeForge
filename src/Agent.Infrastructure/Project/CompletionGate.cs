@@ -45,16 +45,36 @@ public static class CompletionGate
                 isSuspicious: false);
         }
 
-        // B：目标达成门——提取到显式目标但目标不存在 → 失败（写了别处 ≠ 写到目标）
+        // B：目标达成门——提取到显式目标但"本轮未真正写到此目标" → 失败。
+        // 【10-08 语义修正】判据从 File.Exists(target) 改为"target ∈ writtenFiles（本轮写入）"：
+        // 实证——第一轮建了目标文件，第二轮模型写了任务目录同名文件，File.Exists=true 误放行。
+        // 归一化比较（写入时按 baseRoot 归一化记录，与 WriteFileTool 逻辑对称）。
         if (target is not null)
         {
-            var exists = targetIsFile ? File.Exists(target) : Directory.Exists(target);
-            if (!exists)
+            var writtenThisRound = writtenFiles is not null &&
+                                   writtenFiles.Any(f => PathsEqual(Path.GetFullPath(f), Path.GetFullPath(target)));
+            if (writtenFiles is not null)
             {
-                return new CompletionVerdict(
-                    shouldFail: true,
-                    message: $"任务要求写入 {target}，但该目标不存在（本轮写入位置与用户指定不符）。",
-                    isSuspicious: true);
+                // 调用方已提供本轮写入记录 → 只认"本轮真写到了目标"
+                if (!writtenThisRound)
+                {
+                    return new CompletionVerdict(
+                        shouldFail: true,
+                        message: $"任务要求写入 {target}，但本轮未写到此目标（写入位置与用户指定不符）。",
+                        isSuspicious: true);
+                }
+            }
+            else
+            {
+                // 调用方未提供记录（未来调用方）→ 回退存在性判据
+                var exists = targetIsFile ? File.Exists(target) : Directory.Exists(target);
+                if (!exists)
+                {
+                    return new CompletionVerdict(
+                        shouldFail: true,
+                        message: $"任务要求写入 {target}，但该目标不存在（本轮写入位置与用户指定不符）。",
+                        isSuspicious: true);
+                }
             }
         }
 
@@ -63,6 +83,9 @@ public static class CompletionGate
         // 修改后的文件必须包含该内容——否则"编译通过"也会假成功（BigService 实证：
         // 模型把 x + 1500 改成 x + 15000 且漏加 // 已审查，dotnet run 通过被放行）。
         // 无需求 token / 未写文件 → 跳过（不误伤普通生成任务）。
+        // 【10-08 扩展】有显式写目标时调用方已传 ExtractRequirementTokensExtended（含
+        // "内容：hello"冒号形态）——E2E 实证：模型写任务目录同名文件+旧内容，引号形态
+        // 提取不到放行；扩展形态提取到"hello"即拦截。
         if (requirementTokens is { Count: > 0 } && writtenFiles is { Count: > 0 })
         {
             var anyHit = writtenFiles.Any(f => ContentConformance.FileContainsTokens(f, requirementTokens));
@@ -79,6 +102,22 @@ public static class CompletionGate
         }
 
         return null;
+    }
+
+    /// <summary>路径等价比较（归一化 + 忽略大小写，Windows 路径不区分大小写）。</summary>
+    private static bool PathsEqual(string a, string b)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(a).TrimEnd('\\', '/'),
+                Path.GetFullPath(b).TrimEnd('\\', '/'),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 }
 

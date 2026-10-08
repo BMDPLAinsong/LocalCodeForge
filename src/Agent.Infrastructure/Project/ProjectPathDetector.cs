@@ -28,6 +28,29 @@ public static class ProjectPathDetector
     // 注意：不含 ':' / '：'——盘符冒号是路径组成部分（X:\），作为分片符会把路径切开。
     private static readonly char[] SplitMarks = { '，', '。', '；', '、', '！', '？', ',', ';', '!', '?' };
 
+    // 【10-08 会话写目标指代触发器】"这个文件/该文件/刚建的文件…" 等指代词 → 命中才继承会话写目标
+    // （白名单延续 + 上下文注入 + 达成门三处由同一个开关驱动；未命中保持任务隔离）。
+    private static readonly string[] ReferentialPronouns =
+    {
+        "这个文件", "该文件", "上述文件", "刚才那个文件", "刚建的文件", "新建的文件",
+        "创建的文件", "刚才的文件", "这个脚本", "该脚本", "上述脚本", "这个程序",
+        "刚才写的", "刚才创建的", "刚才新建的", "这个目录", "该目录", "这个文件夹", "这个路径"
+    };
+
+    /// <summary>
+    /// 会话写目标指代检测（10-08）：输入含"这个文件 / 该文件 / 刚建的文件…"等指代词 → true。
+    /// 只有命中才允许继承上一轮的显式写目标（避免无条件延续把旧目标一直挂在白名单/达成门里）。
+    /// 确定性词表匹配，无 LLM。
+    /// </summary>
+    public static bool HasReferentialPronoun(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return false;
+        foreach (var p in ReferentialPronouns)
+            if (input.Contains(p, StringComparison.Ordinal))
+                return true;
+        return false;
+    }
+
     /// <summary>
     /// 从输入提取"存在的绝对目录路径"（首个命中）。
     /// 策略：按标点分片 → 取首个含盘符的片 → 定位盘符起点截取候选 →
