@@ -3134,6 +3134,18 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             && page.Contains("function togglePair") && page.Contains("onclick=\"expandMd(this)\""));
         Check("前端 JS 顶层闭合无漂移（10-10 修复：showTaskEvents 残留多余 } 导致 script SyntaxError，整页 JS 失效卡'加载中…'）——防替换边界错位再犯",
             !page.Contains("});\n}\n}\n// ── stats ──"));
+        Check("Monaco 集成（10-08）：loadMonaco 懒加载 + 本地 /vendor paths + 代码块 data-lang 升级 + diff 左右对比 + 文本视图回退",
+            page.Contains("function loadMonaco") && page.Contains("paths: { vs: \"/vendor/monaco/min/vs\" }")
+            && page.Contains("data-lang") && page.Contains("function monacoCode") && page.Contains("monaco-diff-host")
+            && page.Contains("createDiffEditor") && page.Contains("function renderDiffText") && page.Contains("d.diff")
+            && page.Contains("function diffLang"));
+        Check("Monaco vendor 本地资源就位（10-08 全量 min/vs：源码树 vendor 存在，csproj Content 构建复制到 bin\\vendor 自包含）",
+            System.IO.File.Exists(System.IO.Path.GetFullPath(System.IO.Path.Combine(
+                System.AppContext.BaseDirectory, "..", "..", "..", "..", "..",
+                "src", "Agent.Dashboard", "vendor", "monaco", "min", "vs", "loader.js"))));
+        var vendor = await http.GetAsync("vendor/monaco/min/vs/loader.js");
+        Check("GET /vendor Monaco loader 200（10-08 本地静态服务：UseStaticFiles 挂 bin\\vendor，Monaco 懒加载数据源）",
+            vendor.StatusCode == System.Net.HttpStatusCode.OK);
         var stats = await http.GetStringAsync("api/stats");
         Check("GET /api/stats 200 + JSON 结构", stats.Contains("\"summary\"") && stats.Contains("totalCount"));
         var tasks = await http.GetStringAsync("api/tasks?take=3");
@@ -3153,6 +3165,28 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
             oob.StatusCode == System.Net.HttpStatusCode.BadRequest);
         var noDiff = await http.GetAsync("api/diff?taskId=x&rel=y");
         Check("无工程根 diff → 400 BadRequest", noDiff.StatusCode == System.Net.HttpStatusCode.BadRequest);
+
+        // 【10-08 Monaco DiffEditor】/api/diff 附 original/modified 全文（非 tooLarge）——第三个实例带工程根 + 预置备份
+        var projDir = Path.Combine(ws, "proj");
+        Directory.CreateDirectory(projDir);
+        var projFile = Path.Combine(projDir, "app.cs");
+        System.IO.File.WriteAllText(projFile, "class A { int x; }\n");
+        Agent.Infrastructure.Project.BackupService.Backup(ws, projFile, projDir, "diff1");
+        System.IO.File.WriteAllText(projFile, "class A { int x; int y; }\n");
+        var (url3, stop3) = await Agent.Dashboard.DashboardHost.StartAsync(
+            new Agent.Dashboard.DashboardOptions(ws, projDir, Path.Combine(ws, "symbol_index.db"), null, metrics, dashHub, store,
+                new Agent.Core.Models.AgentOptions(),
+                Path.Combine(ws, "agent_memory.db"),
+                new Agent.Core.CommandHub()), CancellationToken.None);
+        using var http3 = new HttpClient { BaseAddress = new Uri(url3 + "/") };
+        var diffResp = await http3.GetStringAsync("api/diff?taskId=diff1&rel=app.cs");
+        Check("GET /api/diff 附 original 全文（10-08 Monaco DiffEditor：备份全文）",
+            diffResp.Contains("\"original\":\"class A { int x; }"));
+        Check("GET /api/diff 附 modified 全文（10-08：当前文件全文）",
+            diffResp.Contains("\"modified\":\"class A { int x; int y; }"));
+        Check("GET /api/diff 附 diff 引擎结果（10-08：original/modified + diff 三字段）",
+            diffResp.Contains("\"diff\""));
+        await stop3();
 
         // 【10-10 Web 端回滚】端点注册 + 工程根守卫（有工程根的真实 dry-run/回滚行为由 BackupService 单元覆盖）
         var rbDry = await http.PostAsync("api/rollback/dry-run",

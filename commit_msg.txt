@@ -1,0 +1,12 @@
+Monaco 编辑器引入：本地 vendor 全量，代码块 + diff 升级
+
+决策（用户确认）：本地 vendor、全量 min/vs、不引 NuGet 包、不换前端框架
+- vendor：src\Agent.Dashboard\vendor\monaco\min\vs（25MB/107 文件，npm pack monaco-editor@0.57.0 提取）
+- csproj Content 构建复制到 bin\vendor（ProjectReference 传递复制到 CLI/tests 输出，自包含）
+- DashboardHost UseStaticFiles 挂 /vendor（鉴权前：Monaco loader 内部 fetch 不带 token）
+- index.html：loadMonaco 懒加载（loader.js + require.config paths 本地）
+  · 代码块：```lang → data-lang，点击升级 Monaco 只读编辑器（无语言标记保持纯文本）
+  · diff：/api/diff 增 original/modified 全文（非 tooLarge；修正 backup.Full 是路径须 ReadAllText）
+    → Monaco StandaloneDiffEditor 左右对比 + "文本视图"回退红绿行
+  · Monaco 加载失败自动回退（无副作用）
+构建 0 错误 + tests 638/638；HANDOVER 已同步

@@ -18,6 +18,7 @@ using Agent.Infrastructure.Diff;
 using Agent.Infrastructure.Events;
 using Agent.Infrastructure.Metrics;
 using Agent.Infrastructure.Project;
+using Microsoft.Extensions.FileProviders;
 
 namespace Agent.Dashboard;
 
@@ -104,6 +105,15 @@ public static class DashboardHost
 
     private static void MapEndpoints(WebApplication app, DashboardOptions o)
     {
+        // ── 10-08 Monaco vendor 静态文件：/vendor → bin\vendor（csproj Content 构建复制，自包含）。
+        // 置于鉴权中间件之前：Monaco loader 内部按相对路径 fetch worker/language 资源，无法带 query token；
+        // vendor 是公开编辑器代码（本地回环 + 无用户数据），鉴权保护无意义。
+        app.UseStaticFiles(new StaticFileOptions
+        {
+            FileProvider = new PhysicalFileProvider(Path.Combine(AppContext.BaseDirectory, "vendor")),
+            RequestPath = "/vendor"
+        });
+
         // ── ③ 安全 token 加固（10-08）：AuthToken 非空时所有端点鉴权 ──
         // query token / header X-Dashboard-Token 任一匹配即放行；SSE（EventSource 只能带 query）与 fetch 统一兼容。
         // 无 token 配置（tests / 无鉴权场景）→ 跳过中间件，行为与历史完全一致。
@@ -248,6 +258,7 @@ public static class DashboardHost
         });
 
         // ── Diff：备份 vs 当前（直接序列化引擎模型，无 DTO）──
+        // 10-08 Monaco DiffEditor：额外附 original/modified 全文（仅非 tooLarge；超大文件回退红绿行文本视图）。
         app.MapGet("/api/diff", (string taskId, string rel, CancellationToken ct) =>
         {
             if (o.ProjectRoot is null)
@@ -266,7 +277,14 @@ public static class DashboardHost
                 return Results.NotFound(new { error = $"任务 {taskId} 无文件 {rel} 的备份。" });
             var current = Path.Combine(o.ProjectRoot, backup.Value.Rel);
             var result = FileDiffService.Compute(backup.Value.Full, current);
-            return Results.Json(result, JsonOpts);
+            string? originalText = null, modifiedText = null;
+            if (!result.TooLarge)
+            {
+                // backup.Value.Full 是备份文件路径（ListBackups 返回 Full=完整路径）——须 ReadAllText 取全文
+                originalText = File.ReadAllText(backup.Value.Full);
+                modifiedText = File.Exists(current) ? File.ReadAllText(current) : "";
+            }
+            return Results.Json(new { original = originalText, modified = modifiedText, diff = result }, JsonOpts);
         });
 
         // ── 路由调权状态（10-07）：三处调权当前判定——与终端 stats"路由调权状态"小节同语义 ──

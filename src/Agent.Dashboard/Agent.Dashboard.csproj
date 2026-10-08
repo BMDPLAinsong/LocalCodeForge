@@ -11,6 +11,12 @@
     <EmbeddedResource Include="DashboardPages\index.html" LogicalName="Agent.Dashboard.Pages.index.html" />
   </ItemGroup>
 
+  <!-- 10-08 Monaco vendor：本地静态资源（min/vs 全量），构建复制到输出 bin\vendor，
+       DashboardHost UseStaticFiles 挂 /vendor 服务；index.html 按需 loader.js 懒加载。 -->
+  <ItemGroup>
+    <Content Include="vendor\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Agent.Infrastructure\Agent.Infrastructure.csproj" />
   </ItemGroup>

@@ -143,6 +143,11 @@
   .d-hunk { color:var(--yellow); }
   .d-add { color:var(--green); } .d-del { color:var(--red); } .d-same { color:var(--dim); }
   .empty { color:var(--dim); padding:6px 0; }
+  /* 10-08 Monaco：代码块点击升级只读编辑器；diff 左右对比（StandaloneDiffEditor） */
+  .md-pre { cursor:pointer; } .md-pre:hover { border-color:var(--blue) !important; }
+  .monaco-host { height:420px; border:1px solid var(--border); border-radius:4px; margin:4px 0; }
+  .monaco-diff-host { height:500px; border:1px solid var(--border); border-radius:4px; margin:4px 0; }
+  .d-bar { display:flex; gap:6px; margin-bottom:6px; }
   /* toast 全局反馈 */
   #toast { position:fixed; right:16px; bottom:16px; z-index:99; display:flex; flex-direction:column; gap:6px; }
   .toast { padding:8px 14px; border-radius:6px; font-size:12px; max-width:360px; word-break:break-all;
@@ -344,15 +349,20 @@ function escHtml(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt
 function mdToHtml(src) {
   if (!src) return "";
   const lines = String(src).split(/\r?\n/);
-  let html = "", inCode = false, codeBuf = [], inList = false, listTag = "";
+  let html = "", inCode = false, codeBuf = [], codeLang = "", inList = false, listTag = "";
   const flushList = () => { if (inList) { html += "</" + listTag + ">"; inList = false; } };
   const inline = (s) => escHtml(s)
     .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
     .replace(/`([^`]+)`/g, "<code>$1</code>");
+  // 10-08 Monaco：``` 后的语言名进 data-lang（点击 .md-pre 升级 Monaco 只读编辑器；无语言标记保持纯文本）
+  const flushCode = () => {
+    html += `<pre class="md-pre"${codeLang ? ` data-lang="${escHtml(codeLang)}"` : ""}>${escHtml(codeBuf.join("\n"))}</pre>`;
+    codeBuf = []; codeLang = ""; inCode = false;
+  };
   for (const raw of lines) {
     if (raw.trim().startsWith("```")) {
-      if (inCode) { html += `<pre class="md-pre">${escHtml(codeBuf.join("\n"))}</pre>`; codeBuf = []; inCode = false; }
-      else { flushList(); inCode = true; }
+      if (inCode) { flushCode(); }
+      else { flushList(); const lm = raw.trim().match(/^```\s*([\w\-+#.]+)?/); codeLang = lm && lm[1] ? lm[1] : ""; inCode = true; }
       continue;
     }
     if (inCode) { codeBuf.push(raw); continue; }
@@ -366,10 +376,56 @@ function mdToHtml(src) {
     if (ol) { if (!inList) { html += "<ol>"; listTag = "ol"; inList = true; } html += `<li>${inline(ol[1])}</li>`; continue; }
     flushList(); html += `<div class="md-p">${inline(t)}</div>`;
   }
-  if (inCode) html += `<pre class="md-pre">${escHtml(codeBuf.join("\n"))}</pre>`;
+  if (inCode) flushCode();
   flushList();
   return html;
 }
+
+// ── 10-08 Monaco（本地 vendor，懒加载）：代码块点击升级只读编辑器；diff 左右对比 ──
+// loader.js 注入一次；require.config 指向本地 /vendor（全量 min/vs，构建复制自包含，无 CDN）。
+let _monaco = null, _monacoLoading = null;
+function loadMonaco() {
+  if (_monaco) return Promise.resolve(_monaco);
+  if (!_monacoLoading) {
+    _monacoLoading = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "/vendor/monaco/min/vs/loader.js";
+      s.onload = () => {
+        try {
+          require.config({ paths: { vs: "/vendor/monaco/min/vs" } });
+          require(["vs/editor/editor.main"], () => { _monaco = monaco; resolve(monaco); });
+        } catch (e) { reject(e); }
+      };
+      s.onerror = () => reject(new Error("Monaco loader 加载失败（/vendor 不可用）"));
+      document.head.appendChild(s);
+    });
+  }
+  return _monacoLoading;
+}
+const MONACO_LANG = { js:"javascript", py:"python", cs:"csharp", ts:"typescript", sh:"shell",
+  yml:"yaml", md:"markdown", html:"html", json:"json", xml:"xml", sql:"sql", ps1:"powershell",
+  bat:"bat", cpp:"cpp", h:"cpp", hpp:"cpp", go:"go", java:"java", rb:"ruby", rs:"rust", php:"php",
+  css:"css", scss:"scss", dockerfile:"dockerfile", ini:"ini", toml:"ini", cfg:"ini" };
+function monacoLang(alias) {
+  const a = String(alias || "").toLowerCase();
+  return MONACO_LANG[a] || a;
+}
+async function monacoCode(pre) {
+  try {
+    const m = await loadMonaco();
+    const host = document.createElement("div");
+    host.className = "monaco-host";
+    pre.replaceWith(host);
+    m.editor.create(host, { value: pre.textContent || "", language: monacoLang(pre.dataset.lang),
+      readOnly: true, automaticLayout: true, fontSize: 12, minimap: { enabled: false },
+      scrollBeyondLastLine: false, wordWrap: "on", tabSize: 4 });
+  } catch (e) { /* 加载失败：保持原 pre（仅在 Monaco 就绪后才替换，失败无副作用） */ }
+}
+// 点击委托：带 data-lang 的代码块升级 Monaco（单例，防重复升级）
+document.addEventListener("click", (ev) => {
+  const p = ev.target.closest(".md-pre[data-lang]");
+  if (p && !p.dataset.monacoUpgraded) { p.dataset.monacoUpgraded = "1"; monacoCode(p); }
+});
 
 // ── ① 任务节分组（10-10：平铺 → 卡片内分节）──
 // 分组边界确定性切分（不靠模型）：routing 开新卡片；finalAnswer/error 结束卡片并入档；
@@ -854,15 +910,11 @@ function toggleTask(taskId, el) {
   el.textContent = (open ? "▸" : "▾") + el.textContent.slice(1);
   el.classList.toggle("open", !open);
 }
-async function showDiff(taskId, rel) {
-  $("diff").innerHTML = `<div class="empty">加载 diff…</div>`;
-  const r = await fetch(`/api/diff?taskId=${encodeURIComponent(taskId)}&rel=${encodeURIComponent(rel)}`);
-  if (!r.ok) { $("diff").innerHTML = `<div class="empty">diff 不可用（${r.status}）</div>`; return; }
-  const d = await r.json();
-  if (d.tooLarge) { $("diff").innerHTML = `<div class="empty">${esc(d.tooLargeReason)}</div>`; return; }
-  if (!d.hunks || !d.hunks.length) { $("diff").innerHTML = `<div class="empty">无差异</div>`; return; }
+function renderDiffText(df) {
+  if (df.tooLarge) { $("diff").innerHTML = `<div class="empty">${esc(df.tooLargeReason)}</div>`; return; }
+  if (!df.hunks || !df.hunks.length) { $("diff").innerHTML = `<div class="empty">无差异</div>`; return; }
   let html = "";
-  for (const h of d.hunks) {
+  for (const h of df.hunks) {
     html += `<div class="d-hunk">@@ -${h.oldStart},${h.oldCount} +${h.newStart},${h.newCount} @@</div>`;
     for (const ln of h.lines) {
       const sign = ln.type === "add" ? "+" : ln.type === "remove" ? "-" : " ";
@@ -872,6 +924,41 @@ async function showDiff(taskId, rel) {
     }
   }
   $("diff").innerHTML = html;
+}
+function diffLang(rel) {
+  const ext = (rel.split(".").pop() || "").toLowerCase();
+  const map = { cs:"csharp", py:"python", js:"javascript", ts:"typescript", json:"json", md:"markdown",
+    html:"html", csproj:"xml", slnx:"xml", props:"xml", targets:"xml", yml:"yaml", yaml:"yaml",
+    sql:"sql", ps1:"powershell", bat:"bat", sh:"shell", css:"css", xml:"xml", go:"go", java:"java" };
+  return map[ext] || "plaintext";
+}
+async function renderMonacoDiff(original, modified, rel, df) {
+  try {
+    const m = await loadMonaco();
+    $("diff").innerHTML = `<div class="d-bar"><button class="btn" id="diffTextMode">文本视图</button></div>`;
+    const host = document.createElement("div");
+    host.className = "monaco-diff-host";
+    $("diff").appendChild(host);
+    const ed = m.editor.createDiffEditor(host, { automaticLayout: true, fontSize: 12,
+      minimap: { enabled: false }, renderSideBySide: true, readOnly: true, scrollBeyondLastLine: false });
+    const lang = diffLang(rel);
+    ed.setModel({
+      original: m.editor.createModel(original, lang, m.Uri.parse("file:///original." + lang)),
+      modified: m.editor.createModel(modified, lang, m.Uri.parse("file:///modified." + lang))
+    });
+    $("diffTextMode").addEventListener("click", () => { renderDiffText(df); });
+  } catch (e) { renderDiffText(df); }
+}
+async function showDiff(taskId, rel) {
+  $("diff").innerHTML = `<div class="empty">加载 diff…</div>`;
+  const r = await fetch(`/api/diff?taskId=${encodeURIComponent(taskId)}&rel=${encodeURIComponent(rel)}`);
+  if (!r.ok) { $("diff").innerHTML = `<div class="empty">diff 不可用（${r.status}）</div>`; return; }
+  const d = await r.json();
+  // 10-08：/api/diff 返回 { original, modified, diff }（diff = DiffResult；全文仅非 tooLarge）
+  const df = d.diff || d;
+  if (df.tooLarge || (!df.hunks || !df.hunks.length)) { renderDiffText(df); return; }
+  if (d.original != null && d.modified != null) { renderMonacoDiff(d.original, d.modified, rel, df); return; }
+  renderDiffText(df);
 }
 
 function refreshAll() {
