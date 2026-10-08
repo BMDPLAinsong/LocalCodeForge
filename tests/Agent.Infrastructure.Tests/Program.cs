@@ -3114,6 +3114,9 @@ Console.WriteLine("== Dashboard P0 TaskEventHub + TaskEventStore + DashboardHost
         Check("嵌入单页含 SVG 依赖子图（layoutOneDegree 纯函数 + renderDepSvg + 节点点击联动 selectDepFile + 箭头 marker）",
             page.Contains("function layoutOneDegree") && page.Contains("function renderDepSvg")
             && page.Contains("function selectDepFile") && page.Contains("depArrowG") && page.Contains("DEP_NODE_MAX"));
+        Check("命令条吸顶结构：cmdBar 直属 colL（sticky 滚动容器直接子级，10-10 P1 修复）——防回退成卡片内嵌",
+            page.Contains("<div class=\"colL\">\n  <div id=\"cmdBar\"")
+            && page.Contains("#cmdBar { position:sticky; top:var(--headH)"));
         var stats = await http.GetStringAsync("api/stats");
         Check("GET /api/stats 200 + JSON 结构", stats.Contains("\"summary\"") && stats.Contains("totalCount"));
         var tasks = await http.GetStringAsync("api/tasks?take=3");

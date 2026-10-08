@@ -6,10 +6,11 @@
 <title>LocalAI Workbench Dashboard</title>
 <style>
   :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#c9d1d9; --dim:#8b949e;
-          --green:#3fb950; --red:#f85149; --yellow:#d29922; --blue:#58a6ff; --cyan:#39c5cf; }
+          --green:#3fb950; --red:#f85149; --yellow:#d29922; --blue:#58a6ff; --cyan:#39c5cf;
+          --headH:42px; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.5 Consolas,"Courier New",monospace; }
-  header { display:flex; align-items:center; gap:12px; padding:10px 16px; background:#010409;
+  header { display:flex; align-items:center; gap:12px; padding:0 16px; background:#010409; height:var(--headH);
            border-bottom:1px solid var(--border); position:sticky; top:0; z-index:9; }
   header h1 { font-size:15px; margin:0; color:var(--cyan); }
   header .sub { color:var(--dim); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -36,9 +37,12 @@
   .cbody { display:none; }
   .card.collapsible.open > .cbody { display:block; }
   .card.collapsible.open > h2 .chev { transform:rotate(90deg); }
-  /* 命令条吸顶（10-10 P1）：任务执行中命令入口随时可及 */
-  #cmdBar { position:sticky; top:0; z-index:50; background:var(--panel);
-            margin:6px 0 10px; padding:6px 0; border-bottom:1px solid var(--border); }
+  /* 命令条吸顶（10-10 P1 修复）：cmdBar 必须是滚动容器（body）的直接子级，
+     sticky 才相对视口吸附——埋在卡片内时父容器=卡片，滚过卡片即滚出。
+     top 对齐 --headH：吸顶后紧贴 header 下方，不与 header 重叠。 */
+  #cmdBar { position:sticky; top:var(--headH); z-index:50; background:var(--panel);
+            border:1px solid var(--border); border-radius:6px; padding:6px 8px;
+            margin:0 0 12px; box-shadow:0 2px 6px rgba(0,0,0,.3); }
   /* 双栏容器：左侧主工作区 / 右侧信息区 */
   .colL { display:flex; flex-direction:column; gap:12px; min-width:0; }
   .colR { display:flex; flex-direction:column; gap:12px; min-width:0; }
@@ -138,6 +142,14 @@
 </header>
 <main>
   <div class="colL">
+  <div id="cmdBar" style="display:flex;gap:8px;align-items:center">
+    <input id="cmdInput" type="text" placeholder="输入需求或命令（如：写一个 C# 待办事项项目 / use --write 路径 / stats）"
+           style="flex:1;background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:13px" />
+    <button class="btn primary" id="cmdSend">提交</button>
+    <button class="btn danger" id="cmdCancel" title="取消当前正在执行的任务（与终端 q 键同一机制）">取消任务</button>
+    <span id="cmdHint" class="dim" style="font-size:12px;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+    <span id="queueStatus" class="dim" style="font-size:12px"></span>
+  </div>
   <div class="card">
     <h2>任务实时流（SSE · 当前任务）
       <span style="float:right;font-weight:400">
@@ -148,14 +160,6 @@
         <label style="margin-left:10px;color:var(--dim)"><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
       </span>
     </h2>
-    <div id="cmdBar" style="display:flex;gap:8px;margin:6px 0 10px;align-items:center">
-      <input id="cmdInput" type="text" placeholder="输入需求或命令（如：写一个 C# 待办事项项目 / use --write 路径 / stats）"
-             style="flex:1;background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:13px" />
-      <button class="btn primary" id="cmdSend">提交</button>
-      <button class="btn danger" id="cmdCancel" title="取消当前正在执行的任务（与终端 q 键同一机制）">取消任务</button>
-      <span id="cmdHint" class="dim" style="font-size:12px;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
-      <span id="queueStatus" class="dim" style="font-size:12px"></span>
-    </div>
     <div style="display:flex;gap:8px;margin:0 0 8px;align-items:center">
       <input id="evFilter" type="text" placeholder="过滤事件（关键词，本地）"
              style="flex:1;max-width:260px;background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:2px 8px;font-size:12px" />
