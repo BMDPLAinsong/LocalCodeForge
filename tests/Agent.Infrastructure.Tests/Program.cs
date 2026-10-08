@@ -1592,8 +1592,8 @@ Console.WriteLine("== analyze_code 大文件支持 ==");
     var acTool = new Agent.Infrastructure.Tools.CodeAnalyzerTool(acDir, acDir);
     var acArgs = System.Text.Json.JsonDocument.Parse("{\"path\":\"Big.cs\"}").RootElement;
     var acOut = acTool.InvokeAsync(acArgs, CancellationToken.None).GetAwaiter().GetResult();
-    Check("analyze_code 大文件(300KB) → 出符号地图",
-        acOut.Contains("符号总数") && acOut.Contains("Method1999") && !acOut.Contains("文件过大"));
+    Check("analyze_code 大文件(300KB) → 出符号地图（截断受控）",
+        acOut.Contains("符号总数: 4001") && !acOut.Contains("文件过大") && acOut.Contains("... 省略"));
     Directory.Delete(acDir, true);
 }
 
@@ -1735,6 +1735,87 @@ Console.WriteLine("== CodeAnalyzerTool（确定性符号索引） ==");
     var txtOut = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
         "{\"path\":\"readme.txt\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
     Check("非代码文件 → 无符号", txtOut.Contains("非代码文件"));
+
+    Directory.Delete(anDir, true);
+}
+
+// ── 10-08 符号地图治理：大文件截断 + range 参数 ──
+Console.WriteLine("== 符号地图治理（截断 + range） ==");
+{
+    var anDir = Path.Combine(TestTmp, "symmap_" + Guid.NewGuid().ToString("N")[..6]);
+    Directory.CreateDirectory(anDir);
+
+    // 生成 5003 方法的大文件（复刻 BigService 规模）
+    var bigPath = Path.Combine(anDir, "BigService.cs");
+    var sbBig = new System.Text.StringBuilder();
+    sbBig.AppendLine("using System;");
+    sbBig.AppendLine("public class BigService {");
+    for (var i = 0; i < 5003; i++)
+        sbBig.AppendLine($"    public int Method{i}(int x) {{ return x + {i}; }}");
+    sbBig.AppendLine("}");
+    File.WriteAllText(bigPath, sbBig.ToString());
+
+    var tool = new Agent.Infrastructure.Tools.CodeAnalyzerTool(anDir, anDir);
+
+    // ① 全量模式 → 截断 + 省略行 + 定向引导 + 符号总数仍准确
+    var bigOut = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"BigService.cs\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("治理：全量符号地图 → 截断（省略行出现）", bigOut.Contains("... 省略"));
+    Check("治理：截断提示含定向引导（find_symbol/range）",
+        bigOut.Contains("find_symbol") && bigOut.Contains("range="));
+    Check("治理：符号总数仍准确（5005 = 1 类 + 5003 方法 + 1 兜底）",
+        bigOut.Contains("符号总数: 5004"));
+    Check("治理：未输出超限符号（Method4999 不在前 120 内）", !bigOut.Contains("方法 Method4999"));
+    Check("治理：输出长度受控（≤ 6KB）", bigOut.Length < 6 * 1024);
+
+    // ② range 参数 → 只分析该行段
+    var rangeOut = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"BigService.cs\",\"range\":\"1500-1505\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("range：只含该段符号（Method1499 行 1502 / Method1500 行 1503）",
+        rangeOut.Contains("[1502] 方法 Method1499") &&
+        rangeOut.Contains("[1503] 方法 Method1500") &&
+        rangeOut.Contains("方法 Method1502"));
+    Check("range：不含段外符号（Method0 / Method4999）",
+        !rangeOut.Contains("方法 Method0") && !rangeOut.Contains("方法 Method4999"));
+    Check("range：无省略行（段内符号少）", !rangeOut.Contains("... 省略"));
+    Check("range：头部注明行段", rangeOut.Contains("分析行段: 1500-1505"));
+
+    // ③ range 非法/超界 → 用法提示
+    var bad1 = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"BigService.cs\",\"range\":\"abc\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("range 非法格式 → 用法提示", bad1.Contains("range 格式应为"));
+    var bad2 = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"BigService.cs\",\"range\":\"6000-6002\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("range 起点超界 → 提示", bad2.Contains("超出文件总行数"));
+    var bad3 = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"BigService.cs\",\"range\":\"99-10\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("range 起>止 → 提示", bad3.Contains("起 ≤ 止"));
+
+    // ④ 小文件回归：无截断
+    var smallPath = Path.Combine(anDir, "Small.cs");
+    File.WriteAllText(smallPath, """
+        public class Small
+        {
+            public int A() { return 1; }
+        }
+        """);
+    var smallOut = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"Small.cs\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("小文件：无截断 + 全量符号", !smallOut.Contains("... 省略") && smallOut.Contains("方法 A"));
+
+    // ⑤ Python 同样生效
+    var pyBig = Path.Combine(anDir, "pybig.py");
+    var sbPy = new System.Text.StringBuilder();
+    for (var i = 0; i < 350; i++)
+        sbPy.AppendLine($"def fn{i}():\n    pass");
+    File.WriteAllText(pyBig, sbPy.ToString());
+    var pyOut = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"pybig.py\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("Python：超限截断生效", pyOut.Contains("... 省略") && pyOut.Contains("符号总数: 350"));
+    var pyRange = tool.InvokeAsync(System.Text.Json.JsonDocument.Parse(
+        "{\"path\":\"pybig.py\",\"range\":\"5-10\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
+    Check("Python：range 命中段内函数（fn4 在行 9）",
+        pyRange.Contains("函数 fn4") && !pyRange.Contains("函数 fn0"));
 
     Directory.Delete(anDir, true);
 }
