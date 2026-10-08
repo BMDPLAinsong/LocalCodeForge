@@ -1299,6 +1299,29 @@ Console.WriteLine("== 3 FailureCategorizer 失败类别归类 ==");
     Check("窗口外历史记录不被回填", bfOld.Success);
     var bfFail = bfMetrics.GetRecentAsync(50, ctNone3).Result.First(m => m.TaskId == "bf_fail");
     Check("原本失败的记录不受影响", !bfFail.Success);
+
+    // 【10-10 真实口径下沉】护栏：数据闭环（QueryStats）/ 时代隔离（EpochBreakdown）走 task_metrics_real 视图，
+    // 不再依赖"每个查询记得加 is_e2e=0"的脆弱约定。e2e.db 共 5 条：3 条 E2E（2 失败 1 成功）+ 2 条真实（1 失败 1 成功）。
+    var vwStats = e2eMetrics.GetServiceStatsAsync("small", "Rule", 10, ctNone3).Result;
+    Check("真实口径视图：数据闭环排除 E2E（5 条 → 真实 2 条，成功 1）",
+        vwStats.TotalCount == 2 && vwStats.SuccessCount == 1);
+    var vwEpoch = e2eMetrics.GetEpochBreakdownAsync("small", e2eNow.AddSeconds(-3600), ctNone3).Result;
+    Check("真实口径视图：时代隔离排除 E2E（Current 真实 2 条 / Legacy 0）",
+        vwEpoch.Current.TotalCount == 2 && vwEpoch.Current.SuccessCount == 1 && vwEpoch.Legacy.TotalCount == 0);
+
+    // 【10-10 真实口径下沉】父失败回填（UPDATE）排除 E2E 子记录：窗口内新增一条 E2E 成功子记录，
+    // 修复前会被错误回填（返回 1），修复后返回 0（E2E 保持成功）。
+    bfMetrics.RecordAsync(new Agent.Core.Models.TaskMetric
+    {
+        TaskId = "bf_e2e_sub", SessionId = "", UserInput = "做一个 C# 项目", Mode = "orchestrator_sub",
+        RoutingTier = "OrchestratorExecutor", ServiceId = "small", RoutingReason = "orchestrator 内部调用（子指标）",
+        Success = true, IsSuspicious = false, IsE2E = true, RetryCount = 0,
+        TotalMs = 10, PlannerMs = 0, ExecutorMs = 0, ValidatorMs = 0,
+        LintBlockingErrors = 0, LintWarningErrors = 0,
+        ErrorSummary = "", StartedAt = bfNow, FinishedAt = bfNow
+    }, ctNone3).Wait();
+    var bfCount2 = bfMetrics.BackfillFailedSubMetricsAsync("做一个 C# 项目", bfNow.AddSeconds(-5), "父任务未通过验证（回填2）", ctNone3).Result;
+    Check("父失败回填排除 E2E：返回计数 0（E2E 子记录保持成功，无真实可回填）", bfCount2 == 0);
 }
 
 // ── 任务1：工程增量计划校验（Plan vs 已有文件冲突） ──

@@ -162,6 +162,24 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         {
             // 列迁移失败时忽略（索引不建不致命）
         }
+
+        // 【10-10 真实口径视图】task_metrics_real：唯一权威的"真实任务统计口径"。
+        // 所有面向真实统计的查询统一 FROM 本视图（is_e2e=0），消灭"每个查询记得加 WHERE"的脆弱约定；
+        // E2E 用例仍查 task_metrics 原表（is_e2e=1，GetE2ECountAsync 等）。
+        // 必须在 is_e2e 列 ALTER 之后建（列不存在时 CREATE VIEW 会引用未知列失败）。
+        try
+        {
+            using var viewCmd = conn.CreateCommand();
+            viewCmd.CommandText = """
+                CREATE VIEW IF NOT EXISTS task_metrics_real AS
+                SELECT * FROM task_metrics WHERE is_e2e = 0;
+                """;
+            viewCmd.ExecuteNonQuery();
+        }
+        catch
+        {
+            // 视图已存在 / 列迁移失败 → 忽略（真实口径退化为显式 WHERE 写法，不致命）
+        }
     }
 
     /// <summary>记录一次任务。</summary>
@@ -218,7 +236,7 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    /// <summary>失败类别分布（成功任务不统计；E2E 用例单列剔除——与 GetSummaryAsync 口径一致，防污染调权数据）。</summary>
+    /// <summary>失败类别分布（成功任务不统计；统一走 task_metrics_real 真实口径视图，E2E 自动剔除）。</summary>
     public async Task<IReadOnlyList<(string Category, int Count)>> GetFailureBreakdownAsync(CancellationToken ct)
     {
         var list = new List<(string, int)>();
@@ -228,9 +246,8 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT failure_category, COUNT(*)
-            FROM task_metrics
+            FROM task_metrics_real
             WHERE success = 0
-              AND is_e2e = 0
             GROUP BY failure_category
             ORDER BY COUNT(*) DESC
             """;
@@ -243,14 +260,14 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         return list;
     }
 
-    /// <summary>查询最近 N 条。</summary>
+    /// <summary>查询最近 N 条（真实口径视图）。</summary>
     public async Task<IReadOnlyList<TaskMetric>> GetRecentAsync(int take, CancellationToken ct)
     {
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
 
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT * FROM task_metrics WHERE is_e2e = 0 ORDER BY started_at DESC LIMIT $take;";
+        cmd.CommandText = "SELECT * FROM task_metrics_real ORDER BY started_at DESC LIMIT $take;";
         cmd.Parameters.AddWithValue("$take", take);
 
         return await ReadAllAsync(cmd, ct);
@@ -285,6 +302,7 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
                 error_summary = substr(error_summary || ' [' || $note || ']', 1, 500)
             WHERE routing_tier = 'OrchestratorExecutor'
               AND success = 1
+              AND is_e2e = 0
               AND finished_at >= $since
               AND (user_input = substr($u, 1, 500) OR user_input LIKE substr($u, 1, 500) || '%')
             """;
@@ -294,14 +312,14 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         return await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    /// <summary>查询最近的失败记录。</summary>
+    /// <summary>查询最近的失败记录（真实口径视图）。</summary>
     public async Task<IReadOnlyList<TaskMetric>> GetRecentFailuresAsync(int take, CancellationToken ct)
     {
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
 
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT * FROM task_metrics WHERE success = 0 AND is_e2e = 0 ORDER BY started_at DESC LIMIT $take;";
+        cmd.CommandText = "SELECT * FROM task_metrics_real WHERE success = 0 ORDER BY started_at DESC LIMIT $take;";
         cmd.Parameters.AddWithValue("$take", take);
 
         return await ReadAllAsync(cmd, ct);
@@ -324,9 +342,8 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
                 AVG(planner_ms) AS avg_planner,
                 AVG(executor_ms) AS avg_executor,
                 AVG(validator_ms) AS avg_validator
-            FROM task_metrics
-            WHERE is_e2e = 0
-              AND ($since IS NULL OR started_at >= $since);
+            FROM task_metrics_real
+            WHERE $since IS NULL OR started_at >= $since;
         """;
 
         object sinceParam = since.HasValue
@@ -389,7 +406,7 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
                    SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS ok_count,
                    AVG(total_ms) AS avg_ms
             FROM (
-                SELECT * FROM task_metrics
+                SELECT * FROM task_metrics_real
                 WHERE {{where}}
                 ORDER BY started_at DESC
                 LIMIT $take
@@ -426,7 +443,7 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
                 SELECT COUNT(*) AS total,
                        SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS ok_count,
                        AVG(total_ms) AS avg_ms
-                FROM task_metrics
+                FROM task_metrics_real
                 WHERE service_id = $service AND started_at {cmp} $epoch;
             """;
             cmd.Parameters.AddWithValue("$service", serviceId);
