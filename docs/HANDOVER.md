@@ -3,6 +3,15 @@
 > 撰写日期：2026-09-22（基于源码通读 + 真实构建验证 + workspace 运行数据核对）
 
 
+> **10-10 项目复盘（全面）**
+> 数据口径：metrics.db task_metrics，is_e2e=0 真实统计（截至 10-09 17:44 + 当日 E2E 验证）。
+> - **总体**：443 任务 / 383 成功 / 60 失败（86.5%）；平均 84.9s / 修复 0.18 次；可疑成功 28。
+> - **失败类别**：empty_response 14 / max_steps 11 / write_unverified 10 / write_not_attempted 5 / other 5 / timeout 4 / target_mismatch 4 / not_found 3 / compile_error 2 / runtime_error 1 / llm_error 1。
+> - **服务**：small 240·92.9%·53.3s（主力）｜agent_pro 66·71.2%·105.6s｜large 57·82.5%·107.2s｜orchestrator 80·82.5%·146.9s｜orchestrator_sub 153·100%。
+> - **配置现状**：Small/AgentPro/Large = law-unified@11434（Ollama 30B Q4）——strata q2_0→iq1_m 实验已回退（随 970b67c 一并提交，工作区 clean）；iq1_m 正确性持平、速度未提升，停用合理。
+> - **数据地基**：routing_decisions 141（small 106 / large 19 / agent_pro 16）；tool_rejections 25（pd_conflict 9 / out_of_bounds 7 / empty_content 2 / interactive 2 / project_file 2 / read_only 2 / drift 1）。
+> - **待办优先级**：① 方案 4 读任务收敛判定（40 步已产出总结→判成功，三件套最后闭环）；② empty_response 14 条分布归因（SQL 数据驱动）；③ 配置注释残留清理（Program.cs L55 8080/11434 混合字样）；④ 可疑成功 28 治理（验证器容错克制）。
+
 > **10-09 读任务三件套（"分析项目"必败修复）**
 > 背景：`use <工程> + 分析一下这个项目` 实测 20 步/359s 截断失败——模型发散探索（4 list_dir + 16 read_file）、3 次猜错路径（AgentLoop.cs / ProjectAnalyzer.cs / TaskEvent.cs 不存在且无候选提示）、30B CPU 每步 ~18s、max_steps=20 一刀切。
 > 三个工程化修复（数据驱动，非提示词；方案 1→2→3 确认后实施）：
@@ -10,6 +19,8 @@
 > 2. **分析类任务注入核心文件清单**：命中 `TaskFeatureClassifier.ReadQuery`（确定性词表，含"分析/解释/总结"前缀）→ 注入 `ProjectScanner.CoreFileLines`（入口 + sln/slnx + 依赖清单 + 按体积 Top8 源码文件，均为真实相对路径）——模型 5-8 步读完核心文件即可总结，不再逐文件发散。
 > 3. **读任务步数分级**：`AgentOptions.ReadQueryMaxSteps=40`（默认），AgentLoop 循环前按 ReadQuery 特征类取 `max(MaxSteps, ReadQueryMaxSteps)`（11 处引用统一替换 effectiveMaxSteps）；写任务保持 MaxSteps=20 防空转。
 > 验证：构建 0 错误；tests 648→665（+17：分类词表回归 5 / 配置 2 / 候选匹配 4 / 核心清单 4 / read_file 模式分支 2）；E2E 复测同款任务 **12 步自主收敛、0 猜错路径**（对比失败日志 20 步截断/3 次猜错），总结质量完整（结构/特性/技术栈正确）。改动文件：AgentOptions.cs、ProjectScanner.cs、ReadFileTool.cs、AgentLoop.cs。
+
+
 
 > **10-09 追加：模型升级为 strata qwen3.8-flash-next-coder-iq1_m（用户提供 strata "Model and engine" 面板截图：Engine v0.1.41 / Context 32768 / KV cache 4-bit Hadamard-rotated all in VRAM / Experts in VRAM 126 (0.2GB) / Speculation MTP <=3 tokens + prompt lookup on / Images off）。strata 服务端已切到 iq1_m（/v1/models 实测 loaded, ctx=32768，q2_0 已不在列表），workbench 仅改 Program.cs 配置区三处 Model = "qwen3.8-flash-next-coder-iq1_m"（Endpoint 8080 / Provider ollama / Temperature 角色语义 0.3/0.5/0.7 均不动；KV/专家/推测为服务端配置，workbench 不透视）。**踩坑记录**：PowerShell `-replace` 对含数字的模型名会踩正则转义坑（替换串 `iq1_m` 被处理成 `iql_m`、第三处还拼出 `qwqwen` 前缀）——**必须用 Edit 工具 replace_all 精确替换，禁用命令行 -replace**（与 10-09 早轮 q2_0 切换结论一致）。修复后 Grep 确认 4 处（含注释）均为正确名。验证：构建 0 错误 + tests 648/648 + E2E 奇数偶数 188.4s 一次成功（q2_0 同款 169.2s——**速度未显著提升，正确性保持**，单样本不足以定论，1-bit 量化的 dequant 开销 + MoE 专家路由可能抵消 KV/推测收益；且写任务因新模型样本清零仍直连 large）。**当前运维注意**：本次启动 Ollama 11434 未在线（Classifier qwen2.5:1.5b FAIL 降级，strata 无此模型）——若 Ollama 长期停用需决定 Classifier 替代方案（strata 换小模型 / 停用意图分类，待用户决策）。
 > **10-09 三角色切换 strata（qwen3.8-flash-next-q2_0，OpenAI 兼容端点）：** 用户提供 strata 部署配置（Base URL `http://127.0.0.1:8080/v1`、ApiKey/Model 服务端不校验），要求将承接 Small/AgentPro/Large 三角色的 30B `law-unified` 切换为 strata 上的 `qwen3.8-flash-next-q2_0`，跑真实任务对比"有无提升"。**改动**：① Program.cs 配置区 Small/AgentPro/Large 三角色 → Provider="ollama"（KernelFactory 拼 `{Endpoint}/v1` 正好匹配 strata 的 `/v1` 端点）、Model="qwen3.8-flash-next-q2_0"、Endpoint="http://127.0.0.1:8080"、Temperature 角色语义保留（0.3/0.5/0.7）；Classifier 不动（qwen2.5:1.5b@11434）。② CheckLocalModelsAsync **按端点分组探活**（关键：Classifier 在 11434/Ollama、三角色在 8080/strata，单端点探活会让跨端配置误报"未安装"）：每个唯一端点独立探测，模型集按端点映射；**双协议探活**（先 `GET {endpoint}/v1/models` 解析 data[].id，404/失败回退 `GET {endpoint}/api/tags`）；**自动启动仅限默认 Ollama 端口 11434**（strata 无 serve 子命令，连不上只提示不拉起）；在线/缺失提示按服务类型自适应（strata 提示"确认部署已包含"、Ollama 提示 `ollama pull`）。**对比实测（同款真实任务）**：奇数偶数 85.8s→169.2s 成功（速度 ~2 倍下降，正确性保持）；字母大小写 169.5s/343.5s 双失败 → 192.3s 一次成功（**正确性显著提升**）；Python 计算器（30B 曾 empty_response 失败）→ 269.7s 成功（含递归下降解析器，不用 eval）；图书管理系统多文件 orchestrator 父任务 536s（子调用 64-118s）成功。**结论**：q2_0 代码质量够用（曾失败项全部转成功、负数/边界/自检覆盖更全），但**速度未获提升反而下降**（q2_0 在 strata 无 ollama 的 prefix cache 优势；2-bit dequant 开销 + 写任务因新模型样本清零回 large）。**架构价值**：双端点健康检查 = 本地可混合部署（Ollama + strata 并存），KernelFactory 的 ollama provider 天然兼容任意 OpenAI 兼容本地服务。构建 0 错误 + tests 648/648；E2E 4 任务 4/4 通过。（回滚：git checkout a3d5605 恢复 law-unified 配置；strata 服务需用户侧保持运行）
