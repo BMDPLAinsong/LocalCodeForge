@@ -79,9 +79,18 @@ public sealed class ReadFileTool : AgentToolBase
         if (SensitivePathGuard.IsDenied(fullPath))
             return $"错误：路径涉及敏感区（{fullPath}），禁止读取。";
 
-        // 文件不存在
+        // 文件不存在（【10-09 方案1】工程模式下附候选路径：同名/近似文件——数据驱动，
+        // 消灭模型"猜路径 → 失败 → 继续猜"的确定性浪费；沙箱模式无工程索引，保持原样）
         if (!File.Exists(fullPath))
+        {
+            if (_projectRoot is not null)
+            {
+                var candidates = ProjectScanner.FindFileCandidates(_projectRoot, relative);
+                if (candidates.Count > 0)
+                    return $"错误：文件不存在：{relative}。工程中相近文件（候选路径）：{string.Join(", ", candidates)}。请用候选路径重试。";
+            }
             return $"错误：文件不存在：{relative}";
+        }
 
         // 【大文件首读重定向】工程模式 + 大文件 + 未带 offset → 拒绝，强制走符号定位
         // （实测：模型反复 read_file 首页不续读不定位 → 工具层行为约束，非提示词；

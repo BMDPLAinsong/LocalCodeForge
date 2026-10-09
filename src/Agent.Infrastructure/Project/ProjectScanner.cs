@@ -165,6 +165,119 @@ public static class ProjectScanner
         return (files.Count, dirs.Count, totalBytes, maxMtimeTicks);
     }
 
+    /// <summary>
+    /// 【10-09 方案1/2 数据源】返回工程内全部可见文件（相对路径 + 大小），复用 Walk 的排除规则。
+    /// 供 read_file 失败候选匹配（FindFileCandidates）与核心文件清单（CoreFileLines）使用。
+    /// </summary>
+    public static List<(string Rel, long Size)> ListFilesWithSize(string root)
+    {
+        root = Path.GetFullPath(root);
+        var files = new List<(string Rel, long Size, long MtimeTicks)>();
+        var dirs = new List<string>();
+        int excluded = 0;
+        Walk(root, "", 0, files, dirs, ref excluded);
+        return files.Select(f => (f.Rel, f.Size)).ToList();
+    }
+
+    /// <summary>
+    /// 【10-09 方案1】read_file 命中"文件不存在"时的候选路径匹配（数据驱动，非提示词）：
+    /// 先按文件名精确匹配（同名不同目录 → 全部列出）；无精确命中再模糊匹配
+    /// （扩展名相同 + 名字公共前缀 ≥4 字符，如 TaskEvent.cs → TaskEventHub.cs；
+    ///  或一名字包含另一名字，如 Order.cs → OrderService.cs）。
+    /// 返回最多 5 个相对路径；无匹配返回空列表。
+    /// </summary>
+    public static List<string> FindFileCandidates(string root, string requestedRel)
+    {
+        if (string.IsNullOrWhiteSpace(requestedRel)) return new List<string>();
+        var requestedName = Path.GetFileName(requestedRel.TrimEnd('\\', '/'));
+        if (string.IsNullOrEmpty(requestedName)) return new List<string>();
+
+        List<(string Rel, long Size)> files;
+        try { files = ListFilesWithSize(root); }
+        catch { return new List<string>(); }
+
+        var exact = files
+            .Where(f => string.Equals(Path.GetFileName(f.Rel), requestedName, StringComparison.OrdinalIgnoreCase))
+            .Select(f => f.Rel)
+            .Take(5)
+            .ToList();
+        if (exact.Count > 0) return exact;
+
+        var reqStem = Path.GetFileNameWithoutExtension(requestedName);
+        var reqExt = Path.GetExtension(requestedName);
+        return files
+            .Where(f =>
+            {
+                var candName = Path.GetFileName(f.Rel);
+                var candStem = Path.GetFileNameWithoutExtension(candName);
+                var candExt = Path.GetExtension(candName);
+                // 扩展名相同（或双方都无扩展名）+ 名字公共前缀 ≥4 → 近似（TaskEvent.cs → TaskEventHub.cs）
+                if (string.Equals(reqExt, candExt, StringComparison.OrdinalIgnoreCase)
+                    && CommonPrefixLen(reqStem, candStem) >= 4)
+                    return true;
+                // 名字包含关系（Order.cs → OrderService.cs / OrderService.cs → Order.cs）
+                return candStem.Contains(reqStem, StringComparison.OrdinalIgnoreCase)
+                    || reqStem.Contains(candStem, StringComparison.OrdinalIgnoreCase);
+            })
+            .Select(f => f.Rel)
+            .Take(5)
+            .ToList();
+    }
+
+    /// <summary>两名字的公共前缀长度（大小写不敏感）。</summary>
+    private static int CommonPrefixLen(string a, string b)
+    {
+        var n = Math.Min(a.Length, b.Length);
+        var i = 0;
+        while (i < n && char.ToLowerInvariant(a[i]) == char.ToLowerInvariant(b[i])) i++;
+        return i;
+    }
+
+    /// <summary>
+    /// 【10-09 方案2】核心文件清单（分析/总结类任务注入用，均为相对工程根的真实路径）：
+    /// 入口（EntryNames + sln/slnx）+ 依赖清单 + 按体积降序 Top8 源码文件。
+    /// 让模型 5-8 步内读完全部核心文件并总结，避免逐文件发散探索。
+    /// </summary>
+    public static string CoreFileLines(string root)
+    {
+        List<(string Rel, long Size)> files;
+        try { files = ListFilesWithSize(root); }
+        catch { return string.Empty; }
+        if (files.Count == 0) return string.Empty;
+
+        var entries = files
+            .Where(f => EntryNames.Contains(Path.GetFileName(f.Rel))
+                     || f.Rel.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
+                     || f.Rel.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+            .Select(f => f.Rel)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var deps = files
+            .Where(f => DepExtensions.Contains(Path.GetExtension(f.Rel))
+                     || DepNames.Contains(Path.GetFileName(f.Rel)))
+            .Select(f => f.Rel)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var sourceExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".cs", ".py", ".js", ".ts", ".java", ".go", ".rs", ".cpp", ".c", ".h", ".vue", ".cshtml", ".razor"
+        };
+        var big = files
+            .Where(f => sourceExts.Contains(Path.GetExtension(f.Rel)))
+            .OrderByDescending(f => f.Size)
+            .Take(8)
+            .Select(f => $"{f.Rel} ({FormatBytes(f.Size)})")
+            .ToList();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("[工程核心文件]（均为相对工程根的路径，建议按序阅读后总结）");
+        if (entries.Count > 0) sb.AppendLine("入口: " + string.Join(", ", entries.Take(6)));
+        if (deps.Count > 0) sb.AppendLine("依赖: " + string.Join(", ", deps.Take(6)));
+        if (big.Count > 0) sb.AppendLine("大源码文件(按体积): " + string.Join(", ", big));
+        return sb.ToString();
+    }
+
     /// <summary>递归遍历（限深度）。无权限子目录（回收站/系统隐藏）跳过不崩溃（10-08：use 盘根实证）。</summary>
     private static void Walk(string root, string rel, int depth,
         List<(string Rel, long Size, long MtimeTicks)> files, List<string> dirs, ref int excluded)

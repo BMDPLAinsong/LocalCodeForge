@@ -100,6 +100,13 @@ public sealed class AgentOptions
     public int MaxSteps { get; set; } = 20;
 
     /// <summary>
+    /// 【10-09 读任务步数分级】读/分析类任务（ReadQuery 特征类，如"分析一下这个项目"）
+    /// 的最大步数：探索（list_dir/read_file）+ 总结需要更多步，写任务保持 MaxSteps 防空转。
+    /// 30B 读任务实测 20 步截断（2026-10-09 "分析这个项目" 359s/20步失败），默认放大到 40。
+    /// </summary>
+    public int ReadQueryMaxSteps { get; set; } = 40;
+
+    /// <summary>
     /// 历史对话携带的最大轮数。
     /// </summary>
     public int MaxHistoryTurns { get; set; } = 10;

@@ -1,0 +1,263 @@
+[清理] 删除 1 个旧 run 目录
+info: Agent.Infrastructure.Routing.RuleEngine[0]
+      RuleEngine 已加载 8 条规则。
+=== Local AI Workbench ===
+运行目录: X:\.NET AI\LocalAiWorkbench\workspace\runs\20261009-201930-4eff
+会话库:   X:\.NET AI\LocalAiWorkbench\workspace\sessions.db
+输入需求，回车执行。输入 exit 退出。输入 new 开启新会话。
+
+=== 实际生效配置 ===
+Classifier: qwen2.5:1.5b
+Small:      law-unified
+AgentPro:   law-unified   (ComplexToPro=True)
+Large:      law-unified
+
+=== 本地模型健康检查 ===
+  [OK] 模型服务在线（1 个端点 / 5 个模型 / strata/OpenAI 兼容服务）
+  [OK] Classifier qwen2.5:1.5b
+  [OK] Small      law-unified
+  [OK] AgentPro   law-unified
+  [OK] Large      law-unified
+
+> [工程] X:\.NET AI\LocalAiWorkbench
+  文件 226 个 / 目录 36 个 / 总大小 6.0 MB（排除 13 个忽略项）
+  入口/说明: LocalAiWorkbench.slnx, src\Agent.Cli\Program.cs, tests\Agent.Infrastructure.Tests\Program.cs
+  依赖清单: LocalAiWorkbench.slnx, src\Agent.Cli\Agent.Cli.csproj, src\Agent.Core\Agent.Core.csproj, src\Agent.Dashboard\Agent.Dashboard.csproj, src\Agent.Infrastructure\Agent.Infrastructure.csproj, tests\Agent.Infrastructure.Tests\Agent.Infrastructure.Tests.csproj
+
+> [工作目录] 20261009-201930-4eff（任务归属 task_e6654abb）
+info: Agent.Infrastructure.Routing.RuleEngine[0]
+      RuleEngine 已加载 8 条规则。
+info: Agent.Infrastructure.AgentLoop[0]
+      [工程上下文] 缓存未命中，重新扫描并写入缓存。
+info: Agent.Infrastructure.AgentLoop[0]
+      [记忆] 历史记忆命中 1 条（特征类 ReadQuery），已注入上下文。
+info: Agent.Infrastructure.Routing.RuleEngine[0]
+      规则命中：complex_local → agent_pro
+info: Agent.Infrastructure.Routing.ModelRouter[0]
+      [L1-规则] 规则 complex_local：复杂任务关键词，走本地 AgentPro → agent_pro
+[路由] Rule → agent_pro
+[工具调用] list_dir  path="."
+[工具结果] list_dir: [DIR]  .git/
+[DIR]  .vs/
+[DIR]  docs/
+[DIR]  scripts/
+[DIR]  src/
+[DIR]  tests/
+[DIR]  workspace/
+[FILE] .gitignore  (441 bytes)
+[FILE] =  (0 bytes)
+[FILE] build_diag.txt  (4243 bytes)
+[FILE] build_summary.txt  (11 bytes)
+[FILE] demo_diag.txt  (243 bytes)
+[FILE] e2e_diag.txt  (2015 bytes...
+[工具调用] read_file  path="LocalAiWorkbench.slnx"
+[工具结果] read_file: <Solution>
+  <Folder Name="/src/">
+    <Project Path="tests/Agent.Infrastructure.Tests/Agent.Infrastructure.Tests.csproj" />
+    <Project Path="src/Agent.Cli/Agent.Cli.csproj" />
+    <Project Path="src/Agent.Core/Agent.Core.csproj" />
+    <Project Path="src/Agent.Dashboard/Agent.Dashboard.csproj" />...
+[工具调用] list_dir  path="src"
+[工具结果] list_dir: [DIR]  Agent.Cli/
+[DIR]  Agent.Core/
+[DIR]  Agent.Dashboard/
+[DIR]  Agent.Infrastructure/
+
+[工具调用] list_dir  path="src/Agent.Cli"
+[工具结果] list_dir: [DIR]  bin/
+[DIR]  obj/
+[FILE] Agent.Cli.csproj  (768 bytes)
+[FILE] Program.cs  (97669 bytes)
+
+[工具调用] read_file  path="src/Agent.Cli/Program.cs"
+[工具结果] read_file: // 引入 DI
+// 引入 Core
+using Agent.Core.Abstractions;
+using Agent.Core.Models;
+// 引入 Infrastructure
+using Agent.Infrastructure;
+using Microsoft.Extensions.DependencyInjection;
+using System.Diagnostics;
+
+// 命名空间（可保留，也可删）
+namespace Agent.Cli;
+
+using Agent.Infrastructure.Metrics;
+using Agent.Infrastructur...
+[工具调用] read_file  path="src/Agent.Cli/Agent.Cli.csproj"
+[工具结果] read_file: <Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Agent.Core\Agent.Core.csproj" />
+    <ProjectReference Include="..\Agent.Dashboard\Agent.Dashboard.csproj" />
+    <ProjectReference Include="..\Agent.Infrastructure\Agent.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <!...
+[工具调用] list_dir  path="src/Agent.Core"
+[工具结果] list_dir: [DIR]  Abstractions/
+[DIR]  bin/
+[DIR]  Extensions/
+[DIR]  Models/
+[DIR]  obj/
+[FILE] Agent.Core.csproj  (460 bytes)
+[FILE] CommandHub.cs  (3887 bytes)
+
+[工具调用] list_dir  path="src/Agent.Infrastructure"
+[工具结果] list_dir: [DIR]  bin/
+[DIR]  Diff/
+[DIR]  Events/
+[DIR]  Memory/
+[DIR]  Metrics/
+[DIR]  obj/
+[DIR]  Ollama/
+[DIR]  Orchestration/
+[DIR]  Project/
+[DIR]  Quality/
+[DIR]  Rendering/
+[DIR]  Routing/
+[DIR]  Session/
+[DIR]  Tools/
+[FILE] Agent.Infrastructure.csproj  (944 bytes)
+[FILE] AgentLoop.cs  ...
+[工具调用] read_file  path="src/Agent.Infrastructure/AgentLoop.cs"
+[工具结果] read_file: // ============================================================
+// AgentLoop.cs
+// Agent 主循环。ReAct + 三层路由 + 首轮决策缓存 + 防死循环 + 失败修复。
+// ============================================================
+
+using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
+using System.Text.Json;
+usin...
+[工具调用] read_file  path="src/Agent.Infrastructure/DependencyInjection.cs"
+[工具结果] read_file: // ============================================================
+// DependencyInjection.cs
+// Agent 相关的 DI 装配。
+// ============================================================
+
+// 引入 DI
+// 引入 Core
+using Agent.Core.Abstractions;
+using Agent.Core.Models;
+using Agent.Infrastructure.Metrics;
+using Agent.I...
+[工具调用] list_dir  path="src/Agent.Dashboard"
+[工具结果] list_dir: [DIR]  bin/
+[DIR]  DashboardPages/
+[DIR]  obj/
+[DIR]  Properties/
+[DIR]  vendor/
+[FILE] Agent.Dashboard.csproj  (931 bytes)
+[FILE] DashboardHost.cs  (29259 bytes)
+
+[工具调用] read_file  path="src/Agent.Dashboard/DashboardHost.cs"
+[工具结果] read_file: // ============================================================
+// Agent.Dashboard / DashboardHost.cs
+// 真 UI 层：本地 Web Dashboard（10-07）。
+//   · Kestrel 127.0.0.1 随机端口（仅本机回环，无认证）；随 CLI 进程生命周期。
+//   · 旁路消费：TaskEventHub 多播（渲染器直接消费不变，本宿主是第二消费者）。
+//   · SSE /events 只覆盖当前任务（事件流实时）；历史任务走 /api/tasks 轮询，前端按 ...
+[工具调用] list_dir  path="tests/Agent.Infrastructure.Tests"
+[工具结果] list_dir: [DIR]  bin/
+[DIR]  obj/
+[FILE] Agent.Infrastructure.Tests.csproj  (651 bytes)
+[FILE] Program.cs  (228790 bytes)
+
+[工具调用] read_file  path="tests/Agent.Infrastructure.Tests/Program.cs"
+[工具结果] read_file: 错误：文件过大（228790 bytes，约 3482 行）。请先调用 find_symbol <目标类/方法名> 或 analyze_code 获取符号地图定位目标位置，再使用 read_file 并携带 offset/limit 参数精确读取目标区间；不要整页翻阅大文件。
+[完成] 这个项目是一个基于 .NET 的本地 AI 工作台（Local AI Workbench），它提供了一个智能代理系统，用于执行各种任务，如代码生成、分析、修改等。以下是该项目的简要分析：
+
+
+
+### 项目结构
+
+
+
+1. **主程序入口**：
+
+   - `src/Agent.Cli`：控制台应用程序入口点，负责命令行交互和初始化。
+
+   - `src/Agent.Dashboard`：Web 界面，提供可视化任务监控和管理。
+
+
+
+2. **核心功能模块**：
+
+   - `src/Agent.Core`：包含核心抽象和模型定义。
+
+   - `src/Agent.Infrastructure`：核心业务逻辑实现，包括代理循环、路由、工具执行等。
+
+
+
+3. **测试模块**：
+
+   - `tests/Agent.Infrastructure.Tests`：用于测试基础设施模块的功能。
+
+
+
+### 核心特性
+
+
+
+1. **任务执行引擎**：
+
+   - 使用 Semantic Kernel (SK) 实现 ReAct 循环。
+
+   - 支持三种模型角色（small、large、agent_pro），根据任务类型自动选择合适的模型。
+
+   - 具备路由决策机制，将任务分发到不同的模型服务。
+
+
+
+2. **工具系统**：
+
+   - 提供多种工具，如文件读写、命令执行、代码分析等。
+
+   - 工具支持工程感知和可写模式（通过 `--write` 参数启用）。
+
+
+
+3. **记忆与状态管理**：
+
+   - 模型级记忆系统，可以记住之前任务的发现和决策。
+
+   - 工程上下文缓存，避免重复扫描项目文件。
+
+
+
+4. **可视化界面**：
+
+   - 提供 Web Dashboard，支持任务实时监控、历史任务查看、Diff 查看等功能。
+
+   - 支持通过浏览器访问，方便用户进行交互式操作。
+
+
+
+5. **安全机制**：
+
+   - 使用 token 鉴权保护 Dashboard。
+
+   - 工具调用拒绝记录，防止误操作。
+
+
+
+### 技术栈
+
+
+
+- **语言**：C#
+
+- **框架**：.NET 10
+
+- **依赖注入**：Microsoft.Extensions.DependencyInjection
+
+- **AI 框架**：Semantic Kernel (SK)
+
+- **Web 框架**：ASP.NET Core
+
+
+
+该项目设计用于本地 AI 工作流，支持多种任务类型，并通过可视化界面提供良好的用户体验。
+
+> 

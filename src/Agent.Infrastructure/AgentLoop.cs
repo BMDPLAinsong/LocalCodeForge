@@ -230,6 +230,19 @@ public sealed class AgentLoop : IAgentLoop
         if (projectBlock is not null && Agent.Infrastructure.Routing.IntentOverride.IsReadTask(request.Input))
             userMsg += "\n\n（工程提示：理解代码结构请优先调用 analyze_code 获取类/方法/行号索引，再按需 read_file 读具体行段——符号地图比逐行探索高效。）";
 
+        // 【10-09 方案2】分析/总结类任务注入核心文件清单（数据驱动，非提示词）：
+        // 命中 ReadQuery 特征类（确定性词表，含"分析/解释/总结"前缀）时，注入入口/依赖/大源码文件
+        // 的真实相对路径——模型 5-8 步内读完全部核心文件即可总结，不再逐文件发散探索
+        // （2026-10-09 实测：20 步读 16 个文件未收敛、3 次猜错路径）。
+        if (projectBlock is not null
+            && Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify(request.Input)
+                == Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ReadQuery)
+        {
+            var coreLines = Agent.Infrastructure.Project.ProjectScanner.CoreFileLines(_options.ProjectRoot!);
+            if (!string.IsNullOrWhiteSpace(coreLines))
+                userMsg += "\n\n" + coreLines;
+        }
+
         // 【目标文件注入（最小版）】工程可写模式 + 写任务：从输入正则提取目标文件并注入，
         // 让模型聚焦目标文件（实测跑偏根因：任务说改 BigService.cs，模型却读 Program/TaxService 等无关小文件）。
         // 数据驱动（正则），非提示词堆砌；只注入事实，不做工具约束。
@@ -262,7 +275,13 @@ public sealed class AgentLoop : IAgentLoop
         var historyStartIndex = chatHistory.Count;
 
         // ═══════════ ReAct 主循环 ═══════════
-        for (var step = 0; step < _options.MaxSteps; step++)
+        // 【10-09 方案3】读任务步数分级：ReadQuery 特征类（读/分析）需"探索+总结"更多步，
+        // 写任务保持 MaxSteps 防空转。确定性特征类判定，非提示词。
+        var effectiveMaxSteps = _options.MaxSteps;
+        if (Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify(request.Input)
+                == Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ReadQuery)
+            effectiveMaxSteps = Math.Max(effectiveMaxSteps, _options.ReadQueryMaxSteps);
+        for (var step = 0; step < effectiveMaxSteps; step++)
         {
             // ─────── 1. 路由决策 ───────
             string serviceId;
@@ -748,7 +767,7 @@ public sealed class AgentLoop : IAgentLoop
                         (stdout.Contains("Hello", StringComparison.OrdinalIgnoreCase) ||
                          stdout.Contains("World", StringComparison.OrdinalIgnoreCase));
 
-                    if (looksLikeTemplateOutput && step < _options.MaxSteps - 1)
+                    if (looksLikeTemplateOutput && step < effectiveMaxSteps - 1)
                     {
                         forceContinueCount++;
                         if (forceContinueCount >= 3)
@@ -790,7 +809,7 @@ public sealed class AgentLoop : IAgentLoop
             }
 
             // 规则 1：代码请求但没写文件 → 强制写
-            if (looksLikeCodeRequest && !hasWrittenFile && step < _options.MaxSteps - 1)
+            if (looksLikeCodeRequest && !hasWrittenFile && step < effectiveMaxSteps - 1)
             {
                 forceContinueCount++;
                 if (forceContinueCount >= 3)
@@ -815,7 +834,7 @@ public sealed class AgentLoop : IAgentLoop
                     .Where(m => m.Role == AuthorRole.Tool && m.Content != null)
                     .Any(m => m.Content.Contains("dotnet run"));
 
-            if (mustRun && onlyBuiltNotRun && step < _options.MaxSteps - 1)
+            if (mustRun && onlyBuiltNotRun && step < effectiveMaxSteps - 1)
             {
                 forceContinueCount++;
                 if (forceContinueCount >= 3)
@@ -833,7 +852,7 @@ public sealed class AgentLoop : IAgentLoop
             }
 
             // 规则 2：写了文件但没运行 → 强制运行
-            if (looksLikeCodeRequest && hasWrittenFile && !hasRunCommand && step < _options.MaxSteps - 1)
+            if (looksLikeCodeRequest && hasWrittenFile && !hasRunCommand && step < effectiveMaxSteps - 1)
             {
                 forceContinueCount++;
                 if (forceContinueCount >= 3)
@@ -850,7 +869,7 @@ public sealed class AgentLoop : IAgentLoop
             }
 
             // 规则 3：运行失败了 → 强制修复
-            if (looksLikeCodeRequest && lastRunFailed && step < _options.MaxSteps - 1)
+            if (looksLikeCodeRequest && lastRunFailed && step < effectiveMaxSteps - 1)
             {
                 forceContinueCount++;
                 if (forceContinueCount >= 3)
@@ -872,7 +891,7 @@ public sealed class AgentLoop : IAgentLoop
             if (_options.ProjectRoot is not null
                 && hasWrittenFile
                 && !autoTestRun
-                && step < _options.MaxSteps - 1)
+                && step < effectiveMaxSteps - 1)
             {
                 var testCmd = Agent.Infrastructure.Project.TestRunnerService.DetectTest(_options.ProjectRoot);
                 if (testCmd is not null)
@@ -949,14 +968,14 @@ public sealed class AgentLoop : IAgentLoop
         }
         if (_writeTarget is not null)
         {
-            var landed = $"任务完成：显式写目标 {_writeTarget} 已落地（达到最大步数 {_options.MaxSteps}，但目标达成）。";
+            var landed = $"任务完成：显式写目标 {_writeTarget} 已落地（达到最大步数 {effectiveMaxSteps}，但目标达成）。";
             await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", landed), ct);
             _logger.LogWarning("[完成门·最大步数] 目标已落地，放行收尾。");
             yield return new AgentEvent.FinalAnswer(landed);
             yield break;
         }
 
-        yield return new AgentEvent.Error($"达到最大步数 {_options.MaxSteps}，任务终止。");
+        yield return new AgentEvent.Error($"达到最大步数 {effectiveMaxSteps}，任务终止。");
     }
 
     /// <summary>剥离工具名前缀。</summary>

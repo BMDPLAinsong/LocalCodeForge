@@ -3416,6 +3416,51 @@ Console.WriteLine("== 3b Web 端回滚（dry-run → rollback 闭环） ==");
     }
 }
 
+// ── 10-09 读任务三件套：候选路径 / 核心文件清单 / 步数分级 ──
+Console.WriteLine("== 10-09 读任务三件套（候选路径 / 核心清单 / 步数分级） ==");
+
+// 3-1：特征分类（方案2/3 的确定性判定词表回归）
+Check("分类：分析项目 → ReadQuery", Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("分析一下这个项目") == Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ReadQuery);
+Check("分类：解释工程结构 → ReadQuery", Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("解释一下这个工程的结构") == Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ReadQuery);
+Check("分类：读取文件 → ReadQuery", Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("读取 BigService.cs") == Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ReadQuery);
+Check("分类：写函数 → 非 ReadQuery", Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("写一个C#判断奇数偶数函数") != Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ReadQuery);
+Check("分类：多文件项目 → 非 ReadQuery", Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify("用 C# 写一个图书管理系统") != Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ReadQuery);
+
+// 3-2：读任务步数上限配置（方案3：ReadQuery 放大到 40，写任务保持 MaxSteps=20）
+Check("配置：ReadQueryMaxSteps 默认 40（> MaxSteps 20）", new Agent.Core.Models.AgentOptions().ReadQueryMaxSteps == 40);
+Check("配置：MaxSteps 默认保持 20", new Agent.Core.Models.AgentOptions().MaxSteps == 20);
+
+// 1/2 数据源：临时工程（多目录同名 + 近似名 + 入口/依赖/大源码）
+var candRoot = Path.Combine(TestTmp, "cand_proj");
+Directory.CreateDirectory(Path.Combine(candRoot, "src", "Services"));
+Directory.CreateDirectory(Path.Combine(candRoot, "tests"));
+File.WriteAllText(Path.Combine(candRoot, "Program.cs"), "class Program {}");
+File.WriteAllText(Path.Combine(candRoot, "src", "Services", "BigService.cs"), "class BigService {}");
+File.WriteAllText(Path.Combine(candRoot, "src", "Services", "OrderService.cs"), "class OrderService {}");
+File.WriteAllText(Path.Combine(candRoot, "tests", "BigService.cs"), "class BigService {}");
+File.WriteAllText(Path.Combine(candRoot, "TaskEventHub.cs"), "class TaskEventHub {}");
+File.WriteAllText(Path.Combine(candRoot, "demo.csproj"), "<Project />");
+
+Check("候选：精确同名（src 与 tests 两处）", Agent.Infrastructure.Project.ProjectScanner.FindFileCandidates(candRoot, "BigService.cs").Count == 2);
+Check("候选：同名列表含真实相对路径", string.Join("|", Agent.Infrastructure.Project.ProjectScanner.FindFileCandidates(candRoot, "BigService.cs")).Contains("src\\Services\\BigService.cs"));
+Check("候选：模糊包含 TaskEvent.cs → TaskEventHub.cs", Agent.Infrastructure.Project.ProjectScanner.FindFileCandidates(candRoot, "TaskEvent.cs").Contains("TaskEventHub.cs"));
+Check("候选：无匹配 → 空列表", Agent.Infrastructure.Project.ProjectScanner.FindFileCandidates(candRoot, "Nope.cs").Count == 0);
+
+var core = Agent.Infrastructure.Project.ProjectScanner.CoreFileLines(candRoot);
+Check("核心清单：非空", !string.IsNullOrWhiteSpace(core));
+Check("核心清单：含入口 Program.cs", core.Contains("Program.cs"));
+Check("核心清单：含依赖 csproj", core.Contains("demo.csproj"));
+Check("核心清单：含大源码文件", core.Contains("BigService.cs"));
+
+// 1：ReadFileTool 工程模式附候选 / 沙箱模式原样（沙箱无工程索引，保持旧行为）
+var readArgs = System.Text.Json.JsonDocument.Parse("{\"path\":\"TaskEvent.cs\"}").RootElement;
+var readToolProj = new Agent.Infrastructure.Tools.ReadFileTool(candRoot, candRoot);
+var readOutProj = readToolProj.InvokeAsync(readArgs, CancellationToken.None).Result;
+Check("read_file 工程模式：不存在 + 有候选 → 附候选路径", readOutProj.Contains("工程中相近文件") && readOutProj.Contains("TaskEventHub.cs"));
+var readToolSand = new Agent.Infrastructure.Tools.ReadFileTool(candRoot);
+var readOutSand = readToolSand.InvokeAsync(readArgs, CancellationToken.None).Result;
+Check("read_file 沙箱模式：不存在 → 原样无候选", readOutSand.Contains("文件不存在") && !readOutSand.Contains("工程中相近文件"));
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;
 
