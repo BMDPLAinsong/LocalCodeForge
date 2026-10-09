@@ -31,3 +31,4 @@ tests_diag.txt
 build_summary.txt
 tests_fail.txt
 tests_summary.txt
+build_tests_diag.txt
