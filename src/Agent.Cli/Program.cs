@@ -33,6 +33,17 @@ internal class Program
         try { Console.InputEncoding = System.Text.Encoding.UTF8; }
         catch { /* 重定向/终端不支持时保持默认，主循环 trim 仍兜底 U+FEFF 形态 */ }
 
+        // ─────────── 数据源头：无头管道自动标记 E2E（10-10 可疑成功治理） ───────────
+        // IsE2E 原仅由显式环境变量 LAW_E2E=1 标记——E2E 复测（type e2e_input.txt | dotnet run）
+        // 一旦忘记设该变量，E2E 用例即混入真实统计（10-01/10-08 已实证漏标 2 条）。
+        // 结构性修复：输入/输出任一重定向（无头管道）即 E2E 语义（与 RendererFactory 交互判定一致），
+        // 自动补标 LAW_E2E=1；显式设置过 LAW_E2E（含 =0 的真实自动化管道）则尊重显式值。
+        if ((Console.IsInputRedirected || Console.IsOutputRedirected)
+            && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("LAW_E2E")))
+        {
+            Environment.SetEnvironmentVariable("LAW_E2E", "1");
+        }
+
         // ─────────── 配置区 ───────────
         // 读环境变量
         var dashscopeKey = Environment.GetEnvironmentVariable("DASHSCOPE_API_KEY") ?? "";

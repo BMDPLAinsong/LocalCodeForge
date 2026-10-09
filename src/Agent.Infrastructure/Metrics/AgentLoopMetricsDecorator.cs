@@ -52,6 +52,9 @@ public sealed class AgentLoopMetricsDecorator : IAgentLoop
 
         // 可疑标记
         var isSuspicious = false;
+        // 【10-10 可疑成功治理·归因落库】记录首个可疑信号类别，供 stats/SQL 归因
+        // （此前 suspicious 成功任务 error_summary 恒空，无法区分 [边缘成功]/[检测]模板/未真正实现）。
+        var suspiciousReason = "";
 
         await foreach (var evt in _inner.RunAsync(request, ct))
         {
@@ -80,6 +83,13 @@ public sealed class AgentLoopMetricsDecorator : IAgentLoop
                          tr.Output.Contains("未真正实现")))
                     {
                         isSuspicious = true;
+                        if (string.IsNullOrEmpty(suspiciousReason))
+                        {
+                            if (tr.Output.Contains("边缘成功")) suspiciousReason = "边缘成功（失败信号+成功证据）";
+                            else if (tr.Output.Contains("疑似模板")) suspiciousReason = "输出疑似模板";
+                            else if (tr.Output.Contains("未真正实现")) suspiciousReason = "未真正实现";
+                            else suspiciousReason = "[检测] 标记";
+                        }
                     }
                     break;
 
@@ -95,6 +105,10 @@ public sealed class AgentLoopMetricsDecorator : IAgentLoop
                         e.Message.Contains("与用户指定不符"))
                     {
                         isSuspicious = true;
+                        if (string.IsNullOrEmpty(suspiciousReason))
+                        {
+                            suspiciousReason = e.Message.Contains("未真正实现") ? "未真正实现" : "完成门目标不符";
+                        }
                     }
                     break;
             }
@@ -122,7 +136,11 @@ public sealed class AgentLoopMetricsDecorator : IAgentLoop
             TotalMs = sw.ElapsedMilliseconds,
             StartedAt = startedAt,
             FinishedAt = DateTimeOffset.Now,
-            ErrorSummary = errorSummary
+            // 【10-10 可疑成功治理·归因落库】suspicious 任务写 reason 到 ErrorSummary
+            // （成功任务也有 summary，供 stats/SQL 按类别归因——此前恒空无法区分来源）。
+            ErrorSummary = isSuspicious && string.IsNullOrEmpty(errorSummary)
+                ? suspiciousReason
+                : errorSummary
         };
 
         try

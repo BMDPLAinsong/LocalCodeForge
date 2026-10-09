@@ -45,6 +45,8 @@ public sealed class OrchestratorMetricsDecorator : IOrchestrator
         var writeCount = 0;
         var runCount = 0;
         var isSuspicious = false;
+        // 【10-10 可疑成功治理·归因落库】记录首个可疑信号类别（与 AgentLoop 装饰器同构）
+        var suspiciousReason = "";
 
         await foreach (var evt in _inner.RunAsync(userInput, workspaceRoot, ct))
         {
@@ -68,6 +70,13 @@ public sealed class OrchestratorMetricsDecorator : IOrchestrator
                          tr.Output.Contains("未真正实现")))
                     {
                         isSuspicious = true;
+                        if (string.IsNullOrEmpty(suspiciousReason))
+                        {
+                            if (tr.Output.Contains("边缘成功")) suspiciousReason = "边缘成功（失败信号+成功证据）";
+                            else if (tr.Output.Contains("疑似模板")) suspiciousReason = "输出疑似模板";
+                            else if (tr.Output.Contains("未真正实现")) suspiciousReason = "未真正实现";
+                            else suspiciousReason = "[检测] 标记";
+                        }
                     }
                     break;
 
@@ -122,7 +131,10 @@ public sealed class OrchestratorMetricsDecorator : IOrchestrator
             TotalMs = sw.ElapsedMilliseconds,
             StartedAt = startedAt,
             FinishedAt = DateTimeOffset.Now,
-            ErrorSummary = errorSummary
+            // 【10-10 可疑成功治理·归因落库】suspicious 任务写 reason（与 AgentLoop 装饰器同构）
+            ErrorSummary = isSuspicious && string.IsNullOrEmpty(errorSummary)
+                ? suspiciousReason
+                : errorSummary
         };
 
         try

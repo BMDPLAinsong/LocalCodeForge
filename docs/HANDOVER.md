@@ -7,6 +7,20 @@
 
 
 
+
+
+> **10-10 可疑成功治理（① 开展）**
+> **目标**：让"可疑成功"计数反映真实（此前 stats 显示 ~20，真实口径仅 8-10）。
+> **数据审计结论**：
+> 1. **E2E 漏标是主因**——`is_e2e` 仅由环境变量 `LAW_E2E=1` 标记，E2E 复测（`type e2e_input.txt | dotnet run`）一旦忘记设该变量，E2E 用例即混入真实统计。已实证：`_law_e2e_test.txt`、`pyst.py hello world` 等 10 条 E2E 历史用例 is_e2e=0。回填修正 10 条后，真实可疑成功 = **8 条**。
+> 2. **suspicious 无归因字段**——可疑成功任务 error_summary 恒空（装饰器只标 is_suspicious=1，不记录来源），无法区分 [边缘成功] / 输出疑似模板 / 未真正实现。
+> **修复（结构性，非提示词）**：
+> 1. **源头标记**：Program.cs Main 启动时，输入/输出任一重定向（无头管道=E2E 语义，与 RendererFactory 交互判定一致）且未显式设置过 LAW_E2E → 自动补标 `LAW_E2E=1`。不再依赖"记得设环境变量"；显式 `LAW_E2E=0` 可覆盖（真实自动化管道）。
+> 2. **归因落库**：AgentLoopMetricsDecorator + OrchestratorMetricsDecorator 记录首个可疑信号类别（边缘成功/疑似模板/未真正实现/完成门目标不符）→ 成功任务也写 ErrorSummary。此后可疑成功可直接 SQL 按类别归因。
+> 3. **历史回填**：`UPDATE task_metrics SET is_e2e=1 WHERE user_input LIKE '%_law_e2e%' OR '%hello world%' OR '%pyst.py%'`（10 条）。
+> **验证**：构建 0 错误；tests 689 全绿；E2E 复测确认无头管道自动标 is_e2e=1 生效（本次 E2E 两条任务 e2e=1）。
+> **E2E 环境观察（非代码缺陷，记录）**：本次 E2E 两条任务执行失败——`HTTP 500 (api_error: llama)` 与 30 分钟任务超时取消。根因：`qwen3.8-27b:latest`（12GB）在 Ollama 中常驻占用（`ollama ps` 可见，67%/33% CPU/GPU），与 E2E 使用的 law-unified（17GB）竞争 6GB 显存，law-unified 加载期服务报 500。属环境层资源竞争，非本次改动引入。
+
 > **10-10 两个新问题修复（熔断假完成 + run_command 目录基准）**
 > 1. **问题1 熔断失败包装**：读任务大文件 read 被拒（`错误：文件过大...`）返回 ok=true → 进入熔断签名检测 → "工具已验证（read_file）。最后验证：错误原文"假完成（完成文本即错误原文）。修复：新增纯函数 `AgentLoop.IsToolSemanticFailure(output)`（输出以"错误："前缀即业务级失败）；熔断收尾前先判——语义失败时读任务已收敛（IsReadQueryConverged）→ 放行模型总结，否则判 Error（诚实失败，不再包装成功）。tests 覆盖 4 条。
 > 2. **问题2 run_command 目录基准**：只读工程模式下 write_file 基准=run 目录，而 run_command cwd=`_projectRoot ?? _workspaceRoot`=工程根 → 任务产物（run 目录）无法被 `dotnet run --project` 找到（E2E parity 实证"文件路径不存在"）。修复：新增静态纯函数 `RunCommandTool.ResolveWorkingDirectory(ws, projectRoot, projectWriteEnabled)`——可写工程 → 工程根（dotnet 构建工程），只读工程/沙箱 → run 目录（任务产物验证），与写工具基准一致；DependencyInjection L117 传入 projectWriteEnabled。tests 覆盖 4 条。
