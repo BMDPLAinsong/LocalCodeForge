@@ -3,6 +3,14 @@
 > 撰写日期：2026-09-22（基于源码通读 + 真实构建验证 + workspace 运行数据核对）
 
 
+
+
+> **10-10 方案4 读任务收敛判定 + empty_response 归因 + 注释清理**
+> 1. **方案 4 收敛判定**：ReadQuery 达到步数上限时，若最后一步是纯文本总结（无工具调用）且长度 ≥30 → 判成功而非"最大步数终止"（读任务交付物即总结文本本身）。实现：AgentLoop 记录 `lastModelText` / `lastStepHadToolCall`（native 调用与伪调用分支均标记）；纯函数 `AgentLoop.IsReadQueryConverged(bool, string?, int minLen=30)` 可测。tests 665→671（+6）。防御性兜底：三件套后读任务普遍提前收敛，该分支实际触发少；E2E 验证无回归（读任务 13 步、写任务既有行为不变）。
+> 2. **empty_response 14 条归因（数据驱动结论：无需新改动）**：11 条 = 9-22~10-01 4B 时代天气/IP 系列（历史边界，4B 已废弃）；1 条 = 10-03 BOM 乱码输入（`Console.InputEncoding=UTF8` 编码加固已闭合，10-03 后无复发）；2 条 = 10-08 large 偶发空响应（10-09 重跑均成功，B2 空响应升级链已兜底）。当前 30B 时代 empty_response 非活跃失败面。
+> 3. **配置注释清理**：Program.cs L51-55 注释由 iq1_m/8080 残留改为与 law-unified@11434 一致（strata 切换历史注明指向 HANDOVER 10-09 段）；健康检查双协议探活代码保留（支持未来复启用 strata）。
+> E2E 新观察（记录，不在本轮处理）：① 读任务熔断"以工具验证收尾"在最后一步 read_file 大文件失败时，完成文本即错误原文（可疑成功形态之一）；② 写任务 csproj 命名错误（Program.csproj vs parity.csproj）致 `dotnet run --project` 路径失败（30B 生成质量边界）。
+
 > **10-10 项目复盘（全面）**
 > 数据口径：metrics.db task_metrics，is_e2e=0 真实统计（截至 10-09 17:44 + 当日 E2E 验证）。
 > - **总体**：443 任务 / 383 成功 / 60 失败（86.5%）；平均 84.9s / 修复 0.18 次；可疑成功 28。

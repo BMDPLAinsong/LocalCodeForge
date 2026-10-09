@@ -1,3 +1,4 @@
 use X:\.NET AI\LocalAiWorkbench
 分析一下这个项目
+用 C# 写一个判断奇数偶数函数
 exit

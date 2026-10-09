@@ -277,10 +277,15 @@ public sealed class AgentLoop : IAgentLoop
         // ═══════════ ReAct 主循环 ═══════════
         // 【10-09 方案3】读任务步数分级：ReadQuery 特征类（读/分析）需"探索+总结"更多步，
         // 写任务保持 MaxSteps 防空转。确定性特征类判定，非提示词。
+        var isReadQuery = Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify(request.Input)
+            == Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ReadQuery;
         var effectiveMaxSteps = _options.MaxSteps;
-        if (Agent.Infrastructure.Routing.TaskFeatureClassifier.Classify(request.Input)
-                == Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ReadQuery)
+        if (isReadQuery)
             effectiveMaxSteps = Math.Max(effectiveMaxSteps, _options.ReadQueryMaxSteps);
+        // 【10-09 方案4】读任务收敛判定：记录最后一步模型输出与"是否调用了工具"——
+        // 步数耗尽时若最后一步是纯文本总结（无工具调用），判成功而非失败。
+        string? lastModelText = null;
+        var lastStepHadToolCall = false;
         for (var step = 0; step < effectiveMaxSteps; step++)
         {
             // ─────── 1. 路由决策 ───────
@@ -422,6 +427,7 @@ public sealed class AgentLoop : IAgentLoop
             // ═══════════ 情况 A：结构化函数调用 ═══════════
             if (functionCalls.Count > 0)
             {
+                lastStepHadToolCall = true; // 【方案4】最后一步是工具调用 → 不算收敛总结
                 forceContinueCount = 0;
                 emptyAnswerCount = 0;
                 chatHistory.Add(response);
@@ -551,10 +557,13 @@ public sealed class AgentLoop : IAgentLoop
 
             // ═══════════ 情况 B：文本兜底 ═══════════
             var text = response.Content ?? string.Empty;
+            lastModelText = text; // 【方案4】记录最后一步模型文本（收敛判定用）
+            lastStepHadToolCall = false;
             var pseudoCalls = TryParseToolCallsFromText(text);
 
             if (pseudoCalls.Count > 0)
             {
+                lastStepHadToolCall = true; // 【方案4】伪调用也是工具调用 → 不算收敛总结
                 forceContinueCount = 0;
                 emptyAnswerCount = 0;
 
@@ -975,8 +984,29 @@ public sealed class AgentLoop : IAgentLoop
             yield break;
         }
 
+        // 【10-09 方案4】读任务收敛判定：ReadQuery 达到步数上限，但最后一步是纯文本回答
+        // （无工具调用）且已产出实质总结 → 判成功而非失败。读任务的交付物即总结文本本身；
+        // 三件套后 read 任务不再发散，耗尽场景多为"探索充分、最后一步恰好是总结但未走交付分支"。
+        if (isReadQuery && IsReadQueryConverged(lastStepHadToolCall, lastModelText))
+        {
+            await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", lastModelText!), ct);
+            _logger.LogWarning("[收敛·最大步数] 读任务已产出总结（{Len} 字符），放行收尾。", lastModelText!.Length);
+            yield return new AgentEvent.FinalAnswer(lastModelText);
+            yield break;
+        }
+
         yield return new AgentEvent.Error($"达到最大步数 {effectiveMaxSteps}，任务终止。");
     }
+
+    /// <summary>
+    /// 【10-09 方案4】读任务收敛判定（确定性纯函数，可测）：
+    /// 最后一步为纯文本回答（无工具调用）且已产出实质总结（非空白、长度 ≥ 30 字符）
+    /// → 视为收敛，步数耗尽时放行收尾（读任务的交付物即总结文本本身）。
+    /// </summary>
+    public static bool IsReadQueryConverged(bool lastStepHadToolCall, string? lastModelText, int minLen = 30)
+        => !lastStepHadToolCall
+           && !string.IsNullOrWhiteSpace(lastModelText)
+           && lastModelText.Length >= minLen;
 
     /// <summary>剥离工具名前缀。</summary>
     private static string StripPrefix(string name)

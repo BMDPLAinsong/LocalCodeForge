@@ -3461,6 +3461,15 @@ var readToolSand = new Agent.Infrastructure.Tools.ReadFileTool(candRoot);
 var readOutSand = readToolSand.InvokeAsync(readArgs, CancellationToken.None).Result;
 Check("read_file 沙箱模式：不存在 → 原样无候选", readOutSand.Contains("文件不存在") && !readOutSand.Contains("工程中相近文件"));
 
+// ── 10-10 方案4：读任务收敛判定（纯函数回归） ──
+Console.WriteLine("== 10-10 方案4 读任务收敛判定 ==");
+Check("收敛：无工具 + 长总结(≥30) → true", Agent.Infrastructure.AgentLoop.IsReadQueryConverged(false, "本项目是一个基于 .NET 的本地 AI 工作台，提供智能代理系统，用于执行代码生成、分析等任务，以下是简要分析："));
+Check("收敛：有工具 + 长总结 → false（工具步不算收敛）", !Agent.Infrastructure.AgentLoop.IsReadQueryConverged(true, "本项目是一个基于 .NET 的本地 AI 工作台，提供智能代理系统，用于执行代码生成、分析等任务，以下是简要分析："));
+Check("收敛：无工具 + 短过渡文本(<30) → false", !Agent.Infrastructure.AgentLoop.IsReadQueryConverged(false, "让我继续读取文件。"));
+Check("收敛：无工具 + 空白 → false", !Agent.Infrastructure.AgentLoop.IsReadQueryConverged(false, "   "));
+Check("收敛：无工具 + null → false", !Agent.Infrastructure.AgentLoop.IsReadQueryConverged(false, null));
+Check("收敛：自定义阈值 100 生效", !Agent.Infrastructure.AgentLoop.IsReadQueryConverged(false, "这是一个较短的总结文本长度不足一百字符。", 100) && Agent.Infrastructure.AgentLoop.IsReadQueryConverged(false, new string('好', 101), 100));
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;
 
