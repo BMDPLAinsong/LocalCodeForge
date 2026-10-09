@@ -537,7 +537,22 @@ public sealed class AgentLoop : IAgentLoop
                                 yield break;
                             }
 
-                            _logger.LogWarning("[熔断] 工具序列重复无进展（{Sig}），以工具验证结果收尾。", sig);
+                            _logger.LogWarning("[熔断] 工具序列重复无进展（{Sig}）。", sig);
+                            // 【10-10 问题1】最近工具输出以"错误："开头（业务级失败，如大文件 read 被拒）
+                            // → 不得包装"工具已验证"完成（完成文本即错误原文 = 可疑成功）。
+                            // 读任务已收敛（最后一步纯文本总结）→ 放行总结；否则判失败（诚实失败）。
+                            if (IsToolSemanticFailure(condensed))
+                            {
+                                if (isReadQuery && IsReadQueryConverged(lastStepHadToolCall, lastModelText))
+                                {
+                                    await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", lastModelText!), ct);
+                                    _logger.LogWarning("[熔断·收敛] 读任务已产出总结，放行收尾。");
+                                    yield return new AgentEvent.FinalAnswer(lastModelText);
+                                    yield break;
+                                }
+                                yield return new AgentEvent.Error($"工具序列重复无进展且最近验证失败（{TruncateForAnswer(condensed)}），任务终止。");
+                                yield break;
+                            }
                             var closeText = $"任务完成：工具已验证（{cleanName}）。最后验证：{TruncateForAnswer(condensed)}";
                             await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", closeText), ct);
                             yield return new AgentEvent.FinalAnswer(closeText);
@@ -997,6 +1012,14 @@ public sealed class AgentLoop : IAgentLoop
 
         yield return new AgentEvent.Error($"达到最大步数 {effectiveMaxSteps}，任务终止。");
     }
+
+    /// <summary>
+    /// 【10-10 问题1】工具业务级失败判定（确定性纯函数，可测）：工具输出以"错误："统一前缀
+    /// 开头即为语义失败（如大文件 read 拒绝、路径越界）——熔断收尾时不得把失败输出包装成
+    /// "工具已验证"完成（那会产生"完成文本即错误原文"的可疑成功）。
+    /// </summary>
+    public static bool IsToolSemanticFailure(string output)
+        => output.StartsWith("错误：", StringComparison.Ordinal);
 
     /// <summary>
     /// 【10-09 方案4】读任务收敛判定（确定性纯函数，可测）：

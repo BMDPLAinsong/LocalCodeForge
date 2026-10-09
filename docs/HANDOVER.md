@@ -5,6 +5,18 @@
 
 
 
+
+
+> **10-10 两个新问题修复（熔断假完成 + run_command 目录基准）**
+> 1. **问题1 熔断失败包装**：读任务大文件 read 被拒（`错误：文件过大...`）返回 ok=true → 进入熔断签名检测 → "工具已验证（read_file）。最后验证：错误原文"假完成（完成文本即错误原文）。修复：新增纯函数 `AgentLoop.IsToolSemanticFailure(output)`（输出以"错误："前缀即业务级失败）；熔断收尾前先判——语义失败时读任务已收敛（IsReadQueryConverged）→ 放行模型总结，否则判 Error（诚实失败，不再包装成功）。tests 覆盖 4 条。
+> 2. **问题2 run_command 目录基准**：只读工程模式下 write_file 基准=run 目录，而 run_command cwd=`_projectRoot ?? _workspaceRoot`=工程根 → 任务产物（run 目录）无法被 `dotnet run --project` 找到（E2E parity 实证"文件路径不存在"）。修复：新增静态纯函数 `RunCommandTool.ResolveWorkingDirectory(ws, projectRoot, projectWriteEnabled)`——可写工程 → 工程根（dotnet 构建工程），只读工程/沙箱 → run 目录（任务产物验证），与写工具基准一致；DependencyInjection L117 传入 projectWriteEnabled。tests 覆盖 4 条。
+> 3. **顺带修正（E2E 暴露的确定性误伤）**：
+>    a) 项目名幻觉校验原实现固定扫"工程根顶层"（TopDirectoryOnly）——本项目 csproj 全在 src/tests 子目录 → 空列表误拦一切 .csproj 引用。改为 `CheckProjectName(command, cwd)`：相对 cwd 存在放行 + 递归同名放行 + 均不存在才拦截（提示 cwd 实际顶层项目）。tests 4 条（相对存在/递归同名/幻觉拦截/无引用）。
+>    b) 401/403 外部凭据信号裸 `401` 误伤 dotnet SDK 版本号（`10.0.401`）——每次构建输出含版本路径都会误判"需要 API Key"。收紧为 `(?<![\d.])401(?![\d.])`（排除前后紧邻数字/点的版本号/小数/长数字，保留 HTTP 状态码语义）。tests 6 条。
+>    c) tests 环境 flaky 修复：记忆治理测试 FindGovDb 用"排序最大"枚举 TestTmp（pid 复用残留旧 db → 断言错位），改为直接用 gov 实例准确路径。
+> E2E 复测：问题2 校验放行生效（run 目录真实项目不再误拦，首次 dotnet run 退出码 0）；任务 2 最终仍失败——失败面已转移到"模型在同目录写 2 个 csproj 致 dotnet run 目录歧义"（30B 生成质量边界，记录待后续）+ 工程感知路径（模型按工程路径写入 run 目录同名结构）——非本轮两个修复的失败。
+> tests 671→689（+18：IsToolSemanticFailure 4 + ResolveWorkingDirectory 4 + CheckProjectName 4 + 401/403 收紧 6）。提交后 HEAD 见 git log。
+
 > **10-10 方案4 读任务收敛判定 + empty_response 归因 + 注释清理**
 > 1. **方案 4 收敛判定**：ReadQuery 达到步数上限时，若最后一步是纯文本总结（无工具调用）且长度 ≥30 → 判成功而非"最大步数终止"（读任务交付物即总结文本本身）。实现：AgentLoop 记录 `lastModelText` / `lastStepHadToolCall`（native 调用与伪调用分支均标记）；纯函数 `AgentLoop.IsReadQueryConverged(bool, string?, int minLen=30)` 可测。tests 665→671（+6）。防御性兜底：三件套后读任务普遍提前收敛，该分支实际触发少；E2E 验证无回归（读任务 13 步、写任务既有行为不变）。
 > 2. **empty_response 14 条归因（数据驱动结论：无需新改动）**：11 条 = 9-22~10-01 4B 时代天气/IP 系列（历史边界，4B 已废弃）；1 条 = 10-03 BOM 乱码输入（`Console.InputEncoding=UTF8` 编码加固已闭合，10-03 后无复发）；2 条 = 10-08 large 偶发空响应（10-09 重跑均成功，B2 空响应升级链已兜底）。当前 30B 时代 empty_response 非活跃失败面。

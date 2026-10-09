@@ -114,7 +114,7 @@ public static class DependencyInjection
         services.AddSingleton<IAgentTool>(sp => new WriteFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots));
         services.AddSingleton<IAgentTool>(sp => new EditFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots));    // ← 新增
         services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot, projectRoot, projectWriteEnabled, explicitWriteRoots));   // ← 新增
-        services.AddSingleton<IAgentTool>(_ => new RunCommandTool(workspaceRoot, projectRoot));
+        services.AddSingleton<IAgentTool>(_ => new RunCommandTool(workspaceRoot, projectRoot, projectWriteEnabled));
         services.AddSingleton<IAgentTool>(_ => new RememberTool(_.GetRequiredService<AgentMemoryStore>()));   // ← P3：模型级记忆
         services.AddSingleton<IAgentTool>(_ => new CodeAnalyzerTool(workspaceRoot, projectRoot));            // ← 工程理解专项：符号索引
         services.AddSingleton<IAgentTool>(_ => new FindSymbolTool(workspaceRoot, projectRoot,                 // ← 工程图谱：跨文件定位

@@ -710,7 +710,8 @@ Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==
 
     string Rc(string? projectRoot, string command)
     {
-        var tool = new Agent.Infrastructure.Tools.RunCommandTool(ws, projectRoot);
+        // 10-10 修正：工程模式断言统一走"工程可写"（cwd=工程根，与 ResolveWorkingDirectory 新语义一致）
+        var tool = new Agent.Infrastructure.Tools.RunCommandTool(ws, projectRoot, projectWriteEnabled: true);
         var args = JsonSerializer.Deserialize<JsonElement>($"{{\"command\":{JsonSerializer.Serialize(command)}}}");
         return tool.InvokeAsync(args, CancellationToken.None).GetAwaiter().GetResult();
     }
@@ -726,17 +727,17 @@ Console.WriteLine("== 工程感知 P1：run_command 路径边界（§14-3t） ==
     Check("沙箱模式：不启用边界检查（现状保持）",
         !Rc(null, "dir C:\\Windows").Contains("越界"));
 
-    // 【D1 衍生】项目名幻觉校验：命令引用的 .csproj 必须存在于工程根
+    // 【D1 衍生】项目名幻觉校验（10-10 修正：基准=实际 cwd，相对存在 + 递归同名）
     File.WriteAllText(Path.Combine(proj, "lawcheck_demo.csproj"), "<Project></Project>");
     Check("工程模式：dotnet run 无 --project → 放行（项目名校验不误伤）",
-        !Rc(proj, "dotnet run").Contains("不存在于工程根"));
+        !Rc(proj, "dotnet run").Contains("不存在于工作目录"));
     Check("工程模式：幻觉项目名（OrderSystem.csproj）→ 拒绝+提示正确项目名",
-        Rc(proj, "dotnet run --project OrderSystem.csproj").Contains("不存在于工程根")
+        Rc(proj, "dotnet run --project OrderSystem.csproj").Contains("不存在于工作目录")
         && Rc(proj, "dotnet run --project OrderSystem.csproj").Contains("lawcheck_demo.csproj"));
     Check("工程模式：真实项目名 → 放行",
-        !Rc(proj, "dotnet run --project lawcheck_demo.csproj").Contains("不存在于工程根"));
+        !Rc(proj, "dotnet run --project lawcheck_demo.csproj").Contains("不存在于工作目录"));
     Check("沙箱模式：项目名校验不启用（现状保持）",
-        !Rc(null, "dotnet run --project Whatever.csproj").Contains("不存在于工程根"));
+        !Rc(null, "dotnet run --project Whatever.csproj").Contains("不存在于工作目录"));
 }
 
 Console.WriteLine("== TaskClassifier 编排判定（§14-3w） ==");
@@ -1668,8 +1669,8 @@ Console.WriteLine("== analyze_code 大文件支持 ==");
 // ── 记忆治理：去重合并 / forget / prune / stats ──
 Console.WriteLine("== 记忆治理（去重/过期/forget） ==");
 {
-    var gov = new Agent.Infrastructure.Memory.AgentMemoryStore(
-        Path.Combine(TestTmp, "mem_gov_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db"));
+    var govDbPath = Path.Combine(TestTmp, "mem_gov_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db");
+    var gov = new Agent.Infrastructure.Memory.AgentMemoryStore(govDbPath);
 
     // 去重合并：同 kind+topic → 一条，count 累加
     gov.Add("task", "创建一个 hello.txt 文件", "任务失败（agent）：第一次失败", "task_1");
@@ -1701,7 +1702,7 @@ Console.WriteLine("== 记忆治理（去重/过期/forget） ==");
     gov.Add("task", "旧任务归档", "任务失败（agent）：很旧", "task_old");
     {
         using var conn = new Microsoft.Data.Sqlite.SqliteConnection(
-            "Data Source=" + Path.Combine(TestTmp, FindGovDb()));
+            "Data Source=" + govDbPath);
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
@@ -1718,7 +1719,7 @@ Console.WriteLine("== 记忆治理（去重/过期/forget） ==");
     // Deduplicate：SQL 直插两条同 topic（绕过 Add 合并）造存量重复
     {
         using var conn = new Microsoft.Data.Sqlite.SqliteConnection(
-            "Data Source=" + Path.Combine(TestTmp, FindGovDb()));
+            "Data Source=" + govDbPath);
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
@@ -1730,14 +1731,7 @@ Console.WriteLine("== 记忆治理（去重/过期/forget） ==");
     }
     var dedupRemoved = gov.Deduplicate();
     Check("dedup 合并存量重复", dedupRemoved == 1);
-    var dedupHit = gov.List(50).FirstOrDefault(m => m.Topic == "存量重复");
-    Check("dedup 后 count=3（1+2）", dedupHit is not null && dedupHit.Count == 3);
-
-    string FindGovDb()
-    {
-        var f = System.IO.Directory.GetFiles(TestTmp, "mem_gov_*.db").OrderByDescending(x => x).First();
-        return f;
-    }
+    var dedupHit = gov.List(50).FirstOrDefault(m => m.Topic == "存量重复");    Check("dedup 后 count=3（1+2）", dedupHit is not null && dedupHit.Count == 3);
 }
 
 // ── agent_pro 工程理解专项：CodeAnalyzerTool 符号索引 ──
@@ -3469,6 +3463,43 @@ Check("收敛：无工具 + 短过渡文本(<30) → false", !Agent.Infrastructu
 Check("收敛：无工具 + 空白 → false", !Agent.Infrastructure.AgentLoop.IsReadQueryConverged(false, "   "));
 Check("收敛：无工具 + null → false", !Agent.Infrastructure.AgentLoop.IsReadQueryConverged(false, null));
 Check("收敛：自定义阈值 100 生效", !Agent.Infrastructure.AgentLoop.IsReadQueryConverged(false, "这是一个较短的总结文本长度不足一百字符。", 100) && Agent.Infrastructure.AgentLoop.IsReadQueryConverged(false, new string('好', 101), 100));
+
+// ── 10-10 新问题1+2：熔断语义失败判定 / run_command 目录基准 ──
+Console.WriteLine("== 10-10 新问题 熔断语义失败 + run_command 目录基准 ==");
+Check("熔断失败：错误：文件过大 → true", Agent.Infrastructure.AgentLoop.IsToolSemanticFailure("错误：文件过大（230146 bytes）。请先调用 find_symbol。"));
+Check("熔断失败：错误：路径越界 → true", Agent.Infrastructure.AgentLoop.IsToolSemanticFailure("错误：路径越界。"));
+Check("熔断失败：正常输出 → false", !Agent.Infrastructure.AgentLoop.IsToolSemanticFailure("已写入文件，共 100 字符。"));
+Check("熔断失败：空串 → false", !Agent.Infrastructure.AgentLoop.IsToolSemanticFailure(""));
+Check("cwd：沙箱(无工程) → workspaceRoot", Agent.Infrastructure.Tools.RunCommandTool.ResolveWorkingDirectory(@"X:\run", null, false) == Path.GetFullPath(@"X:\run"));
+Check("cwd：只读工程模式 → workspaceRoot（写基准一致）", Agent.Infrastructure.Tools.RunCommandTool.ResolveWorkingDirectory(@"X:\run", @"X:\proj", false) == Path.GetFullPath(@"X:\run"));
+Check("cwd：可写工程模式 → projectRoot", Agent.Infrastructure.Tools.RunCommandTool.ResolveWorkingDirectory(@"X:\run", @"X:\proj", true) == Path.GetFullPath(@"X:\proj"));
+Check("cwd：可写工程但无工程根 → workspaceRoot", Agent.Infrastructure.Tools.RunCommandTool.ResolveWorkingDirectory(@"X:\run", null, true) == Path.GetFullPath(@"X:\run"));
+
+// CheckProjectName：相对 cwd 存在性 + 递归同名（10-10 修正，替换"工程根顶层列表"）
+{
+    var tmpRoot = Path.Combine(Path.GetTempPath(), "lawcheck_" + Guid.NewGuid().ToString("N")[..8]);
+    var projDir = Path.Combine(tmpRoot, "src", "Agent.Core", "Extensions");
+    Directory.CreateDirectory(projDir);
+    File.WriteAllText(Path.Combine(projDir, "NumberExtensions.csproj"), "<Project />");
+    File.WriteAllText(Path.Combine(tmpRoot, "src", "Agent.Core", "Agent.Core.csproj"), "<Project />");
+    Check("幻觉校验：相对 cwd 存在 → 放行", Agent.Infrastructure.Tools.RunCommandTool.CheckProjectName("dotnet build src/Agent.Core/Extensions/NumberExtensions.csproj", tmpRoot) == null);
+    Check("幻觉校验：递归同名 → 放行", Agent.Infrastructure.Tools.RunCommandTool.CheckProjectName("dotnet run --project Agent.Core.csproj", tmpRoot) == null);
+    Check("幻觉校验：幻觉项目名 → 拦截", Agent.Infrastructure.Tools.RunCommandTool.CheckProjectName("dotnet run --project OrderSystem.csproj", tmpRoot) != null);
+    Check("幻觉校验：无 csproj 引用 → 放行", Agent.Infrastructure.Tools.RunCommandTool.CheckProjectName("python main.py", tmpRoot) == null);
+    Directory.Delete(tmpRoot, recursive: true);
+}
+
+// ── 10-10 401/403 外部凭据信号收紧：排除 dotnet SDK 版本号（10.0.401）误伤 ──
+Console.WriteLine("== 10-10 401/403 凭据信号收紧 ==");
+{
+    string Pat(string s) { Agent.Infrastructure.Quality.OutputVerifier.HasCredentialFailure(s, out var p); return p; }
+    Check("401 HTTP 上下文 → 命中", Agent.Infrastructure.Quality.OutputVerifier.HasCredentialFailure("HTTP/1.1 401 Unauthorized", out _));
+    Check("403 status 上下文 → 命中", Agent.Infrastructure.Quality.OutputVerifier.HasCredentialFailure("status: 403 Forbidden", out _));
+    Check("裸 401 → 命中", Agent.Infrastructure.Quality.OutputVerifier.HasCredentialFailure("error code 401", out _));
+    Check("dotnet SDK 10.0.401 → 不误伤", !Agent.Infrastructure.Quality.OutputVerifier.HasCredentialFailure(@"C:\Program Files\dotnet\sdk\10.0.401\Microsoft.Common.CurrentVersion.targets", out _));
+    Check("小数 0.401 → 不误伤", !Agent.Infrastructure.Quality.OutputVerifier.HasCredentialFailure("elapsed 0.401 seconds", out _));
+    Check("长数字 1401 → 不误伤", !Agent.Infrastructure.Quality.OutputVerifier.HasCredentialFailure("count=1401", out _));
+}
 
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;

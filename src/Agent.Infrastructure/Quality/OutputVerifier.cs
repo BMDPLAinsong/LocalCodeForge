@@ -25,7 +25,10 @@ public static class OutputVerifier
     // ──────────────────────────────────────────────────────────
     private static readonly string[] CredentialPatterns =
     {
-        @"\b401\b", @"\b403\b",
+        // 10-10 修复：裸 \b401\b 会误伤 dotnet SDK 版本号（10.0.401，前后是 ./\）
+        // 与小数/长数字（0.401 / 1401）。负向断言排除"前后紧邻数字或点"，
+        // 保留真实 HTTP 状态码（"HTTP/1.1 401 Unauthorized" / "status: 403" / 裸 401）。
+        @"(?<![\d.])\b401\b(?![\d.])", @"(?<![\d.])\b403\b(?![\d.])",
         "unauthorized", "invalid api key", "api key", "api_key", "appid",
         "无效的密钥", "密钥无效", "认证失败", "授权失败"
     };

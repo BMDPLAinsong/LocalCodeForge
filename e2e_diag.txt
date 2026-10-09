@@ -2,7 +2,7 @@
 info: Agent.Infrastructure.Routing.RuleEngine[0]
       RuleEngine 已加载 8 条规则。
 === Local AI Workbench ===
-运行目录: X:\.NET AI\LocalAiWorkbench\workspace\runs\20261009-204038-7dbb
+运行目录: X:\.NET AI\LocalAiWorkbench\workspace\runs\20261009-210505-446d
 会话库:   X:\.NET AI\LocalAiWorkbench\workspace\sessions.db
 输入需求，回车执行。输入 exit 退出。输入 new 开启新会话。
 
@@ -20,11 +20,11 @@ Large:      law-unified
   [OK] Large      law-unified
 
 > [工程] X:\.NET AI\LocalAiWorkbench
-  文件 227 个 / 目录 36 个 / 总大小 6.0 MB（排除 13 个忽略项）
+  文件 231 个 / 目录 36 个 / 总大小 6.0 MB（排除 13 个忽略项）
   入口/说明: LocalAiWorkbench.slnx, src\Agent.Cli\Program.cs, tests\Agent.Infrastructure.Tests\Program.cs
   依赖清单: LocalAiWorkbench.slnx, src\Agent.Cli\Agent.Cli.csproj, src\Agent.Core\Agent.Core.csproj, src\Agent.Dashboard\Agent.Dashboard.csproj, src\Agent.Infrastructure\Agent.Infrastructure.csproj, tests\Agent.Infrastructure.Tests\Agent.Infrastructure.Tests.csproj
 
-> [工作目录] 20261009-204038-7dbb（任务归属 task_d4ea83a4）
+> [工作目录] 20261009-210505-446d（任务归属 task_94a5541a）
 info: Agent.Infrastructure.Routing.RuleEngine[0]
       RuleEngine 已加载 8 条规则。
 info: Agent.Infrastructure.AgentLoop[0]
@@ -46,19 +46,10 @@ info: Agent.Infrastructure.Routing.ModelRouter[0]
 [DIR]  workspace/
 [FILE] .gitignore  (441 bytes)
 [FILE] =  (0 bytes)
-[FILE] build_diag.txt  (4243 bytes)
+[FILE] build_diag.txt  (4789 bytes)
 [FILE] build_summary.txt  (11 bytes)
-[FILE] demo_diag.txt  (243 bytes)
-[FILE] e2e_diag.txt  (2015 bytes...
-[工具调用] list_dir  path="src"
-[工具结果] list_dir: [DIR]  Agent.Cli/
-[DIR]  Agent.Core/
-[DIR]  Agent.Dashboard/
-[DIR]  Agent.Infrastructure/
-
-[工具调用] list_dir  path="tests"
-[工具结果] list_dir: [DIR]  Agent.Infrastructure.Tests/
-
+[FILE] build_tests_diag.txt  (4699 bytes)
+[FILE] demo_diag.txt  (2...
 [工具调用] read_file  path="LocalAiWorkbench.slnx"
 [工具结果] read_file: <Solution>
   <Folder Name="/src/">
@@ -66,6 +57,12 @@ info: Agent.Infrastructure.Routing.ModelRouter[0]
     <Project Path="src/Agent.Cli/Agent.Cli.csproj" />
     <Project Path="src/Agent.Core/Agent.Core.csproj" />
     <Project Path="src/Agent.Dashboard/Agent.Dashboard.csproj" />...
+[工具调用] list_dir  path="src"
+[工具结果] list_dir: [DIR]  Agent.Cli/
+[DIR]  Agent.Core/
+[DIR]  Agent.Dashboard/
+[DIR]  Agent.Infrastructure/
+
 [工具调用] read_file  path="src/Agent.Cli/Program.cs"
 [工具结果] read_file: // 引入 DI
 // 引入 Core
@@ -81,81 +78,290 @@ namespace Agent.Cli;
 
 using Agent.Infrastructure.Metrics;
 using Agent.Infrastructur...
-[工具调用] read_file  path="src/Agent.Core/Agent.Core.csproj"
-[工具结果] read_file: <!-- SDK 风格的项目文件 -->
-<Project Sdk="Microsoft.NET.Sdk">
+[工具调用] read_file  path="src/Agent.Infrastructure/AgentLoop.cs"
+[工具结果] read_file: // ============================================================
+// AgentLoop.cs
+// Agent 主循环。ReAct + 三层路由 + 首轮决策缓存 + 防死循环 + 失败修复。
+// ============================================================
 
-	<!-- 项目属性 -->
-	<PropertyGroup>
-		<!-- 目标框架 .NET 10 -->
-		<TargetFramework>net10.0</TargetFramework>
-		<!-- 启用可空引用类型检查 -->
-		<Nullable>enable</Nullable>
-		<!-- 启用隐式 using -->
-		<ImplicitUsings>enable</ImplicitUsings>
-	</PropertyGroup>
+using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
+using System.Text.Json;
+usin...
+[工具调用] read_file  path="src/Agent.Core/Abstractions/IAgentLoop.cs"
+[工具结果] read_file: // 引入模型类型
+using Agent.Core.Models;
 
-	<!-- 【关...
-[工具调用] read_file  path="src/Agent.Infrastructure/Agent.Infrastructure.csproj"
-[工具结果] read_file: <Project Sdk="Microsoft.NET.Sdk">
+// 命名空间
+namespace Agent.Core.Abstractions;
 
-  <ItemGroup>
-    <ProjectReference Include="..\Agent.Core\Agent.Core.csproj" />
-  </ItemGroup>
+/// <summary>
+/// Agent 主循环。这是整个系统的核心入口。
+/// </summary>
+public interface IAgentLoop
+{
+    /// <summary>
+    /// 执行一次任务。返回异步事件流。
+    /// 用 IAsyncEnumerable 而不是 Task，因为事件是流式产生的，
+    /// 前端可以边收边展示，而不必等任务全部完成。
+    /// </summ...
+[工具调用] read_file  path="src/Agent.Infrastructure/Orchestration/Orchestrator.cs"
+[工具结果] read_file: // ============================================================
+// Orchestrator.cs
+// 三阶段编排：Planner（规划）→ Executor（执行）→ Validator（验证修复）
+// ============================================================
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="11.0.0-rc.1.26425.128" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Conso...
-[工具调用] read_file  path="src/Agent.Cli/Agent.Cli.csproj"
-[工具结果] read_file: <Project Sdk="Microsoft.NET.Sdk">
+using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.Json;
+using System.Text....
+[工具调用] read_file  path="src/Agent.Core/Abstractions/IOrchestrator.cs"
+[工具结果] read_file: 错误：文件不存在：src/Agent.Core/Abstractions/IOrchestrator.cs。工程中相近文件（候选路径）：src\Agent.Infrastructure\Orchestration\IOrchestrator.cs。请用候选路径重试。
+[工具调用] read_file  path="src/Agent.Infrastructure/Orchestration/IOrchestrator.cs"
+[工具结果] read_file: // ============================================================
+// IOrchestrator.cs
+// 编排器接口。串联 Planner → Executor → Validator。
+// ============================================================
 
-  <ItemGroup>
-    <ProjectReference Include="..\Agent.Core\Agent.Core.csproj" />
-    <ProjectReference Include="..\Agent.Dashboard\Agent.Dashboard.csproj" />
-    <ProjectReference Include="..\Agent.Infrastructure\Agent.Infrastructure.csproj" />
-  </ItemGroup>
+using Agent.Core.Models;
 
-  <!...
-[工具调用] read_file  path="src/Agent.Dashboard/Agent.Dashboard.csproj"
-[工具结果] read_file: <Project Sdk="Microsoft.NET.Sdk.Web">
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <OutputType>Library</OutputType>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-  </PropertyGroup>
+namespace Agent.Infrastructure.Orchestration;
 
-  <!-- 单页嵌入：index.html 作为 EmbeddedResource，GET / 直接读流返回（零静态文件根配置...
-[工具调用] read_file  path="tests/Agent.Infrastructure.Tests/Program.cs"
-[工具结果] read_file: 错误：文件过大（230146 bytes，约 3491 行）。请先调用 find_symbol <目标类/方法名> 或 analyze_code 获取符号地图定位目标位置，再使用 read_file 并携带 offset/limit 参数精确读取目标区间；不要整页翻阅大文件。
-[工具调用] analyze_code  {"path":"tests/Agent.Infrastructure.Tests/Program.cs"}
-[工具结果] analyze_code: 语言: csharp | 总行数: 3492
-[47] 方法 Invoke(...)
-[50] 方法 M(...)
-[149] 方法 WriteAndRead(...)
-[178] 方法 W(...)
-[185] 方法 R(...)
-[239] 方法 CallTool(...)
-[258] 方法 W(...)
-[261] 方法 CallTool(...)
-[263] 方法 E(...)
-[266] 方法 CallTool(...)
-[711] 方法 Rc(...)
-[744] 方法 Orc(...)
-[792] 方法 Tf(...)
-[808] 方法 Wr(...)...
-[工具调用] find_symbol  {"name":"Invoke"}
-[工具结果] find_symbol: 符号 Invoke 定义位置（1 处）：
-  [tests/Agent.Infrastructure.Tests/Program.cs:47] method Invoke
-操作指引：请用 read_file 携带 offset=37（limit=30）读取 [tests/Agent.Infrastructure.Tests/Program.cs] 第 47 行附近内容确认上下文，确认后调用 edit_file 修改该位置。不要整页读取大文件。
+/// <summary>
+/// 编排器。三阶段执行复杂任务。
+/...
+[工具调用] read_file  path="src/Agent.Core/Abstractions/IToolRegistry.cs"
+[工具结果] read_file: // 命名空间
+namespace Agent.Core.Abstractions;
 
-[工具调用] read_file  path="tests/Agent.Infrastructure.Tests/Program.cs"
-[工具结果] read_file: 错误：文件过大（230146 bytes，约 3491 行）。请先调用 find_symbol <目标类/方法名> 或 analyze_code 获取符号地图定位目标位置，再使用 read_file 并携带 offset/limit 参数精确读取目标区间；不要整页翻阅大文件。
+/// <summary>
+/// 工具注册表。管理当前可用的全部工具。
+/// </summary>
+public interface IToolRegistry
+{
+    /// <summary>
+    /// 所有已注册的工具。AgentLoop 会把它们全部交给 LLM。
+    /// </summary>
+    IReadOnlyCollection<IAgentTool> All { get; }
+
+    /// <summary>
+    /// 按名字查找工具。AgentLoop...
+[工具调用] read_file  path="src/Agent.Infrastructure/Routing/TaskFeatureClassifier.cs"
+[工具结果] read_file: using System.Text.RegularExpressions;
+
+namespace Agent.Infrastructure.Routing;
+
+/// <summary>
+/// 【D2】任务特征分类器（确定性关键词，非模型）：按输入文本把任务归入特征类，
+/// 供路由数据校准（高失败率特征类 → 收紧重试/注记）与 stats 归因报表使用。
+/// 特征类语义（与 D1 归因一致）：
+///   ProjectIncremental 工程增量修改（在工程中新增/修改类——30B 能力边界，历史高失败）
+///   ExternalCredential  外部凭据/API（...
+[工具调用] read_file  path="src/Agent.Infrastructure/Routing/IntentOverride.cs"
+[工具结果] read_file: // ============================================================
+// IntentOverride.cs
+// L2 意图分类的确定性覆盖层（§14-3w 补充）。
+// 0.8B 意图分类器不稳：把"在 xx.cs 添加一行注释"判成 SimpleQA，
+// 导致模型进入问答模式、不调用工具、空响应卡死。
+// 用确定性规则兜底——SimpleQA 但含操作动词 + 文件/代码语境 → 强制 CodeGenerate。
+// 属工程化/数据结构性手段，不依赖提示词。
+// ===========================...
+[工具调用] read_file  path="src/Agent.Infrastructure/Routing/RoutingDecision.cs"
+[工具结果] read_file: // 命名空间
+namespace Agent.Infrastructure.Routing;
+
+/// <summary>
+/// 路由决策结果。
+/// </summary>
+/// <param name="ServiceId">目标服务：classifier / small / large</param>
+/// <param name="Tier">命中的层级</param>
+/// <param name="Reason">决策原因</param>
+/// <param name="Intent">意图类型（规则命中时为 null）</param>
+public sealed re...
+[工具调用] read_file  path="src/Agent.Infrastructure/Routing/RoutingTier.cs"
+[工具结果] read_file: // 命名空间
+namespace Agent.Infrastructure.Routing;
+
+/// <summary>
+/// 路由层级。指示本次决策由三层漏斗中的哪一层做出。
+/// 用于日志分析和成本统计。
+/// </summary>
+public enum RoutingTier
+{
+    /// <summary>Layer 1：规则拦截命中。零 LLM 调用，最快最省。</summary>
+    Rule,
+
+    /// <summary>Layer 2：本地小模型意图分类命中。</summary>
+    SmallModel,
+
+    /// <summary>...
+[工具调用] read_file  path="src/Agent.Infrastructure/Routing/IRouter.cs"
+[工具结果] read_file: 错误：文件不存在：src/Agent.Infrastructure/Routing/IRouter.cs。工程中相近文件（候选路径）：.gitignore。请用候选路径重试。
+[工具调用] list_dir  path="src/Agent.Infrastructure/Routing"
+[工具结果] list_dir: [FILE] ExternalTaskDetector.cs  (2819 bytes)
+[FILE] IIntentClassifier.cs  (548 bytes)
+[FILE] IModelRouter.cs  (513 bytes)
+[FILE] IntentClassifier.cs  (2490 bytes)
+[FILE] IntentOverride.cs  (3738 bytes)
+[FILE] IntentType.cs  (914 bytes)
+[FILE] IRuleEngine.cs  (459 bytes)
+[FILE] ModelRouter.cs ...
+[工具调用] read_file  path="src/Agent.Infrastructure/Routing/IModelRouter.cs"
+[工具结果] read_file: // 命名空间
+namespace Agent.Infrastructure.Routing;
+
+/// <summary>
+/// 模型路由器接口。决定每次 LLM 调用走哪个模型。
+/// </summary>
+public interface IModelRouter
+{
+    /// <summary>
+    /// 根据上下文做出路由决策。
+    /// </summary>
+    /// <param name="context">路由上下文</param>
+    /// <param name="ct">取消令牌</param>
+    /// <returns>路由决...
+[工具调用] read_file  path="src/Agent.Infrastructure/Routing/ModelRouter.cs"
+[工具结果] read_file: // 引入日志
+using Agent.Core.Models;
+using Agent.Infrastructure.Metrics;
+using Microsoft.Extensions.Logging;
+
+// 命名空间
+namespace Agent.Infrastructure.Routing;
+
+/// <summary>
+/// 三层漏斗路由器。
+/// </summary>
+public sealed class ModelRouter : IModelRouter
+{
+    // Layer 1
+    private readonly IRuleEngine _rules...
+[工具调用] read_file  path="src/Agent.Infrastructure/Routing/RuleEngine.cs"
+[工具结果] read_file: // 引入 JSON
+using System.Text.Json;
+// 引入正则
+using System.Text.RegularExpressions;
+// 引入日志
+using Microsoft.Extensions.Logging;
+
+// 命名空间
+namespace Agent.Infrastructure.Routing;
+
+/// <summary>
+/// Layer 1：规则引擎。
+/// 从 JSON 文件加载规则，按优先级匹配用户输入。
+/// 命中即返回决策，未命中返回 null 让上层继续下探。
+/// </summary>
+public sealed cl...
+[工具调用] read_file  path="src/Agent.Infrastructure/Routing/RoutingRules.json"
+[工具结果] read_file: {
+  "rules": [
+    {
+      "name": "complex_local",
+      "description": "复杂任务关键词，走本地 AgentPro",
+      "type": "keyword_any",
+      "keywords": [
+        "爬虫",
+        "应用",
+        "项目",
+        "系统",
+        "网站",
+        "服务",
+        "框架",
+        "微服务",
+        "架构",
+        "分布式"
+      ],
+    ...
+[工具调用] read_file  path="src/Agent.Infrastructure/Routing/RoutingIntelligence.cs"
+[工具结果] read_file: // ============================================================
+// RoutingIntelligence.cs
+// 路由反馈闭环（数据闭环 · 方案 C）：
+// 基于历史任务指标（task_metrics）聚合，回流自动调权——
+// 写任务 L0.5 直连 large 前，若历史数据表明同场景 small 成功率高
+// 且显著省时，则降级 small（失败由升级链兜底，不劣化）。
+// 纯静态确定性逻辑，可测；不依赖提示词。
+// ============================================...
+[工具调用] read_file  path="src/Agent.Infrastructure/Metrics/TaskMetricsAggregator.cs"
+[工具结果] read_file: 错误：文件不存在：src/Agent.Infrastructure/Metrics/TaskMetricsAggregator.cs。工程中相近文件（候选路径）：src\Agent.Infrastructure\Routing\TaskMetricsAggregator.cs。请用候选路径重试。
+[工具调用] read_file  path="src/Agent.Infrastructure/Routing/TaskMetricsAggregator.cs"
+[工具结果] read_file: using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
+using Microsoft.Data.Sqlite;
+
+namespace Agent.Infrastructure.Routing;
+
+/// <summary>
+/// 【D2】任务特征类历史表现聚合器：读取 metrics.db（task_metrics），
+/// 按 TaskFeatureClassifier 特征类聚合成功率 / 平均耗时 / 失败主因，
+/// 供路由数据校准（高失败率特征类收紧重试）与 stats 归因报表使用...
+[工具调用] read_file  path="src/Agent.Infrastructure/Rendering/SpectreRenderer.cs"
+[工具结果] read_file: // ============================================================
+// Rendering / SpectreRenderer.cs
+// 交互态渲染器（真实终端，非管道/重定向）：
+//   · 启动横幅 / 配置块 → Panel 状态卡（AnsiConsole.Write 一次性输出，四边完整）
+//   · 任务事件 → 【追加输出流】每收到一个事件直接 Write（关键事件=标题 Panel；
+//     高频工具事件=彩色行）——不重绘、无帧叠加、无边框残留
+//   · 命令块面板（stats/memory/roll...
+[工具调用] read_file  path="src/Agent.Core/Models/AgentEvent.cs"
+[工具结果] read_file: // 引入 System.Text.Json，用于 JsonElement 类型
+using System.Text.Json;
+
+// 命名空间：Models 文件夹下的所有类型
+namespace Agent.Core.Models;
+
+/// <summary>
+/// Agent 在运行过程中向外发出的事件。
+/// UI 层（CLI / VS Code 扩展 / 桌面端）订阅这些事件来展示过程。
+/// 用抽象 record 作为基类，每个具体事件都是它的子类。
+/// </summary>
+public abstract record AgentEvent
+{
+    /// <s...
+[工具调用] read_file  path="src/Agent.Core/Models/AgentRequest.cs"
+[工具结果] read_file: // 命名空间声明
+namespace Agent.Core.Models;
+
+/// <summary>
+/// 一次任务的输入参数。
+/// 用 record 而不是 class，因为这是不可变的数据载体。
+/// </summary>
+/// <param name="SessionId">会话 ID，用于多轮对话，每次新会话生成一个 GUID</param>
+/// <param name="Input">用户输入的自然语言需求</param>
+/// <param name="WorkspaceRoot">工作区根目录，Agent 只能在此目录内操作文件</param>
+/// <p...
+[工具调用] read_file  path="src/Agent.Infrastructure/Project/ProjectScanner.cs"
+[工具结果] read_file: // 引入 IO/集合
+using System.Text;
+
+// 命名空间
+namespace Agent.Infrastructure.Project;
+
+/// <summary>
+/// 工程扫描器（工程感知 P0）：确定性扫描工程根，
+/// 产出结构化「工程上下文数据块」供模型感知项目结构。
+/// 纯文件系统操作，无模型调用；排除构建产物/版本库/依赖目录防止上下文爆炸。
+/// </summary>
+public static class ProjectScanner
+{
+    /// <summary>排除目录（构建产物/版本库/依赖）。</summary>
+    pr...
+[工具调用] read_file  path="src/Agent.Infrastructure/Project/ProjectContextStore.cs"
+[工具结果] read_file: // ============================================================
+// ProjectContextStore.cs
+// 工程上下文跨任务记忆（工程感知 P2）：
+// 将 ProjectScanner.Scan 结果持久化到 SQLite（workspace/project_context.db），
+// 并用内存缓存加速同进程内多任务复用。
+// 缓存命中以文件系统签名一致为条件（FileCount/DirCount/TotalBytes/MaxMtimeTicks），
+// 工程文件被修改 → 签名变化 → 自动重新扫描，保...
+[工具调用] read_file  path="src/Agent.Infrastructure/Project/ExternalTaskDetector.cs"
+[工具结果] read_file: 错误：文件不存在：src/Agent.Infrastructure/Project/ExternalTaskDetector.cs。工程中相近文件（候选路径）：src\Agent.Infrastructure\Routing\ExternalTaskDetector.cs。请用候选路径重试。
 warn: Agent.Infrastructure.AgentLoop[0]
-      [熔断] 工具序列重复无进展（read_file:tests/Agent.Infrastructure.Tests/Program.cs:错误：文件过大（230146 bytes，约 3491 行）。请先调用 find_symbol <目标类/方法名> 或 ），以工具验证结果收尾。
-[完成] 任务完成：工具已验证（read_file）。最后验证：错误：文件过大（230146 bytes，约 3491 行）。请先调用 find_symbol <目标类/方法名> 或 analyze_code 获取符号地图定位目标位置，再使用 read_file 并携带 offset/limit 参数精确读取目标区间；不要整页翻阅大文件。
-
-> [工作目录] 20261009-204038-7dbb（任务归属 task_8572b49f）
+      模型返回空内容，升级服务 agent_pro → large 重试。
+[路由] LargeModel → large
+[错误] 模型连续返回空答案，任务终止。
+> [工作目录] 20261009-210505-446d（任务归属 task_b3771fba）
 info: Agent.Infrastructure.Routing.RuleEngine[0]
       RuleEngine 已加载 8 条规则。
 info: Agent.Infrastructure.AgentLoop[0]
@@ -177,31 +383,108 @@ info: Agent.Infrastructure.Routing.ModelRouter[0]
 [DIR]  workspace/
 [FILE] .gitignore  (441 bytes)
 [FILE] =  (0 bytes)
-[FILE] build_diag.txt  (4243 bytes)
+[FILE] build_diag.txt  (4789 bytes)
 [FILE] build_summary.txt  (11 bytes)
-[FILE] demo_diag.txt  (243 bytes)
-[FILE] e2e_diag.txt  (8177 bytes...
-[工具调用] create_dir  {"path":"parity"}
-[工具结果] create_dir: 已创建目录 parity。
-[工具调用] write_file  path="parity/Program.cs", content=1036 字符
-[工具结果] write_file: 已写入 parity/Program.cs，共 1036 字符。
-[自动补全] 检测到缺少 .csproj，已创建 parity\Program.csproj
-[工具调用] write_file  path="parity/Program.csproj", content=241 字符
-[工具结果] write_file: 已写入 parity/Program.csproj，共 349 字符。
-[工具调用] run_command  command="dotnet run --project parity"
+[FILE] build_tests_diag.txt  (4699 bytes)
+[FILE] demo_diag.txt  (2...
+[工具调用] list_dir  path="src"
+[工具结果] list_dir: [DIR]  Agent.Cli/
+[DIR]  Agent.Core/
+[DIR]  Agent.Dashboard/
+[DIR]  Agent.Infrastructure/
+
+[工具调用] list_dir  path="src/Agent.Core"
+[工具结果] list_dir: [DIR]  Abstractions/
+[DIR]  bin/
+[DIR]  Extensions/
+[DIR]  Models/
+[DIR]  obj/
+[FILE] Agent.Core.csproj  (460 bytes)
+[FILE] CommandHub.cs  (3887 bytes)
+
+[工具调用] list_dir  path="src/Agent.Core/Abstractions"
+[工具结果] list_dir: [FILE] IAgentLoop.cs  (706 bytes)
+[FILE] IAgentTool.cs  (1187 bytes)
+[FILE] ISessionStore.cs  (1192 bytes)
+[FILE] IToolRegistry.cs  (672 bytes)
+
+[工具调用] write_file  path="src/Agent.Core/Extensions/NumberExtensions.cs", content=795 字符
+[工具结果] write_file: 已写入 src/Agent.Core/Extensions/NumberExtensions.cs，共 795 字符。
+[自动补全] 检测到缺少 .csproj，已创建 src\Agent.Core\Extensions\NumberExtensions.csproj
+[工具调用] write_file  path="src/Agent.Core/Extensions/NumberExtensions.csproj", content=208 字符
+[工具结果] write_file: 已写入 src/Agent.Core/Extensions/NumberExtensions.csproj，共 316 字符。
+[工具调用] run_command  command="dotnet build src/Agent.Core/Extensions/NumberExtensions.csproj"
+[工具结果] run_command: 退出码：0
+--- stdout ---
+  正在确定要还原的项目…
+  已还原 X:\.NET AI\LocalAiWorkbench\workspace\runs\20261009-210505-446d\src\Agent.Core\Extensions\NumberExtensions.csproj (用时 78 毫秒)。
+  NumberExtensions -> X:\.NET AI\LocalAiWorkbench\workspace\runs\20261009-210505-446d\src\Agent.Core\Extensions\bin\Debug\net10.0...
+[工具调用] write_file  path="src/Agent.Core/Extensions/Program.cs", content=823 字符
+[工具结果] write_file: 已写入 src/Agent.Core/Extensions/Program.cs，共 823 字符。
+[工具调用] write_file  path="src/Agent.Core/Extensions/Tests.csproj", content=338 字符
+[工具结果] write_file: 已写入 src/Agent.Core/Extensions/Tests.csproj，共 446 字符。
+[工具调用] run_command  command="dotnet run -p src/Agent.Core/Extensions/Tests.csproj"
+warn: Agent.Infrastructure.AgentLoop[0]
+      运行输出含外部凭据失败信号「\b401\b」，归因为需要 API Key。
+[工具结果] run_command: 退出码：0
+--- stdout ---
+C:\Program Files\dotnet\sdk\10.0.401\Microsoft.Common.CurrentVersion.targets(2205,5): warning MSB9008: 引用的项目 ..\Agent.Core\Agent.Core.csproj 不存在。 [X:\.NET AI\LocalAiWorkbench\workspace\runs\20261009-210505-446d\src\Agent.Core\Extensions\Tests.csproj]
+Testing IsEven function:...
+info: Agent.Infrastructure.Routing.ModelRouter[0]
+      [L0.5-写任务] 写任务 → 直连 large
+[工具调用] list_dir  path="."
+[工具结果] list_dir: [DIR]  .git/
+[DIR]  .vs/
+[DIR]  docs/
+[DIR]  scripts/
+[DIR]  src/
+[DIR]  tests/
+[DIR]  workspace/
+[FILE] .gitignore  (441 bytes)
+[FILE] =  (0 bytes)
+[FILE] build_diag.txt  (4789 bytes)
+[FILE] build_summary.txt  (11 bytes)
+[FILE] build_tests_diag.txt  (4699 bytes)
+[FILE] demo_diag.txt  (2...
+[工具调用] create_dir  {"path":"src/Agent.Core/Extensions"}
+[工具结果] create_dir: 已创建目录 src/Agent.Core/Extensions。
+[工具调用] write_file  path="src/Agent.Core/Extensions/NumberExtensions.cs", content=795 字符
+[工具结果] write_file: 已写入 src/Agent.Core/Extensions/NumberExtensions.cs，共 795 字符。
+[工具调用] write_file  path="src/Agent.Core/Extensions/Agent.Core.Extensions.csproj", content=208 字符
+[工具结果] write_file: 已写入 src/Agent.Core/Extensions/Agent.Core.Extensions.csproj，共 316 字符。
+[工具调用] write_file  path="src/Agent.Core/Extensions/Program.cs", content=639 字符
+[工具结果] write_file: 已写入 src/Agent.Core/Extensions/Program.cs，共 639 字符。
+[工具调用] run_command  command="dotnet run --project src/Agent.Core/Extensions"
 [工具结果] run_command: 退出码：1
 --- stderr ---
-提供的文件路径不存在: parity。
+执行要使用的项目文件，因为 src/Agent.Core/Extensions 包含多个项目文件。
 
 
 info: Agent.Infrastructure.Routing.ModelRouter[0]
       [L0.5-写任务] 写任务 → 直连 large
-[工具调用] create_dir  {"path": "parity"}
-[工具结果] create_dir: 已创建目录 parity。
-[工具调用] write_file  path="parity/Program.cs", content=724 字符
-[工具结果] write_file: 已写入 parity/Program.cs，共 724 字符。
-[工具调用] write_file  path="parity/Program.csproj", content=241 字符
-[工具结果] write_file: 已写入 parity/Program.csproj，共 349 字符。
+[工具调用] list_dir  path="."
+[工具结果] list_dir: [DIR]  .git/
+[DIR]  .vs/
+[DIR]  docs/
+[DIR]  scripts/
+[DIR]  src/
+[DIR]  tests/
+[DIR]  workspace/
+[FILE] .gitignore  (441 bytes)
+[FILE] =  (0 bytes)
+[FILE] build_diag.txt  (4789 bytes)
+[FILE] build_summary.txt  (11 bytes)
+[FILE] build_tests_diag.txt  (4699 bytes)
+[FILE] demo_diag.txt  (2...
+[工具调用] list_dir  path="src/Agent.Core"
+[工具结果] list_dir: [DIR]  Abstractions/
+[DIR]  bin/
+[DIR]  Extensions/
+[DIR]  Models/
+[DIR]  obj/
+[FILE] Agent.Core.csproj  (460 bytes)
+[FILE] CommandHub.cs  (3887 bytes)
+
 warn: Agent.Infrastructure.AgentLoop[0]
       [熔断] 已写文件但验证未通过（最近 run_command 失败/缺失），判失败防假成功。
 [错误] 任务写入文件但验证未通过（run_command 未成功），熔断终止，防假成功。

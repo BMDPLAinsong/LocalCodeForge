@@ -15,6 +15,9 @@ public sealed class RunCommandTool : AgentToolBase
     private readonly string _workspaceRoot;
     // 工程根（可选，工程感知 §14-3t）：非 null 时启用路径边界检查
     private readonly string? _projectRoot;
+    // 【10-10 问题2】工程可写标志：只读工程模式下写工具基准 = run 目录，run_command cwd 必须同基准，
+    // 否则"文件写进 run 目录、命令在工程根执行"错位（E2E 实证：dotnet run --project parity 报路径不存在）。
+    private readonly bool _projectWriteEnabled;
 
     // 允许执行的命令白名单，按命令的第一个 token 匹配
     private static readonly HashSet<string> AllowedCommands = new(StringComparer.OrdinalIgnoreCase)
@@ -31,11 +34,26 @@ public sealed class RunCommandTool : AgentToolBase
     private const int TimeoutSecondsProject = 90;
 
     /// <summary>构造函数。</summary>
-    public RunCommandTool(string workspaceRoot, string? projectRoot = null)
+    public RunCommandTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false)
     {
         // 规范化
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
+        _projectWriteEnabled = projectWriteEnabled;
+    }
+
+    /// <summary>
+    /// 【10-10 问题2】解析 run_command 工作目录（确定性纯函数，可测）：
+    /// 写工具基准与 run_command cwd 必须一致——可写工程模式两者都是工程根；
+    /// 只读工程模式与沙箱模式写基准是 run 目录，cwd 也用 run 目录，
+    /// 否则任务产物（run 目录）无法被 dotnet run --project 找到。
+    /// </summary>
+    public static string ResolveWorkingDirectory(string workspaceRoot, string? projectRoot, bool projectWriteEnabled)
+    {
+        var fullWs = Path.GetFullPath(workspaceRoot);
+        if (projectWriteEnabled && !string.IsNullOrWhiteSpace(projectRoot))
+            return Path.GetFullPath(projectRoot);
+        return fullWs;
     }
 
     /// <summary>
@@ -99,10 +117,13 @@ public sealed class RunCommandTool : AgentToolBase
                 return boundaryError;
             }
 
-            // 【D1 衍生】项目名幻觉校验：命令中的 .csproj 名必须存在于工程根。
-            // 实测失败：模型乱写 `dotnet run --project OrderSystem.csproj`（工程实际是
-            // lawcheck_demo.csproj）→ "提供的文件路径不存在"。工程化拦截，直击工程增量任务失败。
-            var projError = CheckProjectName(command, _projectRoot);
+            // 【D1 衍生】项目名幻觉校验（10-10 修正基准）：命令中的 .csproj 引用必须以
+            // 实际 cwd（ResolveWorkingDirectory，与写工具基准一致）为准校验存在性。
+            // 实测失败：模型乱写 `dotnet run --project OrderSystem.csproj` → 路径不存在。
+            // 修正：原实现固定扫"工程根顶层"（TopDirectoryOnly）——本项目 csproj 全在
+            // src/tests 子目录 → 空列表误拦一切 .csproj 引用；且只读工程模式产物在 run 目录
+            // 也被误判"不存在于工程根"。改为相对 cwd 存在性 + 递归同名查找。
+            var projError = CheckProjectName(command, ResolveWorkingDirectory(_workspaceRoot, _projectRoot, _projectWriteEnabled));
             if (projError is not null)
             {
                 return projError;
@@ -141,10 +162,10 @@ public sealed class RunCommandTool : AgentToolBase
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            // 【工程模式】cwd 用工程根：工程模式下 run_command 在工程根执行，
-            // `dotnet run` 自然找到工程 csproj（工程文件已写入工程根，run 目录无项目）。
-            // 非工程模式（projectRoot=null）保持沙箱 run 目录。
-            WorkingDirectory = _projectRoot ?? _workspaceRoot,
+            // 【10-10 问题2】cwd 与写工具基准统一：可写工程模式 → 工程根（dotnet 构建工程）；
+            // 只读工程模式 / 沙箱 → run 目录（任务产物验证）。此前只读工程模式 cwd=工程根，
+            // 写工具却落在 run 目录 → dotnet run --project 找不到产物（E2E parity 实证）。
+            WorkingDirectory = ResolveWorkingDirectory(_workspaceRoot, _projectRoot, _projectWriteEnabled),
             // 明确指定 UTF-8 编码
             StandardOutputEncoding = System.Text.Encoding.UTF8,
             StandardErrorEncoding = System.Text.Encoding.UTF8
@@ -352,34 +373,40 @@ public sealed class RunCommandTool : AgentToolBase
     }
 
     /// <summary>
-    /// 【D1 衍生】项目名幻觉校验：工程模式下，命令中引用的 .csproj 文件名
-    /// 必须存在于工程根。模型常幻觉项目名（如乱写 OrderSystem.csproj），
-    /// 导致 `dotnet run --project Xxx.csproj` 失败——确定性拦截 + 提示正确项目名。
+    /// 【D1 衍生】项目名幻觉校验（10-10 修正）：命令中引用的 .csproj 以实际 cwd 为基准
+    /// 校验存在性——①相对 cwd 直接存在放行；②cwd 递归同名放行（模型常只给文件名）；
+    /// ③均不存在 → 拦截并给出 cwd 实际顶层项目提示。cwd 由 ResolveWorkingDirectory 决定
+    /// （可写工程=工程根 / 只读工程+沙箱=run 目录），与写工具基准一致，杜绝双基准错位。
     /// </summary>
-    private static string? CheckProjectName(string command, string projectRoot)
+    public static string? CheckProjectName(string command, string cwd)
     {
         var projMatches = System.Text.RegularExpressions.Regex.Matches(
             command, @"[A-Za-z0-9_.\-]+\.csproj", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (projMatches.Count == 0) return null;
 
-        // 工程根实际 csproj 清单（仅顶层，工程结构惯例）
-        var actualNames = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        try
-        {
-            foreach (var f in Directory.EnumerateFiles(projectRoot, "*.csproj", SearchOption.TopDirectoryOnly))
-                actualNames.Add(Path.GetFileName(f));
-        }
-        catch { }
-
         foreach (System.Text.RegularExpressions.Match m in projMatches)
         {
+            // ① 相对 cwd 直接存在
+            if (File.Exists(Path.Combine(cwd, m.Value))) continue;
+
+            // ② cwd 递归查找同名（模型常只给文件名，工程可能多层嵌套）
             var name = Path.GetFileName(m.Value);
-            if (!actualNames.Contains(name))
+            bool found;
+            try { found = Directory.EnumerateFiles(cwd, name, SearchOption.AllDirectories).Any(); }
+            catch { found = false; }
+            if (found) continue;
+
+            // ③ 拦截：给出 cwd 实际顶层项目作为提示
+            var actualNames = new System.Collections.Generic.List<string>();
+            try
             {
-                var hint = actualNames.Count > 0 ? string.Join(" / ", actualNames) : "(工程根未找到 .csproj)";
-                return $"错误：项目 {name} 不存在于工程根。工程实际项目：{hint}。\n" +
-                       "请使用正确的项目名，或直接运行 dotnet run（不带 --project，由工程根自动定位）。\n退出码：126";
+                foreach (var f in Directory.EnumerateFiles(cwd, "*.csproj", SearchOption.TopDirectoryOnly))
+                    actualNames.Add(Path.GetFileName(f));
             }
+            catch { }
+            var hint = actualNames.Count > 0 ? string.Join(" / ", actualNames) : "(工作目录未找到 .csproj)";
+            return $"错误：项目 {name} 不存在于工作目录。实际项目：{hint}。\n" +
+                   "请使用正确的项目名，或直接运行 dotnet run（不带 --project，自动定位）。\n退出码：126";
         }
         return null;
     }
