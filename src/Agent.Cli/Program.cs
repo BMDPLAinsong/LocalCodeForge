@@ -48,26 +48,27 @@ internal class Program
                 ApiKey = "ollama"
             },
 
-            // 单模型三角色：small/large/agent_pro 共用一个 law-unified（30B Custom Model），
-            // 不额外拉取模型（磁盘/内存各一份常驻）；角色差异由请求级 options 运行时注入
-            // （Temperature：small 0.3 确定性 / large 0.7 探索 / agent_pro 0.5 居中）。
+            // 单模型三角色：small/large/agent_pro 共用一个 qwen3.8-flash-next-q2_0
+            // （本地 strata 部署，OpenAI 兼容端点 http://127.0.0.1:8080/v1；
+            //  服务端不校验 ApiKey/Model，Model 按推荐名配置）。
+            // 角色差异由请求级 options 运行时注入（Temperature：small 0.3 / large 0.7 / agent_pro 0.5）。
+            // Provider 保持 "ollama"：KernelFactory 拼接 {Endpoint}/v1 → http://127.0.0.1:8080/v1。
             // 小模型角色：单文件/轻任务，确定性优先
             Small = new ModelEndpoint
             {
                 Provider = "ollama",
-                Model = "law-unified",
-                Endpoint = "http://localhost:11434",
+                Model = "qwen3.8-flash-next-q2_0",
+                Endpoint = "http://127.0.0.1:8080",
                 ApiKey = "ollama",
                 Temperature = 0.3
             },
 
             // 大模型角色：复杂推理/多文件/规划（温度最高，保持探索）
-            // 云端 DashScope 仅预留兜底（未来可选），当前不使用云端。
             Large = new ModelEndpoint
             {
                 Provider = "ollama",
-                Model = "law-unified",
-                Endpoint = "http://localhost:11434",
+                Model = "qwen3.8-flash-next-q2_0",
+                Endpoint = "http://127.0.0.1:8080",
                 ApiKey = "ollama",
                 Temperature = 0.7
             },
@@ -76,8 +77,8 @@ internal class Program
             AgentPro = new ModelEndpoint
             {
                 Provider = "ollama",
-                Model = "law-unified",
-                Endpoint = "http://localhost:11434",
+                Model = "qwen3.8-flash-next-q2_0",
+                Endpoint = "http://127.0.0.1:8080",
                 ApiKey = "ollama",
                 Temperature = 0.5
             },
@@ -1141,48 +1142,121 @@ internal class Program
         // ── 检查 1：Ollama 服务是否在线（连接失败自动启动 + 轮询重试） ──
         var ollamaEndpoint = localEndpoints[0].Endpoint.Endpoint;
 
-        // 探活：成功返回模型集 + 状态码；HTTP 非成功（服务在跑但异常）返回 (null, code)；连接失败抛异常
-        async Task<(HashSet<string>? Models, int StatusCode)> ProbeAsync()
+        // 探活：成功返回模型集 + 状态码 + 服务类型；HTTP 非成功（服务在跑但异常）返回 (null, code)；连接失败抛异常
+        // 【10-09 strata 兼容】双协议探活：先试 OpenAI 兼容 /v1/models（strata 等），失败/404 回退 Ollama /api/tags。
+        async Task<(HashSet<string>? Models, int StatusCode, string ServiceKind)> ProbeEndpointAsync(string ep)
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var resp = await http.GetAsync($"{ollamaEndpoint.TrimEnd('/')}/api/tags");
+            var baseUrl = ep.TrimEnd('/');
+
+            // 1) OpenAI 兼容 /v1/models（strata）
+            try
+            {
+                var resp1 = await http.GetAsync($"{baseUrl}/v1/models");
+                if (resp1.IsSuccessStatusCode)
+                {
+                    var json = await resp1.Content.ReadAsStringAsync();
+                    using var doc = System.Text.Json.JsonDocument.Parse(json);
+                    return (
+                        doc.RootElement
+                            .GetProperty("data")
+                            .EnumerateArray()
+                            .Select(m => m.GetProperty("id").GetString() ?? "")
+                            .ToHashSet(StringComparer.OrdinalIgnoreCase),
+                        (int)resp1.StatusCode,
+                        "strata/OpenAI 兼容服务");
+                }
+                // 服务在跑但无此端点（Ollama 无 /v1/models）→ 回退 /api/tags
+            }
+            catch
+            {
+                // 连接失败 → 继续走 /api/tags（让原始连接异常向上抛出）
+            }
+
+            // 2) Ollama /api/tags
+            var resp = await http.GetAsync($"{baseUrl}/api/tags");
             var statusCode = (int)resp.StatusCode;
 
             if (!resp.IsSuccessStatusCode)
             {
-                return (null, statusCode);
+                return (null, statusCode, "Ollama");
             }
 
             // 解析返回的 JSON，提取模型名列表
-            var json = await resp.Content.ReadAsStringAsync();
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var json2 = await resp.Content.ReadAsStringAsync();
+            using var doc2 = System.Text.Json.JsonDocument.Parse(json2);
             return (
-                doc.RootElement
+                doc2.RootElement
                     .GetProperty("models")
                     .EnumerateArray()
                     .Select(m => m.GetProperty("name").GetString() ?? "")
                     .ToHashSet(StringComparer.OrdinalIgnoreCase),
-                statusCode);
+                statusCode,
+                "Ollama");
         }
 
-        HashSet<string>? installedModels = null;
-        var serviceError = false;
-        var serviceErrorCode = 0;
+        // 【10-09 strata 兼容】按端点分组探活：Classifier 仍在 11434（Ollama），三角色在 8080（strata）。
+        // 单一端点探活会让跨端配置误报"未安装"，故每个唯一端点独立探活，模型集按端点映射。
+        var uniqueEndpoints = localEndpoints
+            .Select(e => e.Endpoint.Endpoint.TrimEnd('/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        try
+        var endpointModels = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var endpointKinds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var anyOnline = false;
+        var anyError = false;
+        var firstErrorCode = 0;
+        var firstProbeEndpoint = localEndpoints[0].Endpoint.Endpoint.TrimEnd('/');
+        var firstProbeEx = (Exception?)null;
+
+        foreach (var ep in uniqueEndpoints)
         {
-            var (models, code) = await ProbeAsync();
-            installedModels = models;
-            serviceError = models == null;
-            serviceErrorCode = code;
-        }
-        catch
-        {
-            // 无法连接（端口拒绝 / 超时）→ 走自动启动分支
+            try
+            {
+                var (models, code, kind) = await ProbeEndpointAsync(ep);
+                if (models != null)
+                {
+                    endpointModels[ep] = models;
+                    endpointKinds[ep] = kind;
+                    anyOnline = true;
+                }
+                else
+                {
+                    anyError = true;
+                    firstErrorCode = code;
+                    endpointKinds[ep] = kind;
+                }
+            }
+            catch (Exception ex)
+            {
+                anyError = true;
+                firstErrorCode = 0;
+                endpointKinds[ep] = "Ollama";
+                if (string.Equals(ep, firstProbeEndpoint, StringComparison.OrdinalIgnoreCase))
+                {
+                    firstProbeEx = ex;
+                }
+            }
         }
 
         // 仅"连接失败"触发自动启动；HTTP 非成功（服务在跑但异常）不触发
-        if (!serviceError && installedModels == null)
+        // 【10-09 strata 兼容】仅默认 Ollama 端口（11434）自动拉起 ollama serve；
+        // strata 等 OpenAI 兼容服务（8080）连接失败不自动拉起（它没有 serve 子命令）。
+        var isDefaultOllamaPort = Uri.TryCreate(firstProbeEndpoint, UriKind.Absolute, out var probeUri)
+            && probeUri.Port == 11434;
+
+        if (!anyOnline && !anyError && firstProbeEx != null && !isDefaultOllamaPort)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"  无法连接模型服务 {firstProbeEndpoint}（strata/OpenAI 兼容端点无 serve 自动拉起）。");
+            Console.WriteLine($"    请确认 strata 已启动并已加载模型：{string.Join("、", localEndpoints.Select(e => e.Endpoint.Model).Distinct())}");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+
+        if (!anyOnline && firstProbeEx != null && isDefaultOllamaPort)
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine("  Ollama 未启动，正在尝试自动启动：ollama serve ...");
@@ -1232,14 +1306,19 @@ internal class Program
             }
 
             // 轮询等待服务就绪（每 1 秒一次，最多 15 秒；不用固定 sleep，启动耗时因机器而异）
-            for (var i = 0; i < 15 && installedModels == null; i++)
+            for (var i = 0; i < 15 && !endpointModels.ContainsKey(firstProbeEndpoint); i++)
             {
                 await Task.Delay(1000);
 
                 try
                 {
-                    var (m, _) = await ProbeAsync();
-                    installedModels = m;
+                    var (m, _, kind) = await ProbeEndpointAsync(firstProbeEndpoint);
+                    if (m != null)
+                    {
+                        endpointModels[firstProbeEndpoint] = m;
+                        endpointKinds[firstProbeEndpoint] = kind;
+                        anyOnline = true;
+                    }
                 }
                 catch
                 {
@@ -1248,16 +1327,21 @@ internal class Program
             }
         }
 
-        if (installedModels != null)
+        if (anyOnline)
         {
+            var totalModels = endpointModels.Values
+                .SelectMany(x => x)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            var kindText = string.Join(" + ", endpointKinds.Values.Distinct());
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  [OK] Ollama 在线（{installedModels.Count} 个模型已安装）");
+            Console.WriteLine($"  [OK] 模型服务在线（{endpointModels.Count} 个端点 / {totalModels} 个模型 / {kindText}）");
             Console.ResetColor();
         }
-        else if (serviceError)
+        else if (anyError)
         {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  [FAIL] Ollama 服务异常（HTTP {serviceErrorCode}）");
+            Console.WriteLine($"  [FAIL] 模型服务异常（HTTP {firstErrorCode}）");
             Console.ResetColor();
             Console.WriteLine();
             return;
@@ -1265,22 +1349,33 @@ internal class Program
         else
         {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("  [FAIL] 无法连接 Ollama：自动启动后 15 秒内服务未就绪（localhost:11434）");
-            Console.WriteLine("    请手动执行：ollama serve");
+            Console.WriteLine("  [FAIL] 无法连接模型服务：自动启动后 15 秒内服务未就绪。");
+            Console.WriteLine("    请确认服务已启动（strata 8080 / ollama serve 11434）。");
             Console.ResetColor();
             Console.WriteLine();
             return;
         }
 
-        // ── 检查 2：逐个检查模型是否已拉取 ──
+        // ── 检查 2：按端点逐个检查模型是否已加载/拉取 ──
         var missing = new List<string>();
 
         foreach (var (name, endpoint) in localEndpoints)
         {
-            // Ollama 的模型名可能带 ":latest" 或 ":tag"，兼容处理
+            var ep = endpoint.Endpoint.TrimEnd('/');
             var modelName = endpoint.Model;
-            var found = installedModels.Contains(modelName)
-                || installedModels.Contains($"{modelName}:latest");
+
+            if (!endpointModels.TryGetValue(ep, out var models))
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"  [FAIL]  {name,-10} {modelName}  (端点 {ep} 不可达)");
+                Console.ResetColor();
+                missing.Add(modelName);
+                continue;
+            }
+
+            // Ollama 的模型名可能带 ":latest" 或 ":tag"，兼容处理
+            var found = models.Contains(modelName)
+                || models.Contains($"{modelName}:latest");
 
             if (found)
             {
@@ -1291,7 +1386,7 @@ internal class Program
             else
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"  [FAIL]  {name,-10} {modelName}  (未安装)");
+                Console.WriteLine($"  [FAIL]  {name,-10} {modelName}  (未安装/未加载)");
                 Console.ResetColor();
                 missing.Add(modelName);
             }
@@ -1302,10 +1397,25 @@ internal class Program
         {
             Console.WriteLine();
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"  以下模型缺失，请执行：");
-            foreach (var m in missing)
+            var strataMissing = localEndpoints.Any(e =>
+                endpointKinds.TryGetValue(e.Endpoint.Endpoint.TrimEnd('/'), out var k)
+                && k.StartsWith("strata", StringComparison.OrdinalIgnoreCase));
+
+            if (strataMissing)
             {
-                Console.WriteLine($"    ollama pull {m}");
+                Console.WriteLine($"  以下模型在 strata 中未加载，请确认部署服务已包含：");
+                foreach (var m in missing)
+                {
+                    Console.WriteLine($"    {m}");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"  以下模型缺失，请执行：");
+                foreach (var m in missing)
+                {
+                    Console.WriteLine($"    ollama pull {m}");
+                }
             }
             Console.ResetColor();
         }
