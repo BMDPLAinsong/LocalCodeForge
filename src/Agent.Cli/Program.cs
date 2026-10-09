@@ -48,7 +48,7 @@ internal class Program
                 ApiKey = "ollama"
             },
 
-            // 单模型三角色：small/large/agent_pro 共用一个 qwen3.8-flash-next-q2_0
+            // 单模型三角色：small/large/agent_pro 共用一个 qwen3.8-flash-next-coder-iq1_m
             // （本地 strata 部署，OpenAI 兼容端点 http://127.0.0.1:8080/v1；
             //  服务端不校验 ApiKey/Model，Model 按推荐名配置）。
             // 角色差异由请求级 options 运行时注入（Temperature：small 0.3 / large 0.7 / agent_pro 0.5）。
@@ -57,7 +57,7 @@ internal class Program
             Small = new ModelEndpoint
             {
                 Provider = "ollama",
-                Model = "qwen3.8-flash-next-q2_0",
+                Model = "qwen3.8-flash-next-coder-iq1_m",
                 Endpoint = "http://127.0.0.1:8080",
                 ApiKey = "ollama",
                 Temperature = 0.3
@@ -67,7 +67,7 @@ internal class Program
             Large = new ModelEndpoint
             {
                 Provider = "ollama",
-                Model = "qwen3.8-flash-next-q2_0",
+                Model = "qwen3.8-flash-next-coder-iq1_m",
                 Endpoint = "http://127.0.0.1:8080",
                 ApiKey = "ollama",
                 Temperature = 0.7
@@ -77,7 +77,7 @@ internal class Program
             AgentPro = new ModelEndpoint
             {
                 Provider = "ollama",
-                Model = "qwen3.8-flash-next-q2_0",
+                Model = "qwen3.8-flash-next-coder-iq1_m",
                 Endpoint = "http://127.0.0.1:8080",
                 ApiKey = "ollama",
                 Temperature = 0.5
