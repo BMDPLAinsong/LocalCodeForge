@@ -3475,6 +3475,13 @@ Check("cwd：只读工程模式 → workspaceRoot（写基准一致）", Agent.I
 Check("cwd：可写工程模式 → projectRoot", Agent.Infrastructure.Tools.RunCommandTool.ResolveWorkingDirectory(@"X:\run", @"X:\proj", true) == Path.GetFullPath(@"X:\proj"));
 Check("cwd：可写工程但无工程根 → workspaceRoot", Agent.Infrastructure.Tools.RunCommandTool.ResolveWorkingDirectory(@"X:\run", null, true) == Path.GetFullPath(@"X:\run"));
 
+// ── 10-11 write_unverified 归因：熔断消息带 run_command 真实失败原因 ──
+Console.WriteLine("== 10-11 write_unverified 归因 ==");
+Check("熔断消息：空摘要 → 兼容旧消息", Agent.Infrastructure.AgentLoop.BuildWriteUnverifiedReason("") == "任务写入文件但验证未通过（run_command 未成功），熔断终止，防假成功。");
+Check("熔断消息：空白摘要 → 兼容旧消息", Agent.Infrastructure.AgentLoop.BuildWriteUnverifiedReason("   ") == "任务写入文件但验证未通过（run_command 未成功），熔断终止，防假成功。");
+Check("熔断消息：带摘要 → 含失败原因", Agent.Infrastructure.AgentLoop.BuildWriteUnverifiedReason("错误：命令执行超时（>30秒）。退出码：124").Contains("命令执行超时"));
+Check("熔断消息：带摘要 → 保留基础消息", Agent.Infrastructure.AgentLoop.BuildWriteUnverifiedReason("exit code 1").StartsWith("任务写入文件但验证未通过"));
+
 // CheckProjectName：相对 cwd 存在性 + 递归同名（10-10 修正，替换"工程根顶层列表"）
 {
     var tmpRoot = Path.Combine(Path.GetTempPath(), "lawcheck_" + Guid.NewGuid().ToString("N")[..8]);

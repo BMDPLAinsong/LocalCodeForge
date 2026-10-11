@@ -11,6 +11,13 @@
 
 
 
+
+
+> **10-11 复盘① write_unverified 归因增强（数据闭环：让失败可归因）**
+> **审计结论**：write_unverified（写文件但 run_command 未通过 → 熔断）是近 30 条最大失败面（10/30），但 13 条历史样本的 error_summary **全是同一模板**——熔断消息吞掉了 run_command 真实失败原因（超时/编译错/退出码/没跑无法区分）；task_events 在 Dashboard 未激活期不落库，历史事件流不可查。
+> **修复**：AgentLoop 记录最后一次 run_command 的工具结果摘要（_lastRunCommandSummary，SummarizeOutput 160/80），熔断失败消息经纯函数 BuildWriteUnverifiedReason(summary) 拼接真实原因（summary 空 → 兼容旧消息）。此后 write_unverified 的 error_summary 可直接按"超时/编译错/退出码"归因。
+> **验证**：构建 0 错误；tests 693 全绿（+4 断言：空摘要兼容 / 带摘要含原因）。
+
 > **10-11 glm-4.7-flash:q4_K_M 对比测试 → 回退 law-unified（模型选型结论）**
 > 用户要求对比 glm-4.7-flash:q4_K_M（Ollama 本地 19GB q4_K_M）vs law-unified。三类代表任务 E2E 实测**全线失败**：
 > 1. 单文件写（C# 奇数偶数）：`HTTP 500: incomplete GLM tool call: XML syntax error: <arg_value> closed by </tool_call>`——glm 本地量化的工具调用 XML 格式不稳（arg_value 未闭合等），Ollama 严格解析直接 500；升级 large 重试同样失败。

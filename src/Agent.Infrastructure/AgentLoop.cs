@@ -44,6 +44,8 @@ public sealed class AgentLoop : IAgentLoop
     // 熔断收尾时若"写过文件但最近验证未通过"→ 判失败而非假成功（read_file 等只读工具不算验证证据）。
     private bool _everWroteFile;
     private bool _lastRunCommandOk;
+    /// <summary>最后一次 run_command 的工具结果摘要（熔断归因用，让 write_unverified 可区分 超时/编译错/没跑）。</summary>
+    private string _lastRunCommandSummary = "";
 
     // 【批次1·验证层总盘点】写被拒记录 + 显式写目标（完成门 B/C 判定输入）。
     // _writeTarget：CLI 已授权或输入解析出的用户显式写目标（"X盘根目录 test.txt" → X:\test.txt）。
@@ -140,6 +142,7 @@ public sealed class AgentLoop : IAgentLoop
         _lastToolName = null;
         _everWroteFile = false;
         _lastRunCommandOk = false;
+        _lastRunCommandSummary = "";
         _writeRejected = false;
 
         // 【批次1·A】显式写目标提取（完成门 B 判定输入；CLI 已授权路径经 AgentRequest 传入）
@@ -473,7 +476,10 @@ public sealed class AgentLoop : IAgentLoop
                     if (!ok && (cleanName is "write_file" or "edit_file" or "append_file" or "create_dir"))
                         _writeRejected = true;
                     if (cleanName == "run_command")
+                    {
                         _lastRunCommandOk = ok;
+                        _lastRunCommandSummary = SummarizeOutput(output, head: 160, tail: 80);
+                    }
 
                     // 上下文治理：仅 run_command 截断（大段 stdout/stderr 膨胀源）；
                     // read_file 保留完整——edit_file 精确匹配依赖完整文件内容，截断会破坏修复
@@ -523,7 +529,7 @@ public sealed class AgentLoop : IAgentLoop
                             if (_everWroteFile && !_lastRunCommandOk)
                             {
                                 _logger.LogWarning("[熔断] 已写文件但验证未通过（最近 run_command 失败/缺失），判失败防假成功。");
-                                yield return new AgentEvent.Error("任务写入文件但验证未通过（run_command 未成功），熔断终止，防假成功。");
+                                yield return new AgentEvent.Error(BuildWriteUnverifiedReason(_lastRunCommandSummary));
                                 yield break;
                             }
 
@@ -1392,6 +1398,18 @@ public sealed class AgentLoop : IAgentLoop
     /// 防大段 stdout/stderr 撑爆上下文导致 4B 模型空响应。
     /// 仅影响注入，运行输出判定（OutputVerifier）仍用完整输出。
     /// </summary>
+    /// <summary>
+    /// 【10-11 write_unverified 归因】熔断失败消息带上 run_command 真实失败原因，
+    /// 让 metrics 的 error_summary 可区分"超时/编译错误/退出码/未跑"，不再吞掉细节。
+    /// 纯函数：summary 为空（未记录到 run_command）→ 兼容旧消息。
+    /// </summary>
+    public static string BuildWriteUnverifiedReason(string lastRunSummary)
+    {
+        const string baseMsg = "任务写入文件但验证未通过（run_command 未成功），熔断终止，防假成功。";
+        if (string.IsNullOrWhiteSpace(lastRunSummary)) return baseMsg;
+        return baseMsg + " 最近 run_command：" + lastRunSummary;
+    }
+
     private static string SummarizeOutput(string output, int head = 400, int tail = 300)
     {
         if (output.Length <= head + tail) return output;
