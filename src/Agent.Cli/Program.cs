@@ -59,8 +59,9 @@ internal class Program
                 ApiKey = "ollama"
             },
 
-            // 单模型三角色：small/large/agent_pro 共用一个 law-unified（Ollama 本地 30B Q4）
-            // （历史：strata q2_0/iq1_m 切换实验已回退——正确性持平、速度未提升，停用；见 HANDOVER 10-09 段）
+            // 单模型三角色：small/large/agent_pro 共用 law-unified（Ollama 本地 30B Q4）
+            // （历史：strata q2_0/iq1_m 实验已回退 → qwen3.8-27b（10-10）→ glm-4.7-flash:q4_K_M（10-11
+            //   实测工具调用 XML 格式不稳全线失败，回退 law-unified——见 HANDOVER 10-11 段）
             // 角色差异由请求级 options 运行时注入（Temperature：small 0.3 / large 0.7 / agent_pro 0.5）。
             // Provider 保持 "ollama"：KernelFactory 拼接 {Endpoint}/v1 → http://localhost:11434/v1。
             // 小模型角色：单文件/轻任务，确定性优先

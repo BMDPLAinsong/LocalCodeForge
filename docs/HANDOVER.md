@@ -9,6 +9,16 @@
 
 
 
+
+
+> **10-11 glm-4.7-flash:q4_K_M 对比测试 → 回退 law-unified（模型选型结论）**
+> 用户要求对比 glm-4.7-flash:q4_K_M（Ollama 本地 19GB q4_K_M）vs law-unified。三类代表任务 E2E 实测**全线失败**：
+> 1. 单文件写（C# 奇数偶数）：`HTTP 500: incomplete GLM tool call: XML syntax error: <arg_value> closed by </tool_call>`——glm 本地量化的工具调用 XML 格式不稳（arg_value 未闭合等），Ollama 严格解析直接 500；升级 large 重试同样失败。
+> 2. 多文件编排（学生管理系统）：Planner 输入截断（4512→500）后 glm 生成计划 JSON 不完整 → 解析失败 ×2 → 规划失败。
+> 3. 工程分析：模型连续空响应，升级链兜底也空。
+> **结论**：glm-4.7 本地 q4 量化版工具调用层不兼容（模型端产出非法 XML，非内核缺陷），不推荐。19GB 与 30B 同量级无体积/速度优势。
+> **动作**：配置回退 law-unified（Small/AgentPro/Large），构建 0 错误，冒烟 E2E 恢复（奇数偶数写任务 OK + 分析任务收敛 OK）。三角色温度分级保持（0.3/0.5/0.7）。切换历史：law-unified → qwen3.8-27b（10-10）→ glm-4.7-flash:q4_K_M（10-11 失败回退）→ law-unified。
+
 > **10-10 可疑成功治理（① 开展）**
 > **目标**：让"可疑成功"计数反映真实（此前 stats 显示 ~20，真实口径仅 8-10）。
 > **数据审计结论**：
