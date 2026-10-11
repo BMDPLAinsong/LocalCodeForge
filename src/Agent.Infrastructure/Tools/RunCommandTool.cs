@@ -128,6 +128,15 @@ public sealed class RunCommandTool : AgentToolBase
             {
                 return projError;
             }
+
+            // 【10-11 ③ 多 csproj 歧义】dotnet run 不带 --project 且 cwd 顶层 ≥2 个 .csproj
+            // → MSB1011 无法确定启动项目（多文件写任务常见失败：模型同目录写多个项目）。
+            // 进程执行前拦截，附目录内实际项目清单（数据驱动，非提示词）。
+            var ambError = CheckDotnetRunAmbiguity(command, ResolveWorkingDirectory(_workspaceRoot, _projectRoot, _projectWriteEnabled));
+            if (ambError is not null)
+            {
+                return ambError;
+            }
         }
 
         // 提取第一个 token 作为命令名
@@ -409,6 +418,45 @@ public sealed class RunCommandTool : AgentToolBase
                    "请使用正确的项目名，或直接运行 dotnet run（不带 --project，自动定位）。\n退出码：126";
         }
         return null;
+    }
+
+    /// <summary>
+    /// 【10-11 ③ 多 csproj 歧义】dotnet run 不带 --project 但 cwd 顶层有 ≥2 个 .csproj →
+    /// MSB1011 无法确定启动项目（多文件写任务常见失败：模型在同一目录写了多个项目）。
+    /// 进程执行前确定性拦截，附目录内实际项目清单（数据驱动，非提示词，让模型立刻知道选哪个）。
+    /// 纯函数可测；命令带 --project/-p/显式 .csproj 或 cwd 项目数 &lt;2 → 放行（null）。
+    /// </summary>
+    public static string? CheckDotnetRunAmbiguity(string command, string cwd)
+    {
+        // 仅拦截 dotnet run 形式（含前导空白/大小写）
+        if (!System.Text.RegularExpressions.Regex.IsMatch(command,
+            @"^\s*dotnet\s+run\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            return null;
+
+        // 已显式指定项目 → 不歧义，放行
+        if (System.Text.RegularExpressions.Regex.IsMatch(command,
+            @"--project\b|\s-p\b|\.csproj", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            return null;
+
+        System.Collections.Generic.List<string> projs;
+        try
+        {
+            projs = Directory.EnumerateFiles(cwd, "*.csproj", SearchOption.TopDirectoryOnly)
+                .Select(Path.GetFileName)
+                .Where(x => x is not null)
+                .Select(x => x!)
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (projs.Count < 2) return null;
+        var list = string.Join("、", projs);
+        return $"错误：当前目录包含多个项目文件（{list}），dotnet run 无法确定启动项目。\n" +
+               "请用 dotnet run --project <文件名> 指定要运行的项目。\n退出码：125";
     }
 
     /// <summary>

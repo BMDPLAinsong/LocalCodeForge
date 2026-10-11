@@ -1707,7 +1707,7 @@ internal class Program
                     s.TotalCount > 0 ? $"{(double)s.SuccessCount / s.TotalCount:P0}" : "无样本";
                 Console.WriteLine($"  L0.5 写降级 small:  small 样本 {smallRule.TotalCount} 成功率 {RateOf(smallRule)}（阈值 {options.RoutingDowngradeMinSuccessRate:P0}）→ {(downgrade ? "触发：写任务降级 small" : "保持 large")}（{dowReason}）");
                 Console.WriteLine($"  L0.5b 读升级 pro:   small 成功率 {RateOf(smallRule)}（坏率阈值 {options.RoutingReadUpgradeBadRate:P0}）/ pro 成功率 {RateOf(proRule)}（阈值 {options.RoutingReadUpgradeMinSuccessRate:P0}）→ {(readUp ? "触发：读任务升级 agent_pro" : "保持 small")}（{readReason}）");
-                Console.WriteLine($"  P2 Complex 降级 large: pro 样本 {proL3.TotalCount} 成功率 {RateOf(proL3)}（阈值 {options.RoutingDropAgentProMinSuccessRate:P0}）→ {(dropPro ? "触发：ComplexReason 降级 large" : "保持 agent_pro")}（{dropReason}）");
+                Console.WriteLine($"  P2 Complex 降级 large: pro 样本 {proRuleP2.TotalCount} 成功率 {RateOf(proRuleP2)}（阈值 {options.RoutingDropAgentProMinSuccessRate:P0}）→ {(dropPro ? "触发：ComplexReason 降级 large" : "保持 agent_pro")}（{dropReason}）");
                 Console.WriteLine("  （阈值来自 AgentOptions.Routing* 配置；样本仅统计 law-unified 30B 时代）");
             }
             catch (Exception ex)

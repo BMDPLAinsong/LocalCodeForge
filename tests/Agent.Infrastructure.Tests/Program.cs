@@ -3496,6 +3496,27 @@ Check("熔断消息：带摘要 → 保留基础消息", Agent.Infrastructure.Ag
     Directory.Delete(tmpRoot, recursive: true);
 }
 
+// ── 10-11 ③ 多 csproj 歧义：dotnet run 不带 --project 且目录多个项目 → 预检拦截 ──
+Console.WriteLine("== 10-11 dotnet run 多项目歧义 ==");
+{
+    var tmpRoot = Path.Combine(Path.GetTempPath(), "lawamb_" + Guid.NewGuid().ToString("N")[..8]);
+    Directory.CreateDirectory(tmpRoot);
+    File.WriteAllText(Path.Combine(tmpRoot, "A.csproj"), "<Project />");
+    File.WriteAllText(Path.Combine(tmpRoot, "B.csproj"), "<Project />");
+    Check("歧义：dotnet run 多项目 → 拦截", Agent.Infrastructure.Tools.RunCommandTool.CheckDotnetRunAmbiguity("dotnet run", tmpRoot) != null);
+    Check("歧义：拦截消息含项目清单", Agent.Infrastructure.Tools.RunCommandTool.CheckDotnetRunAmbiguity("dotnet run", tmpRoot)!.Contains("A.csproj") && Agent.Infrastructure.Tools.RunCommandTool.CheckDotnetRunAmbiguity("dotnet run", tmpRoot)!.Contains("B.csproj"));
+    Check("歧义：--project 指定 → 放行", Agent.Infrastructure.Tools.RunCommandTool.CheckDotnetRunAmbiguity("dotnet run --project A.csproj", tmpRoot) == null);
+    Check("歧义：显式 .csproj → 放行", Agent.Infrastructure.Tools.RunCommandTool.CheckDotnetRunAmbiguity("dotnet run A.csproj", tmpRoot) == null);
+    Check("歧义：非 dotnet 命令 → 放行", Agent.Infrastructure.Tools.RunCommandTool.CheckDotnetRunAmbiguity("python main.py", tmpRoot) == null);
+    Directory.Delete(tmpRoot, recursive: true);
+
+    var singleRoot = Path.Combine(Path.GetTempPath(), "lawamb1_" + Guid.NewGuid().ToString("N")[..8]);
+    Directory.CreateDirectory(singleRoot);
+    File.WriteAllText(Path.Combine(singleRoot, "Only.csproj"), "<Project />");
+    Check("歧义：单项目 → 放行", Agent.Infrastructure.Tools.RunCommandTool.CheckDotnetRunAmbiguity("dotnet run", singleRoot) == null);
+    Directory.Delete(singleRoot, recursive: true);
+}
+
 // ── 10-10 401/403 外部凭据信号收紧：排除 dotnet SDK 版本号（10.0.401）误伤 ──
 Console.WriteLine("== 10-10 401/403 凭据信号收紧 ==");
 {

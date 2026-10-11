@@ -15,6 +15,13 @@
 
 
 
+
+
+> **10-11 复盘③ dotnet 多 csproj 目录歧义（run_command 层确定性预检）**
+> **现象**：多文件写任务模型在同一目录写 ≥2 个 .csproj → `dotnet run` 报 MSB1011（包含多个项目文件，无法确定启动项目）→ 任务失败（10-11 学生系统 FAIL/other 实证）。
+> **修复（数据驱动，非提示词）**：RunCommandTool 新增纯函数 `CheckDotnetRunAmbiguity(command, cwd)`——仅拦截 `dotnet run` 且未显式指定 `--project/-p/.csproj` 且 cwd 顶层 .csproj ≥2 的形态，进程执行前返回错误消息附目录内实际项目清单 + 正确用法（`dotnet run --project <文件名>`），退出码 125。与 CheckProjectName（幻觉项目名）互补：一个管"引用了不存在的"，一个管"没引用但存在多个"。
+> **验证**：构建 0 错误；tests 693→**699**（+6 断言：多项目拦截/清单含项目名/--project 放行/显式 .csproj 放行/非 dotnet 放行/单项目放行）；E2E 冒烟（奇数偶数 + 分析项目）exit 0。**顺带修正验证命令缺陷**：旧 `cmd /c "... & echo EXIT=%ERRORLEVEL%"` 的 %ERRORLEVEL% 在整行解析时提前展开 → EXIT 恒 0 不可信（10-11 曾掩盖一次真实构建失败）；改 PowerShell `$LASTEXITCODE` 校验。
+
 > **10-11 复盘② agent_pro P2 调权错配修复（routing_tier 数据错配）**
 > **审计发现**：P2（ComplexReason → agent_pro 降级判定）查询 `GetTuningStatsAsync(AgentPro, "SmallModel", ...)`——但 agent_pro 任务的 routing_tier 实际是 **Rule**（L1 规则 complex_local 命中）/ OrchestratorPlanner（编排子调用），不存在 SmallModel → 永远 0 样本 → "样本不足保持 agent_pro"，**P2 从未真正评估过 agent_pro 能力**。L0.5/L0.5b 调权查 Rule 正确，仅 P2 一处错。
 > **修复（数据结构性）**：ModelRouter P2 + stats 面板（Program.cs）查询 tier 统一改 Rule。30B 时代 agent_pro+Rule 实为 19 条 / 68%（≥ 50% 阈值）→ 保持 agent_pro，但样本从 0 → 19，调权数据真正生效（若未来低于阈值将自动降级 large）。
