@@ -3517,6 +3517,55 @@ Console.WriteLine("== 10-11 dotnet run 多项目歧义 ==");
     Directory.Delete(singleRoot, recursive: true);
 }
 
+// ── 10-11 ④ 可疑成功归因验证：装饰器把事件信号 → is_suspicious + error_summary 归因 ──
+Console.WriteLine("== 10-11 可疑成功归因（装饰器转换层） ==");
+{
+    async System.Threading.Tasks.Task<Agent.Core.Models.TaskMetric> RunDecoratorAsync(string dir, params Agent.Core.Models.AgentEvent[] events)
+    {
+        var metrics = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(System.IO.Path.Combine(dir, "sus.db"));
+        var deco = new Agent.Infrastructure.Metrics.AgentLoopMetricsDecorator(
+            new StubLoop(events), metrics,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<Agent.Infrastructure.Metrics.AgentLoopMetricsDecorator>.Instance);
+        var req = new Agent.Core.Models.AgentRequest(Guid.NewGuid().ToString("N"), "测试", dir);
+        await foreach (var _ in deco.RunAsync(req, System.Threading.CancellationToken.None)) { }
+        return (await metrics.GetRecentAsync(50, System.Threading.CancellationToken.None)).First();
+    }
+
+    var dir1 = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lawsus1_" + Guid.NewGuid().ToString("N")[..8]);
+    var dir2 = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lawsus2_" + Guid.NewGuid().ToString("N")[..8]);
+    var dir3 = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lawsus3_" + Guid.NewGuid().ToString("N")[..8]);
+    var dir4 = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lawsus4_" + Guid.NewGuid().ToString("N")[..8]);
+
+    var m1 = RunDecoratorAsync(dir1,
+        new Agent.Core.Models.AgentEvent.ToolResultEvent("run_command", "退出码：0\n--- stdout ---\nHello, World!\n[检测] 输出疑似模板内容。", true),
+        new Agent.Core.Models.AgentEvent.FinalAnswer("完成")).Result;
+    Check("归因：模板检测信号 → is_suspicious=1", m1.IsSuspicious);
+    Check("归因：模板检测信号 → error_summary=输出疑似模板", m1.ErrorSummary == "输出疑似模板");
+
+    var m2 = RunDecoratorAsync(dir2,
+        new Agent.Core.Models.AgentEvent.ToolResultEvent("run_command", "[边缘成功] 输出含失败信号（xx）但存在成功证据（演示分支/成功报告），按成功处理。", true),
+        new Agent.Core.Models.AgentEvent.FinalAnswer("完成")).Result;
+    Check("归因：边缘成功信号 → is_suspicious=1", m2.IsSuspicious);
+    Check("归因：边缘成功信号 → error_summary=边缘成功", m2.ErrorSummary == "边缘成功（失败信号+成功证据）");
+
+    var m3 = RunDecoratorAsync(dir3,
+        new Agent.Core.Models.AgentEvent.Error("任务未真正实现：输出只是 Hello World 模板，未实现用户需求。")).Result;
+    Check("归因：未真正实现 → is_suspicious=1", m3.IsSuspicious);
+    Check("归因：未真正实现 → error_summary 含真实原因", m3.ErrorSummary.Contains("未真正实现"));
+
+    var m4 = RunDecoratorAsync(dir4,
+        new Agent.Core.Models.AgentEvent.Routing("small", "Rule", "force_code_simple"),
+        new Agent.Core.Models.AgentEvent.ToolResultEvent("write_file", "已写入 test.py，共 10 字符。", true),
+        new Agent.Core.Models.AgentEvent.FinalAnswer("完成")).Result;
+    Check("归因：干净流 → is_suspicious=0", !m4.IsSuspicious);
+    Check("归因：干净流 → error_summary 空", string.IsNullOrEmpty(m4.ErrorSummary));
+
+    foreach (var d in new[] { dir1, dir2, dir3, dir4 })
+    {
+        try { System.IO.Directory.Delete(d, recursive: true); } catch { }
+    }
+}
+
 // ── 10-10 401/403 外部凭据信号收紧：排除 dotnet SDK 版本号（10.0.401）误伤 ──
 Console.WriteLine("== 10-10 401/403 凭据信号收紧 ==");
 {
@@ -3547,4 +3596,18 @@ sealed class RoutingRuleCheck
     public int Priority { get; set; }
     public string? Pattern { get; set; }
     public List<string>? Keywords { get; set; }
+}
+
+// 10-11 ④ 可疑成功归因：StubLoop（固定事件流，供 AgentLoopMetricsDecorator 测试）
+sealed class StubLoop : Agent.Core.Abstractions.IAgentLoop
+{
+    private readonly Agent.Core.Models.AgentEvent[] _events;
+    public StubLoop(params Agent.Core.Models.AgentEvent[] events) { _events = events; }
+    public async System.Collections.Generic.IAsyncEnumerable<Agent.Core.Models.AgentEvent> RunAsync(
+        Agent.Core.Models.AgentRequest request,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] System.Threading.CancellationToken ct)
+    {
+        foreach (var e in _events) yield return e;
+        await System.Threading.Tasks.Task.CompletedTask;
+    }
 }

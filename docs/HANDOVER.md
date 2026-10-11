@@ -17,6 +17,15 @@
 
 
 
+
+
+> **10-11 复盘④ 可疑成功归因验证（装饰器转换层补测 + 首个真实归因样本）**
+> **审计**：8 条真实可疑成功（is_suspicious=1 ∧ success=1 ∧ is_e2e=0）error_summary **全部为空**——10-10 归因落库（AgentLoopMetricsDecorator 从事件文本提取 [检测]/[边缘成功]/未真正实现 → suspiciousReason 写 ErrorSummary）自实现后无任何真实样本产生过，旧样本未回填，链路处于"写完未验证"状态。
+> **修复/验证（两层）**：
+> ① 确定性测试——tests 新增装饰器转换层 8 断言（699→707）：stub 固定事件流（ToolResultEvent 含 [检测]模板 → ErrorSummary="输出疑似模板"；[边缘成功] → "边缘成功（失败信号+成功证据）"；Error 未真正实现 → 含真实原因；干净流 → is_suspicious=0 且 summary 空）。此前 tests 只覆盖 metrics 读写层，事件→归因转换层无覆盖。
+> ② 真实样本——LAW_E2E=0 显式覆盖（计入真实统计）跑"写一个Python 计算器方法"，任务成功且触发边缘成功信号，SQL 实证最新样本 **error_summary='边缘成功（失败信号+成功证据）'**，归因端到端打通。
+> **验证**：构建 0 错误；tests 707 全绿；真实样本归因落库。
+
 > **10-11 复盘③ dotnet 多 csproj 目录歧义（run_command 层确定性预检）**
 > **现象**：多文件写任务模型在同一目录写 ≥2 个 .csproj → `dotnet run` 报 MSB1011（包含多个项目文件，无法确定启动项目）→ 任务失败（10-11 学生系统 FAIL/other 实证）。
 > **修复（数据驱动，非提示词）**：RunCommandTool 新增纯函数 `CheckDotnetRunAmbiguity(command, cwd)`——仅拦截 `dotnet run` 且未显式指定 `--project/-p/.csproj` 且 cwd 顶层 .csproj ≥2 的形态，进程执行前返回错误消息附目录内实际项目清单 + 正确用法（`dotnet run --project <文件名>`），退出码 125。与 CheckProjectName（幻觉项目名）互补：一个管"引用了不存在的"，一个管"没引用但存在多个"。
