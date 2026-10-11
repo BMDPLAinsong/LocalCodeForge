@@ -1691,14 +1691,16 @@ internal class Program
                 var smallRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.Small, "Rule");
                 var largeRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.Large, "Rule");
                 var proRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.AgentPro, "Rule");
-                var proL3 = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.AgentPro, "SmallModel");
+                // 【10-11 P2 调权错配修复】agent_pro 任务路由层级实为 Rule（L1 规则命中），非 SmallModel——
+                // 用 SmallModel 过滤永远 0 样本，P2 从未真正评估过 agent_pro。与 ModelRouter 同源修正。
+                var proRuleP2 = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.AgentPro, "Rule");
 
                 var downgrade = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDowngrade(
                     smallRule, largeRule, options.RoutingTuningMinSamples, options.RoutingDowngradeMinSuccessRate, out var dowReason);
                 var readUp = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestReadTier(
                     proRule, smallRule, options.RoutingTuningMinSamples, options.RoutingReadUpgradeBadRate, options.RoutingReadUpgradeMinSuccessRate, out var readReason);
                 var dropPro = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDropAgentPro(
-                    proL3, options.RoutingDropAgentProMinSamples, options.RoutingDropAgentProMinSuccessRate, out var dropReason);
+                    proRuleP2, options.RoutingDropAgentProMinSamples, options.RoutingDropAgentProMinSuccessRate, out var dropReason);
 
                 Console.WriteLine("=== 路由调权状态 ===");
                 static string RateOf(Agent.Infrastructure.Routing.ServiceStats s) =>

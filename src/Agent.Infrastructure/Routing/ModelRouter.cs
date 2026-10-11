@@ -244,7 +244,7 @@ public sealed class ModelRouter : IModelRouter
             try
             {
                 var proStats = await GetTuningStatsAsync(
-                    RoutingDecision.AgentPro, RoutingTier.SmallModel.ToString(), 10, ct);
+                    RoutingDecision.AgentPro, RoutingTier.Rule.ToString(), 10, ct);
                 if (RoutingIntelligence.TrySuggestDropAgentPro(
                     proStats,
                     minSamples: _options.RoutingDropAgentProMinSamples,

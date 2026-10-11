@@ -13,6 +13,13 @@
 
 
 
+
+
+> **10-11 复盘② agent_pro P2 调权错配修复（routing_tier 数据错配）**
+> **审计发现**：P2（ComplexReason → agent_pro 降级判定）查询 `GetTuningStatsAsync(AgentPro, "SmallModel", ...)`——但 agent_pro 任务的 routing_tier 实际是 **Rule**（L1 规则 complex_local 命中）/ OrchestratorPlanner（编排子调用），不存在 SmallModel → 永远 0 样本 → "样本不足保持 agent_pro"，**P2 从未真正评估过 agent_pro 能力**。L0.5/L0.5b 调权查 Rule 正确，仅 P2 一处错。
+> **修复（数据结构性）**：ModelRouter P2 + stats 面板（Program.cs）查询 tier 统一改 Rule。30B 时代 agent_pro+Rule 实为 19 条 / 68%（≥ 50% 阈值）→ 保持 agent_pro，但样本从 0 → 19，调权数据真正生效（若未来低于阈值将自动降级 large）。
+> **验证**：构建 0 错误；tests 693 全绿；SQL 实证 agent_pro+Rule 30B 时代 19/13=68%。
+
 > **10-11 复盘① write_unverified 归因增强（数据闭环：让失败可归因）**
 > **审计结论**：write_unverified（写文件但 run_command 未通过 → 熔断）是近 30 条最大失败面（10/30），但 13 条历史样本的 error_summary **全是同一模板**——熔断消息吞掉了 run_command 真实失败原因（超时/编译错/退出码/没跑无法区分）；task_events 在 Dashboard 未激活期不落库，历史事件流不可查。
 > **修复**：AgentLoop 记录最后一次 run_command 的工具结果摘要（_lastRunCommandSummary，SummarizeOutput 160/80），熔断失败消息经纯函数 BuildWriteUnverifiedReason(summary) 拼接真实原因（summary 空 → 兼容旧消息）。此后 write_unverified 的 error_summary 可直接按"超时/编译错/退出码"归因。
