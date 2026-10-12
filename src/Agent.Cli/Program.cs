@@ -625,12 +625,27 @@ internal class Program
                 // 剩余任务自动执行（主循环顶部 pendingTask 消费）。
                 Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask(
                     usePath, out var realUsePath, out var followupTask);
-                // 【10-12 B】use 参数非路径开头（如 "use --write 读取 x:\ 盘下 index.html 文件…"）：
-                // TrySplitPathTask 断链（无目录前缀）→ 从整段提取盘根自动 use + 整段作任务（一步到位）；
-                // 无盘根 → 命令层提示。原"路径开头"形态行为不变。
+                // 【10-12 B2 精细化】use 参数非路径形态（TrySplitPathTask 断链）时，按目标类型分流：
+                //   ① 存在的【文件】→ 不 use（修单文件轻量通道：显式写目标白名单覆盖写、沙箱显式读例外覆盖读；
+                //      避免把整盘挂工程根 → 2000 文件 CompactBlock → 每轮 ~290s prefill）
+                //   ② 存在的【目录】→ use 该目录（精确工程根，非盘根）
+                //   ③ 仅盘根 → use 盘根（兜底）
+                // 原"路径开头"形态行为不变。
                 if (!Directory.Exists(realUsePath))
                 {
-                    if (Agent.Infrastructure.Project.UseCommandParser.TryExtractDiskRoot(usePath, out var diskRoot))
+                    if (Agent.Infrastructure.Project.ProjectPathDetector.TryResolveAbsolutePath(usePath, out _))
+                    {
+                        renderer.System("[自动提取] use 参数为文件目标（非工程），保持当前模式执行任务（显式写目标白名单生效）。");
+                        pendingTask = usePath;
+                        continue;
+                    }
+                    if (Agent.Infrastructure.Project.ProjectPathDetector.TryResolveAbsoluteDirectory(usePath, out var realDir))
+                    {
+                        realUsePath = realDir;
+                        followupTask = usePath;
+                        renderer.System($"[自动提取] use 参数非路径形态，工程根取 {realDir}，整段作为任务执行。");
+                    }
+                    else if (Agent.Infrastructure.Project.UseCommandParser.TryExtractDiskRoot(usePath, out var diskRoot))
                     {
                         realUsePath = diskRoot;
                         followupTask = usePath;

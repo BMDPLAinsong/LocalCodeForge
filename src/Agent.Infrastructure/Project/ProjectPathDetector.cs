@@ -267,6 +267,17 @@ public static class ProjectPathDetector
     /// File.Exists 校验 → 命中返回干净绝对路径。纯字符 + 文件系统事实，无模糊匹配。
     /// </summary>
     public static bool TryResolveAbsolutePath(string input, out string path)
+        => Resolve(input, out path, file: true);
+
+    /// <summary>
+    /// 【10-12 B2】与 TryResolveAbsolutePath 对称的目录解析：输入含"存在的目录绝对路径"→ 命中。
+    /// use 一步到位时区分文件/目录：修单文件走轻量通道（不挂工程根），分析目录才 use 该目录。
+    /// 同一候选提取 + 最长存在前缀剥段逻辑，杜绝双通道漂移。
+    /// </summary>
+    public static bool TryResolveAbsoluteDirectory(string input, out string path)
+        => Resolve(input, out path, file: false);
+
+    private static bool Resolve(string input, out string path, bool file)
     {
         path = null!;
         if (string.IsNullOrWhiteSpace(input)) return false;
@@ -284,7 +295,8 @@ public static class ProjectPathDetector
             while (cand.Length > 3)
             {
                 var full = Path.GetFullPath(cand);
-                if (File.Exists(full)) { path = full; return true; }
+                var hit = file ? File.Exists(full) : Directory.Exists(full);
+                if (hit) { path = full; return true; }
                 var sp = cand.LastIndexOf(' ');
                 if (sp <= 2) break;
                 cand = cand[..sp].TrimEnd();

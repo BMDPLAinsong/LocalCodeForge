@@ -19,7 +19,14 @@
 
 
 
+> **10-12 use 一步到位精细化 B2（文件目标轻量通道：不挂整盘工程根）**
+> **现象**（23:01 复测）：`use --write 读取 x:\ 盘下 index.html 文件，并修复它的语法错误` → 自动提取盘根 `x:\` 挂工程（**2000 文件 / 11871 目录**）→ ProjectScanner CompactBlock 工程上下文巨大 → large 每轮 prefill **~290 秒**（1 步 list_dir 花 290s、2 步 read_file 后模型吃下一轮又 ~290s）→ 观感"卡在读取文件"。实际 A/B 定位全生效（写目标干净 + read_file 读到真实 RAG 页面），瓶颈是工程根选错：修单文件不需要把整个盘挂成工程。
+> **修复（B2 精细化）**：use 参数非路径形态（TrySplitPathTask 断链）时按目标类型分流——① TryResolveAbsolutePath 命中【文件】→ 不 use（保持沙箱/当前模式，显式写目标白名单覆盖写、沙箱显式读例外覆盖读，上下文干净每轮秒级）；② TryResolveAbsoluteDirectory 命中【目录】→ use 该目录（精确工程根，非盘根）；③ 仅盘根 → use 盘根兜底。ProjectPathDetector 重构：候选提取 + 最长存在前缀剥段逻辑提为私有 Resolve()，TryResolveAbsolutePath/TryResolveAbsoluteDirectory 对称共用（消双通道漂移）。
+> **验证**：构建 0 错误；tests **737 全绿**（735→737：+目录解析尾部剥段命中 1 + 无盘符 false 1）。端到端效果需真实任务复测（用户决定）——预期 `use --write 读取 x:\index.html…` 不再挂工程、直接轻量读修。
+> **边界**：仅盘根兜底仍可能挂大工程（用户任务里只给盘根时不可避免）；文件目标保持当前模式，若当前沙箱则写靠显式白名单、读靠显式例外。
+
 > **10-12 读改混合定位修复 A+B 第二轮（TryResolveAbsolutePath 空格化 + use 一步到位盘根提取）**
+
 > **现象**（22:54 复测）：① 写目标已干净（`x:\index.html` ✓ 第一轮 A 生效），但 `read_file x:/index.html` 仍"路径越界"——B 未注入：TryResolveAbsolutePath 候选正则 `[^\s...]` 排除空格 → 空格分隔形态截断在 `x:\`（盘根是目录，File.Exists=false）→ 不命中；模型随后自创页面写 run 目录。② `use --write 读取 x:\ 盘下 index.html 文件…` 报"盘符不一致"——use 后第一位是任务动词"读取"，TrySplitPathTask 在 `x:\` 断链 → 整段被当路径 → ApplyUse 盘符防御误报。
 > **根因**：写目标通道（TryGetWriteTarget 整段+清洗）与读注入通道（TryResolveAbsolutePath 正则）未共享同一空格形态归一——修了写、漏了读；use 语法假设路径在参数首位，无法表达"--write + 任务文本一步到位"。
 > **修复**：A=TryResolveAbsolutePath 候选正则去 `\s` 排除（截断点=中文标点/行尾）→ 整段提取后 CleanPathSuffix 清洗；File.Exists=false 时逐段剥尾部空格段（最长存在前缀循环）——含空格路径（`D:\My Projects\f.txt`）与尾部自然语言（`f.txt 的内容`）顺带支持，中间空格保留。B=UseCommandParser.TryExtractDiskRoot（首盘根 + 存在性校验）+ Program.cs use 分支：TrySplitPathTask 断链且参数非有效目录 → 提取盘根 ApplyUse(writeFlag) + 整段作 pendingTask；无盘根 → 命令层提示"路径无效"。原"路径开头"use 形态行为不变。

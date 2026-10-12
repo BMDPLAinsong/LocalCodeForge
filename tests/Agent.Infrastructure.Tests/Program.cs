@@ -2882,6 +2882,12 @@ Console.WriteLine("== 10-12 A：绝对路径解析空格形态 ==");
         Agent.Infrastructure.Project.ProjectPathDetector.TryResolveAbsolutePath(
             $"读取 {aSpace}\\readme.md 的内容", out var pc)
         && pc.Equals(Path.GetFullPath(aSpaceFile), StringComparison.OrdinalIgnoreCase));
+    Check("目录解析：自然语言尾部剥段 → 命中",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryResolveAbsoluteDirectory(
+            $"分析 {aSpace} 的结构", out var pd)
+        && pd.Equals(Path.GetFullPath(aSpace), StringComparison.OrdinalIgnoreCase));
+    Check("目录解析：无盘符文本 → false",
+        !Agent.Infrastructure.Project.ProjectPathDetector.TryResolveAbsoluteDirectory("读取一下这个文件", out _));
     Directory.Delete(aBase, true);
 }
 
