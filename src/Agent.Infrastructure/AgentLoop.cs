@@ -256,14 +256,18 @@ public sealed class AgentLoop : IAgentLoop
         //   （双正则漂移实证：模型大海捞针翻无关目录）。
         //   【10-12 X1】输入已含盘符绝对路径（"读取x:\盘下index.html文件…"）→ 绝对路径优先：
         //   提取+清洗+File.Exists 命中 → 注入绝对路径全文（模型直接锚定，不再 list_dir 盘根摸底）。
-        if (projectBlock is not null && IntentOverride.IsWriteTask(request.Input))
+        //   【10-12 B2+】X1 内容注入【不依赖 projectBlock】——B2 轻量通道（文件目标不挂工程，
+        //   projectBlock=null）时若被守护跳过 → 模型失去"目标文件已定位+内容"引导 → 行为随机
+        //   （实测第一次碰巧 read_file 命中、第二次 list_dir 探路→自创→完成门拦截）。绝对路径
+        //   存在性命中即注入，工程内文件检索/位置提示分支仍限工程模式。
+        if (IntentOverride.IsWriteTask(request.Input))
         {
             if (ProjectPathDetector.TryResolveAbsolutePath(request.Input, out var absTarget)
                 && TryLoadFileContentByPath(absTarget, out var absContent))
             {
                 userMsg += $"\n\n（任务引用文件 {absTarget} 已存在，当前内容如下——该文件即任务目标，请基于真实内容读取/修复，无需探索定位：\n```\n{absContent}\n```）";
             }
-            else
+            else if (projectBlock is not null)
             {
                 var existingRef = ReadOnlyGuard.FindExistingProjectFileRef(request.Input, _options.ProjectRoot!);
                 if (existingRef is not null

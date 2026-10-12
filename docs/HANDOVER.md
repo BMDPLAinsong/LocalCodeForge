@@ -19,7 +19,15 @@
 
 
 
+> **10-12 X1 内容注入脱离工程守护（B2+：轻量通道下模型不再失去目标文件引导）**
+> **现象**（23:41 复测）：`use --write 读取 x:\ 盘下 index.html 文件…` → B2 轻量通道（不挂工程，projectBlock=null）→ 模型第一轮 `list_dir X:\`（越界）→ `dir` → 自创页面写 run 目录 → **完成门正确拦截**（`任务要求写入 x:\index.html，但本轮未写到此目标` ✓ 完成门真实生效）。但模型**没读真实 x:\index.html**——而 23:17 复测第一步 read_file 直接命中。同为 B2 通道，行为随机。
+> **根因**：X1 内容注入整块被 `projectBlock is not null` 守护——B2 轻量通道 projectBlock=null → **注入整体跳过** → 模型拿不到"目标文件已定位 + 真实内容"，只能靠自觉（碰巧 read_file / 或 list_dir 探路）。同一通道两次行为不同 = 无引导的随机行为。
+> **修复（数据结构性）**：X1 分支（`TryResolveAbsolutePath` 存在性命中 + `TryLoadFileContentByPath` 读内容）**脱离 projectBlock 守护**——绝对路径命中即注入"目标文件绝对路径 + 全文"，无工程也注入；工程内文件检索（FindExistingProjectFileRef）与位置提示分支仍限工程模式。安全不变：`TryLoadFileContentByPath` 内敏感区 `SensitivePathGuard.IsDenied` 源头拒 + 200KB 上限降级位置提示（内容不会泄露敏感文件）。
+> **验证**：构建 0 错误；tests **737 全绿**（逻辑改动不破坏现有断言）。端到端效果需真实任务复测（用户决定）——预期模型第一轮即 read_file 真实文件（内容已在上下文）。
+> **边界**：模型拿到全文后仍可能不照做（随机性无法完全消除），但注入把"定位+内容"变成事实而非探索，失败面大幅收窄；完成门兜底拦截自创/写错位置。
+
 > **10-12 use 一步到位精细化 B2（文件目标轻量通道：不挂整盘工程根）**
+
 > **现象**（23:01 复测）：`use --write 读取 x:\ 盘下 index.html 文件，并修复它的语法错误` → 自动提取盘根 `x:\` 挂工程（**2000 文件 / 11871 目录**）→ ProjectScanner CompactBlock 工程上下文巨大 → large 每轮 prefill **~290 秒**（1 步 list_dir 花 290s、2 步 read_file 后模型吃下一轮又 ~290s）→ 观感"卡在读取文件"。实际 A/B 定位全生效（写目标干净 + read_file 读到真实 RAG 页面），瓶颈是工程根选错：修单文件不需要把整个盘挂成工程。
 > **修复（B2 精细化）**：use 参数非路径形态（TrySplitPathTask 断链）时按目标类型分流——① TryResolveAbsolutePath 命中【文件】→ 不 use（保持沙箱/当前模式，显式写目标白名单覆盖写、沙箱显式读例外覆盖读，上下文干净每轮秒级）；② TryResolveAbsoluteDirectory 命中【目录】→ use 该目录（精确工程根，非盘根）；③ 仅盘根 → use 盘根兜底。ProjectPathDetector 重构：候选提取 + 最长存在前缀剥段逻辑提为私有 Resolve()，TryResolveAbsolutePath/TryResolveAbsoluteDirectory 对称共用（消双通道漂移）。
 > **验证**：构建 0 错误；tests **737 全绿**（735→737：+目录解析尾部剥段命中 1 + 无盘符 false 1）。端到端效果需真实任务复测（用户决定）——预期 `use --write 读取 x:\index.html…` 不再挂工程、直接轻量读修。
