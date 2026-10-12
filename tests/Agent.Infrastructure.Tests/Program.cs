@@ -3641,6 +3641,17 @@ Check("cwd：只读工程模式 → workspaceRoot（写基准一致）", Agent.I
 Check("cwd：可写工程模式 → projectRoot", Agent.Infrastructure.Tools.RunCommandTool.ResolveWorkingDirectory(@"X:\run", @"X:\proj", true) == Path.GetFullPath(@"X:\proj"));
 Check("cwd：可写工程但无工程根 → workspaceRoot", Agent.Infrastructure.Tools.RunCommandTool.ResolveWorkingDirectory(@"X:\run", null, true) == Path.GetFullPath(@"X:\run"));
 
+// ── 10-13 上下文预算：read_file 短路判定 / 路径提取 / 截断 ──
+Console.WriteLine("== 10-13 上下文预算 read_file 短路 ==");
+var readArgsAbs = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>("{\"path\":\"x:/index.html\"}");
+var readArgsRel = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>("{\"path\":\"index.html\"}");
+var readArgsNoPath = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>("{\"offset\":1}");
+Check("短路：绝对路径命中注入文件 → true", Agent.Infrastructure.AgentLoop.TryGetReadPath(readArgsAbs, out var rp1) && Agent.Infrastructure.AgentLoop.ReadPathMatches(rp1, new Agent.Core.Models.AgentRequest("s", "t", @"X:\run", null), @"X:\index.html"));
+Check("短路：相对路径(workDir基准) ≠ 注入绝对路径 → false", Agent.Infrastructure.AgentLoop.TryGetReadPath(readArgsRel, out var rp2) && !Agent.Infrastructure.AgentLoop.ReadPathMatches(rp2, new Agent.Core.Models.AgentRequest("s", "t", @"X:\run", null), @"X:\index.html"));
+Check("短路：无 path 参数 → false", !Agent.Infrastructure.AgentLoop.TryGetReadPath(readArgsNoPath, out _));
+Check("短路：同文件不同盘符大小写 → true", Agent.Infrastructure.AgentLoop.ReadPathMatches(@"X:\INDEX.HTML", new Agent.Core.Models.AgentRequest("s", "t", @"X:\run", null), @"x:\index.html"));
+Check("短路：不同文件 → false", !Agent.Infrastructure.AgentLoop.ReadPathMatches(@"X:\other.html", new Agent.Core.Models.AgentRequest("s", "t", @"X:\run", null), @"X:\index.html"));
+
 // ── 10-11 write_unverified 归因：熔断消息带 run_command 真实失败原因 ──
 Console.WriteLine("== 10-11 write_unverified 归因 ==");
 Check("熔断消息：空摘要 → 兼容旧消息", Agent.Infrastructure.AgentLoop.BuildWriteUnverifiedReason("") == "任务写入文件但验证未通过（run_command 未成功），熔断终止，防假成功。");

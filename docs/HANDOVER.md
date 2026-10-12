@@ -19,7 +19,20 @@
 
 
 
+> **10-13 分层上下文预算（架构级修复：X1 全文 + read_file 全文 = 90KB 双份 → CPU 30B prefill >20min 超时）**
+> **现象**（23:48 第三轮复测）：B2 轻量通道 + X1 内容注入全部生效——read_file 第一轮直接命中真实 `x:/index.html` ✓、写目标干净 ✓；但 read_file 返回 40KB 后下一轮 LLM 调用 1200s 超时。实测：40KB 单轮 = 93.5s（ollama law-unified CPU 30B），90KB 双份 = 25K tokens → 超 20 分钟。
+> **根因（用户点破：上下文缺乏科学裁切压缩机制）**：同一文件内容注入两遍——X1 注入 40KB + read_file 结果 40KB；且 read_file 结果"保留完整"（edit_file 匹配依赖），大文件一次撑爆。
+> **方案（数据结构性，阈值进 AgentOptions 可配）**：
+> 1. **注入层阈值化**：目标文件 ≤ `ContextTargetInjectBytes`(40KB) → X1 全文注入 + 记录 `_injectedTargetFullPath`（read_file 短路用）；> 阈值 → 骨架注入（路径+总行数+前 50 行），不短路，靠 read_file 分页定向。
+> 2. **工具结果层 read_file 压缩**：① 短路——读取目标 == X1 已全文注入文件 → 结果替换短提示"内容已注入，无需重复读取"（消双份，40KB→单份 93s/轮）；② 超 `ContextToolResultBytes`(25KB) → 头 6000 + 尾 2000 截断（完整靠 offset 分页续读）。短路仅发生在"注入=File.ReadAllText(同文件)"时，内容同源，edit_file old_string 匹配不受影响。
+> 3. **输出引导**：write_file 覆盖已存在 >50KB 文件 → 工具结果附警告"建议 edit_file 局部修改"（30B 生成 50KB 新文件 = 数小时级，edit_file 只输出改几行）。
+> 4. **预算日志**：首轮任务注入量 `[上下文预算] 任务注入 N 字符（≈N KB）`；短路/截断命中点 LogWarning（可观测，复测直接可见）。
+> 5. **tests**：`ReadPathMatches` 短路纯函数 +5（绝对命中/相对不命中/无 path/大小写/不同文件），**742 全绿**。
+> **验证**：构建 0 错误；tests 742 全绿。端到端复测预期：任务第二轮上下文 = 单份 40KB（X1 注入），read_file 被短路，模型直接基于注入内容 edit_file，全程 3-5 轮分钟级（远低于 1200s）。
+> **边界**：>40KB 文件走骨架注入 + read_file 截断，模型需 offset 分页（慢但受控）；完成门兜底自创/写错位置。
+
 > **10-12 X1 内容注入脱离工程守护（B2+：轻量通道下模型不再失去目标文件引导）**
+
 > **现象**（23:41 复测）：`use --write 读取 x:\ 盘下 index.html 文件…` → B2 轻量通道（不挂工程，projectBlock=null）→ 模型第一轮 `list_dir X:\`（越界）→ `dir` → 自创页面写 run 目录 → **完成门正确拦截**（`任务要求写入 x:\index.html，但本轮未写到此目标` ✓ 完成门真实生效）。但模型**没读真实 x:\index.html**——而 23:17 复测第一步 read_file 直接命中。同为 B2 通道，行为随机。
 > **根因**：X1 内容注入整块被 `projectBlock is not null` 守护——B2 轻量通道 projectBlock=null → **注入整体跳过** → 模型拿不到"目标文件已定位 + 真实内容"，只能靠自觉（碰巧 read_file / 或 list_dir 探路）。同一通道两次行为不同 = 无引导的随机行为。
 > **修复（数据结构性）**：X1 分支（`TryResolveAbsolutePath` 存在性命中 + `TryLoadFileContentByPath` 读内容）**脱离 projectBlock 守护**——绝对路径命中即注入"目标文件绝对路径 + 全文"，无工程也注入；工程内文件检索（FindExistingProjectFileRef）与位置提示分支仍限工程模式。安全不变：`TryLoadFileContentByPath` 内敏感区 `SensitivePathGuard.IsDenied` 源头拒 + 200KB 上限降级位置提示（内容不会泄露敏感文件）。

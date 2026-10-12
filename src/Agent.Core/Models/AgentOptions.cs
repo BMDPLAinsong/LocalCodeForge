@@ -189,6 +189,16 @@ public sealed class AgentOptions
     /// （10-04 BigService 890s 任务实证）；默认 20 分钟，让任务至少能跑到熔断诚实失败而非超时误杀。</summary>
     public int OllamaHttpTimeoutMinutes { get; set; } = 20;
 
+    /// <summary>【10-13 上下文预算】任务目标文件 X1 全文注入上限（字节）。
+    /// ≤ 阈值：全文注入 + read_file 短路（单份，消双份——X1 40KB + read_file 40KB = 90KB
+    /// 在 CPU 30B 上 prefill >20min 超时实证）；&gt; 阈值：骨架注入（路径+行数+前 50 行），
+    /// 靠 read_file 分页定向。默认 40KB（600 行源码量级，单份 prefill ~93s 实测可接受）。</summary>
+    public int ContextTargetInjectBytes { get; set; } = 40000;
+
+    /// <summary>【10-13 上下文预算】read_file 工具结果注入上限（字节）。
+    /// &gt; 阈值：头尾截断 + 行数提示（完整内容靠 offset 分页续读），防大文件一次撑爆上下文。</summary>
+    public int ContextToolResultBytes { get; set; } = 25000;
+
     /// <summary>
     /// 【时代隔离】模型时代切换点（law-unified 30B 落地时刻，本地时间）。
     /// stats 面板按此拆分 agent_pro 等服务的成功率（当前时代 vs 历史时代）。

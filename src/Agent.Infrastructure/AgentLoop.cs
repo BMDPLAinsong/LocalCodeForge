@@ -51,6 +51,8 @@ public sealed class AgentLoop : IAgentLoop
     // _writeTarget：CLI 已授权或输入解析出的用户显式写目标（"X盘根目录 test.txt" → X:\test.txt）。
     private bool _writeRejected;
     private string? _writeTarget;
+    /// <summary>【10-13 上下文预算】X1 已全文注入的目标文件绝对路径（read_file 短路判定用；每任务重置）。</summary>
+    private string? _injectedTargetFullPath;
     private bool _writeTargetIsFile;
 
     // 【10-08 内容符合性】本轮成功写过的文件路径列表（完成门 D 判定输入：修改内容须含需求 token）。
@@ -260,12 +262,25 @@ public sealed class AgentLoop : IAgentLoop
         //   projectBlock=null）时若被守护跳过 → 模型失去"目标文件已定位+内容"引导 → 行为随机
         //   （实测第一次碰巧 read_file 命中、第二次 list_dir 探路→自创→完成门拦截）。绝对路径
         //   存在性命中即注入，工程内文件检索/位置提示分支仍限工程模式。
+        //   【10-13 上下文预算】注入阈值化：≤ ContextTargetInjectBytes 全文注入 + 记录注入路径
+        //   （read_file 短路用，消双份）；> 阈值 骨架注入（路径+行数+前 50 行），不短路，分页定向。
+        _injectedTargetFullPath = null;
         if (IntentOverride.IsWriteTask(request.Input))
         {
             if (ProjectPathDetector.TryResolveAbsolutePath(request.Input, out var absTarget)
                 && TryLoadFileContentByPath(absTarget, out var absContent))
             {
-                userMsg += $"\n\n（任务引用文件 {absTarget} 已存在，当前内容如下——该文件即任务目标，请基于真实内容读取/修复，无需探索定位：\n```\n{absContent}\n```）";
+                if (absContent.Length <= _options.ContextTargetInjectBytes)
+                {
+                    userMsg += $"\n\n（任务引用文件 {absTarget} 已存在，当前内容如下——该文件即任务目标，请基于真实内容读取/修复，无需探索定位：\n```\n{absContent}\n```）";
+                    _injectedTargetFullPath = absTarget;
+                }
+                else
+                {
+                    var lines = absContent.Split('\n');
+                    var head = string.Join("\n", lines.Take(50));
+                    userMsg += $"\n\n（任务目标文件 {absTarget}，共 {lines.Length} 行 / {absContent.Length} 字符。文件较大已注入前 50 行供定位：\n```\n{head}\n```\n后续内容请用 read_file 分页读取，不要一次性读全文。）";
+                }
             }
             else if (projectBlock is not null)
             {
@@ -297,6 +312,9 @@ public sealed class AgentLoop : IAgentLoop
 
         chatHistory.AddUserMessage(userMsg);
         await _store.AppendTurnAsync(request.SessionId, new ChatTurn("user", request.Input), ct);
+        // 【10-13 上下文预算】首轮注入量日志（可观测：X1/记忆/工程块合计，调参有数据）
+        _logger.LogInformation("[上下文预算] 任务注入 {Bytes} 字符（≈{KB} KB）。",
+            userMsg.Length, userMsg.Length / 1024);
 
         // 注册工具 Plugin
         var plugin = BuildPlugin();
@@ -516,9 +534,29 @@ public sealed class AgentLoop : IAgentLoop
                         _lastRunCommandSummary = SummarizeOutput(output, head: 160, tail: 80);
                     }
 
-                    // 上下文治理：仅 run_command 截断（大段 stdout/stderr 膨胀源）；
-                    // read_file 保留完整——edit_file 精确匹配依赖完整文件内容，截断会破坏修复
+                    // 【10-13 上下文预算】工具结果注入压缩（数据结构性）：
+                    //   · run_command：截断（既有）
+                    //   · read_file：① 短路——读取目标 == X1 已全文注入的文件 → 短提示（消双份冗余：
+                    //     X1 注入 40KB + read_file 40KB = 90KB，CPU 30B prefill >20min 超时实证）；
+                    //     ② 超阈值截断——> ContextToolResultBytes 头尾截断 + 行数提示（完整靠 offset 分页）。
+                    //   · edit_file 精度：短路仅发生在"注入=File.ReadAllText(同文件)"时，内容同一来源，
+                    //     old_string 匹配不受影响；超阈值截断文件无短路注入，模型拿到头尾+分页提示。
                     var condensed = cleanName == "run_command" ? SummarizeOutput(output) : output;
+                    if (cleanName == "read_file")
+                    {
+                        if (_injectedTargetFullPath is not null
+                            && TryGetReadPath(argsJson, out var readPath)
+                            && ReadPathMatches(readPath, request, _injectedTargetFullPath))
+                        {
+                            condensed = "（文件全文已在上文任务目标文件注入块中，内容一致，无需重复读取——直接基于注入内容修复。）";
+                            _logger.LogWarning("[上下文预算] read_file 短路命中（{Path} 已全文注入，消双份冗余）。", readPath);
+                        }
+                        else if (output.Length > _options.ContextToolResultBytes)
+                        {
+                            condensed = SummarizeOutput(output, head: 6000, tail: 2000);
+                            _logger.LogWarning("[上下文预算] read_file 结果超 {Limit} 截断（头 6000 + 尾 2000），完整内容可 offset 分页续读。", _options.ContextToolResultBytes);
+                        }
+                    }
                     _lastFailureSummary = condensed;
 
                     // ── 方案 2：循环熔断（工具序列重复且无新进展 → 以工具验证收尾）──
@@ -1491,6 +1529,37 @@ public sealed class AgentLoop : IAgentLoop
     {
         if (output.Length <= head + tail) return output;
         return output[..head] + "\n...(中间省略，共 " + output.Length + " 字符)...\n" + output[^tail..];
+    }
+
+    /// <summary>【10-13 上下文预算】从 read_file 参数提取 path 字符串。非对象/无 path/空 → false。</summary>
+    public static bool TryGetReadPath(System.Text.Json.JsonElement args, out string path)
+    {
+        path = "";
+        if (args.ValueKind != System.Text.Json.JsonValueKind.Object) return false;
+        if (!args.TryGetProperty("path", out var p) || p.ValueKind != System.Text.Json.JsonValueKind.String) return false;
+        path = p.GetString() ?? "";
+        return path.Length > 0;
+    }
+
+    /// <summary>
+    /// 【10-13 上下文预算】read_file path 是否指向"X1 已全文注入的目标文件"（短路判定）。
+    /// 归一规则：含盘符 → GetFullPath；相对 → 以工具基准（工程根可写时取工程根，否则工作区根）
+    /// Combine 后 GetFullPath——与写工具/完成门的基准一致，杜绝双基准漂移。
+    /// 纯函数（静态），可单测。
+    /// </summary>
+    public static bool ReadPathMatches(string readPath, Agent.Core.Models.AgentRequest request, string injectedFullPath)
+    {
+        try
+        {
+            var full = Path.IsPathRooted(readPath)
+                ? Path.GetFullPath(readPath)
+                : Path.GetFullPath(Path.Combine(request.WorkspaceRoot, readPath));
+            return full.Equals(injectedFullPath, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>空响应升级链：small → agent_pro → large；已在最高层返回 null。</summary>

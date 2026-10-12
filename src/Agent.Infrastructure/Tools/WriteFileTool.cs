@@ -276,6 +276,11 @@ public sealed class WriteFileTool : AgentToolBase
 
         // 返回确认信息
         var msg = $"已写入 {relative}，共 {content.Length} 字符。";
+        // 【10-13 上下文预算·输出引导】覆盖已存在的大文件（>50KB）→ 工具层警告建议 edit_file 局部修改。
+        // 数据手段非提示词：模型输出 50KB+ 新文件在 CPU 30B 上是数小时级生成；edit_file 只输出改几行。
+        // 阈值 50KB 与 X1 注入阈值（40KB）解耦——覆盖文件比注入更贵（生成成本 &gt;&gt; prefill 成本）。
+        if (File.Exists(fullPath) && content.Length > 50 * 1024)
+            msg += "（注意：目标文件已存在且较大，本次为全量覆盖。若只需局部修改，建议改用 edit_file 只改目标片段，30B 本地生成大文件极慢。）";
         if (autoCreatedCsproj is not null)
         {
             msg += $"\n[自动补全] 检测到缺少 .csproj，已创建 {autoCreatedCsproj}";
