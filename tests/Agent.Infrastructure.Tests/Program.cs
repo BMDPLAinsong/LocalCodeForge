@@ -548,6 +548,17 @@ Console.WriteLine("== 工程感知 P3 补足：任务归档记忆（§14-3w P3�
     Check("topic 截断到 40", t4.Length == 40);
     Check("content 截断到 200", c4.Length == 200);
 
+    // 【10-13 阶段2】任务事实：写文件数入 content
+    var (t5, c5) = Agent.Infrastructure.Memory.TaskMemoryExtractor.Extract(
+        "写个倒计时程序", true, new List<string>(), "agent", "已完成。", 3);
+    Check("成功写文件数入 content", c5.Contains("｜写3文件"));
+    var (t6, c6) = Agent.Infrastructure.Memory.TaskMemoryExtractor.Extract(
+        "写个倒计时程序", false, new List<string> { "编译错误" }, "agent", null, 2);
+    Check("失败写文件数入 content", c6.Contains("｜写2文件"));
+    var (t7, c7) = Agent.Infrastructure.Memory.TaskMemoryExtractor.Extract(
+        "读个文件", true, new List<string>(), "agent", "读完了。", 0);
+    Check("零写文件不拼接", !c7.Contains("写0文件") && !c7.Contains("｜写"));
+
     // 归档写入 store（kind=task）可检索
     var memDb2 = Path.Combine(TestTmp, "agent_memory2_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db");
     var mem2 = new Agent.Infrastructure.Memory.AgentMemoryStore(memDb2);
@@ -3651,6 +3662,38 @@ Check("短路：相对路径(workDir基准) ≠ 注入绝对路径 → false", A
 Check("短路：无 path 参数 → false", !Agent.Infrastructure.AgentLoop.TryGetReadPath(readArgsNoPath, out _));
 Check("短路：同文件不同盘符大小写 → true", Agent.Infrastructure.AgentLoop.ReadPathMatches(@"X:\INDEX.HTML", new Agent.Core.Models.AgentRequest("s", "t", @"X:\run", null), @"x:\index.html"));
 Check("短路：不同文件 → false", !Agent.Infrastructure.AgentLoop.ReadPathMatches(@"X:\other.html", new Agent.Core.Models.AgentRequest("s", "t", @"X:\run", null), @"X:\index.html"));
+
+// ── 10-13 阶段1：上下文折叠摘要（ContextFolder）──
+Console.WriteLine("== 10-13 上下文折叠 ==");
+var bigCode = new string('x', 9000) + "\npublic class OrderService {\n    public int Get() { return 1; }\n}\n" + new string('y', 3000);
+var folded = Agent.Infrastructure.Context.ContextFolder.FoldToolResult(bigCode, "OrderService.cs");
+Check("折叠：代码输出提取结构定义", folded.Contains("public class OrderService") && folded.Contains("[上下文折叠]"));
+Check("折叠：头尾保留", folded.Contains("-- 开头 --") && folded.Contains("-- 结尾（省略中间"));
+var foldedTxt = Agent.Infrastructure.Context.ContextFolder.FoldToolResult(bigCode, null);
+Check("折叠：未知类型走文本策略（无结构定义节）", !foldedTxt.Contains("-- 结构定义 --") && foldedTxt.Contains("[上下文折叠]"));
+Check("折叠：短内容不折叠", Agent.Infrastructure.Context.ContextFolder.FoldToolResult("short", "a.cs") == "short");
+var bigHtml = new string('h', 10000) + "\n<div class=\"box\">x</div>\n" + new string('i', 3000);
+Check("折叠：html 按代码策略（结构定义节可空但保留折叠头）", Agent.Infrastructure.Context.ContextFolder.FoldToolResult(bigHtml, "page.html").Contains("[上下文折叠]"));
+
+// ── 10-13 阶段3：文件状态记忆（WriteFileTool 带 memoryStore）──
+Console.WriteLine("== 10-13 文件状态记忆 ==");
+{
+    var ws3 = Path.Combine(Path.GetTempPath(), "law_mem_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(Path.Combine(ws3, "proj"));
+    var memDb = Path.Combine(ws3, "mem.db");
+    var memStore = new Agent.Infrastructure.Memory.AgentMemoryStore(memDb);
+    File.WriteAllText(Path.Combine(ws3, "proj", "a.txt"), "hello");
+    var wf3 = new Agent.Infrastructure.Tools.WriteFileTool(
+        ws3, Path.Combine(ws3, "proj"), true, "t1", null, null, memStore);
+    var out3 = await wf3.InvokeAsync(System.Text.Json.JsonSerializer.SerializeToElement(
+        new Dictionary<string, object?> { ["path"] = "a.txt", ["content"] = "hello world" }), default);
+    Check("文件记忆：覆盖已存在文件成功", out3.StartsWith("已写入"));
+    var hits3 = memStore.Search("a.txt", limit: 3);
+    Check("文件记忆：topic=文件名命中", hits3.Count > 0 && hits3.Any(h => h.Kind == "file" && h.Topic == "a.txt"));
+    Check("文件记忆：content 含改动信息", hits3.Any(h => h.Kind == "file" && h.Content.Contains("修改")));
+    try { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); } catch { }
+    try { Directory.Delete(ws3, true); } catch { /* SQLite 连接池可能短暂占用，临时目录容错不删 */ }
+}
 
 // ── 10-11 write_unverified 归因：熔断消息带 run_command 真实失败原因 ──
 Console.WriteLine("== 10-11 write_unverified 归因 ==");

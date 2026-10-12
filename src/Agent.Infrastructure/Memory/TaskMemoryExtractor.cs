@@ -27,8 +27,9 @@ public static class TaskMemoryExtractor
     /// <param name="errors">任务过程错误消息列表（失败教训来源）</param>
     /// <param name="mode">执行模式（agent / orchestrator）</param>
     /// <param name="finalAnswer">最终交付文本（成功时）</param>
+    /// <param name="writtenFileCount">已写文件数（10-13 任务事实：供后续任务知道"上次动过哪些文件"）</param>
     public static (string Topic, string Content) Extract(
-        string input, bool success, IReadOnlyList<string> errors, string mode, string? finalAnswer = null)
+        string input, bool success, IReadOnlyList<string> errors, string mode, string? finalAnswer = null, int writtenFileCount = 0)
     {
         // topic：输入单行压缩（去换行）后截断
         var oneLine = (input ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
@@ -40,6 +41,8 @@ public static class TaskMemoryExtractor
                 ? "（无最终交付文本）"
                 : finalAnswer.Replace("\r", " ").Replace("\n", " ").Trim();
             var content = $"任务完成（{mode}）：{answer}";
+            if (writtenFileCount > 0)
+                content += $"｜写{writtenFileCount}文件";
             return (topic, Truncate(content, ContentMax));
         }
 
@@ -47,6 +50,8 @@ public static class TaskMemoryExtractor
             ? string.Join("；", errors.Select(e => e.Replace("\r", " ").Replace("\n", " ").Trim()))
             : "未知错误";
         var failContent = $"任务失败（{mode}）：{reason}";
+        if (writtenFileCount > 0)
+            failContent += $"｜写{writtenFileCount}文件";
         return (topic, Truncate(failContent, ContentMax));
     }
 

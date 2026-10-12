@@ -111,7 +111,7 @@ public static class DependencyInjection
         });
         services.AddSingleton<IAgentTool>(sp => new ListDirTool(workspaceRoot, projectRoot));
         services.AddSingleton<IAgentTool>(sp => new ReadFileTool(workspaceRoot, projectRoot));
-        services.AddSingleton<IAgentTool>(sp => new WriteFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots));
+        services.AddSingleton<IAgentTool>(sp => new WriteFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots, sp.GetRequiredService<AgentMemoryStore>()));
         services.AddSingleton<IAgentTool>(sp => new EditFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots));    // ← 新增
         services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot, projectRoot, projectWriteEnabled, explicitWriteRoots));   // ← 新增
         services.AddSingleton<IAgentTool>(_ => new RunCommandTool(workspaceRoot, projectRoot, projectWriteEnabled));

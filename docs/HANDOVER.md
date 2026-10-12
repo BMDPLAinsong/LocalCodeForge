@@ -19,6 +19,14 @@
 
 
 
+> **10-13 记忆分层 1+2+3（上下文不仅压缩，还要存储防失忆：折叠摘要 + 任务事实 + 文件状态记忆）**
+> **背景**：分层上下文预算（f838289）解决"hot 上下文压缩"；用户进一步要求"存储防失忆"（MemGPT/Zep 式 memory hierarchy 的工程化落地）。存量基础设施 60% 可复用：sessions.db / agent_memory（去重合并+Search 注入）/ TaskEventStore（事件全量持久化= cold 层）/ TaskFeatureClassifier。本段按"1+2 3 顺手、4 向量检索等做完再评估"实施三阶段。
+> **阶段 1 折叠摘要（ContextFolder，新）**：read_file 工具结果注入时累计字节（`_ctxToolBytes`，每任务重置）；累计超 `ContextFoldThreshold`(90KB，AgentOptions 可配) → 后续 read_file 结果走确定性折叠（零模型调用）：代码文件（.cs/.py/.ts/.html…）提取结构定义行（class/interface/record/def 等正则）+ 首 5 行 + 尾 5 行 + 行数；文本取头尾。语义保留优于纯截断（截断丢中间结构，折叠留定义）；完整内容声明"见会话事件存储"——TaskEventStore 旁路已全量持久化工具事件，cold 层可回放，折叠只影响 hot 上下文占用。优先级：短路（X1 已注入）> 单次超 25KB 截断 > 累计超 90KB 折叠。
+> **阶段 2 任务事实（写文件数）**：TaskMemoryExtractor.Extract 新参数 `writtenFileCount`（追加在 finalAnswer 之后，既有调用零破坏）→ 归档 content 附 `｜写N文件`（成功/失败都记）。CLI ConsumeTaskAsync 事件循环统计 `ToolResultEvent(Name==write_file && Success)`，返回值扩为 4 元组，两处调用点（agent/orchestrator）透传 ArchiveTask。后续任务注入"上次写了 N 个文件"——30B 能判断"这是增量任务"而非"从零新建"。
+> **阶段 3 文件状态记忆**：WriteFileTool 构造加可空 `AgentMemoryStore? memoryStore`（null 跳过，tests 默认构造零冲击）；写【已存在】文件成功后（有备份语义）→ `Add("file", 文件名, "工程内文件被修改（原 N 字符 → 新 M 字符），任务 X")`。kind=file 非 task → feature 不匹配只降权不剔除；后续输入含文件名 token（"index.html"）→ Search 自动命中注入"该文件最近改动"。DI 注入 `sp.GetRequiredService<AgentMemoryStore>()`。
+> **验证**：构建 0 错误；tests **753 全绿**（742→753：+折叠 5 + 写文件数 3 + 文件记忆 3）。端到端复测预期：大文件任务第二轮起 `[上下文预算] 累计注入超` 折叠日志出现、归档记忆含写文件数、改过文件的下一任务注入文件状态记忆。
+> **边界**：折叠仅作用于"新注入"（不回溯历史 chatHistory——防打地鼠，历史靠截断已受控）；阶段 4 向量检索（embedding+top-k）未做，等 1-3 复测后评估。
+
 > **10-13 分层上下文预算（架构级修复：X1 全文 + read_file 全文 = 90KB 双份 → CPU 30B prefill >20min 超时）**
 > **现象**（23:48 第三轮复测）：B2 轻量通道 + X1 内容注入全部生效——read_file 第一轮直接命中真实 `x:/index.html` ✓、写目标干净 ✓；但 read_file 返回 40KB 后下一轮 LLM 调用 1200s 超时。实测：40KB 单轮 = 93.5s（ollama law-unified CPU 30B），90KB 双份 = 25K tokens → 超 20 分钟。
 > **根因（用户点破：上下文缺乏科学裁切压缩机制）**：同一文件内容注入两遍——X1 注入 40KB + read_file 结果 40KB；且 read_file 结果"保留完整"（edit_file 匹配依赖），大文件一次撑爆。

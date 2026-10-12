@@ -199,6 +199,12 @@ public sealed class AgentOptions
     /// &gt; 阈值：头尾截断 + 行数提示（完整内容靠 offset 分页续读），防大文件一次撑爆上下文。</summary>
     public int ContextToolResultBytes { get; set; } = 25000;
 
+    /// <summary>【10-13 上下文预算】工具结果累计注入阈值（字节）。
+    /// 累计注入超阈值后，后续 read_file 结果改走【折叠摘要】（ContextFolder：结构定义行+头尾，
+    /// 语义保留优于纯截断）；完整内容已在 TaskEventStore 全量持久化（事件存储 = cold 层，可回放）。
+    /// 默认 90KB——单轮上下文 ≈ 系统提示 15KB + 任务注入 20KB + 工具结果 90KB 内受控。</summary>
+    public int ContextFoldThreshold { get; set; } = 90000;
+
     /// <summary>
     /// 【时代隔离】模型时代切换点（law-unified 30B 落地时刻，本地时间）。
     /// stats 面板按此拆分 agent_pro 等服务的成功率（当前时代 vs 历史时代）。

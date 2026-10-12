@@ -53,6 +53,8 @@ public sealed class AgentLoop : IAgentLoop
     private string? _writeTarget;
     /// <summary>【10-13 上下文预算】X1 已全文注入的目标文件绝对路径（read_file 短路判定用；每任务重置）。</summary>
     private string? _injectedTargetFullPath;
+    /// <summary>【10-13 阶段1】工具结果累计注入字节（折叠摘要触发用；每任务重置）。</summary>
+    private long _ctxToolBytes;
     private bool _writeTargetIsFile;
 
     // 【10-08 内容符合性】本轮成功写过的文件路径列表（完成门 D 判定输入：修改内容须含需求 token）。
@@ -265,6 +267,7 @@ public sealed class AgentLoop : IAgentLoop
         //   【10-13 上下文预算】注入阈值化：≤ ContextTargetInjectBytes 全文注入 + 记录注入路径
         //   （read_file 短路用，消双份）；> 阈值 骨架注入（路径+行数+前 50 行），不短路，分页定向。
         _injectedTargetFullPath = null;
+        _ctxToolBytes = 0;
         if (IntentOverride.IsWriteTask(request.Input))
         {
             if (ProjectPathDetector.TryResolveAbsolutePath(request.Input, out var absTarget)
@@ -556,7 +559,16 @@ public sealed class AgentLoop : IAgentLoop
                             condensed = SummarizeOutput(output, head: 6000, tail: 2000);
                             _logger.LogWarning("[上下文预算] read_file 结果超 {Limit} 截断（头 6000 + 尾 2000），完整内容可 offset 分页续读。", _options.ContextToolResultBytes);
                         }
+                        // 【10-13 阶段1】累计注入超预算 → 折叠摘要（结构定义+头尾，语义保留；完整内容在事件存储）
+                        else if (_ctxToolBytes + output.Length > _options.ContextFoldThreshold)
+                        {
+                            TryGetReadPath(argsJson, out var foldPath);
+                            condensed = Agent.Infrastructure.Context.ContextFolder.FoldToolResult(
+                                output, string.IsNullOrEmpty(foldPath) ? null : Path.GetFileName(foldPath));
+                            _logger.LogWarning("[上下文预算] 累计注入超 {Limit}，read_file 结果折叠摘要（{Path}）。", _options.ContextFoldThreshold, foldPath);
+                        }
                     }
+                    _ctxToolBytes += condensed.Length;
                     _lastFailureSummary = condensed;
 
                     // ── 方案 2：循环熔断（工具序列重复且无新进展 → 以工具验证收尾）──

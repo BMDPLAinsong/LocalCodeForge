@@ -222,7 +222,7 @@ internal class Program
         // 统一消费 Orchestrator / AgentLoop 事件流：交互态维护任务状态前缀（[N步|service|秒]）、
         // 响应 q 取消（OperationCanceledException）、任务结束打印汇总行。
         // 取消任务不归档（不污染成功率指标）；无头路径（sp==null）行为与旧版逐字节一致。
-        async Task<(List<string> errors, string? answer, bool cancelled)> ConsumeTaskAsync(
+        async Task<(List<string> errors, string? answer, bool cancelled, int writeCount)> ConsumeTaskAsync(
             string taskId,
             IAsyncEnumerable<AgentEvent> events,
             Agent.Infrastructure.Rendering.SpectreRenderer? sp,
@@ -235,6 +235,7 @@ internal class Program
             var seq = 0;
             var svc = "?";
             var cancelled = false;
+            var writeCount = 0; // 【10-13 阶段2】任务事实：write_file 成功次数（归档记忆用）
             try
             {
                 await foreach (var evt in events.WithCancellation(ct))
@@ -243,6 +244,7 @@ internal class Program
                     if (evt is AgentEvent.FinalAnswer fa) answer = fa.Text;
                     if (evt is AgentEvent.Routing r) svc = r.ServiceId;
                     if (evt is AgentEvent.ToolCall) step++;
+                    if (evt is AgentEvent.ToolResultEvent tr && tr.Name == "write_file" && tr.Success) writeCount++;
                     if (sp is not null) sp.TaskPrefix = $"[{step}步|{svc}|{sw.Elapsed.TotalSeconds:0}s]";
                     await renderer.RenderEventAsync(evt);
                     // 【10-07 Dashboard】旁路多播：渲染器直接消费不变，hub 是第二消费者
@@ -269,7 +271,7 @@ internal class Program
                 else
                     renderer.Info($"[任务汇总] {step} 步 / {sw.Elapsed.TotalSeconds:0}s / {svc}");
             }
-            return (errors, answer, cancelled);
+            return (errors, answer, cancelled, writeCount);
         }
 
         // ─────────── 主循环 ───────────
@@ -922,10 +924,10 @@ internal class Program
                     renderer.Notice($"[自动编排] 任务复杂，启用 Planner-Executor");
 
                     var orchestrator = taskProvider.GetRequiredService<IOrchestrator>();
-                    var (orchErrors, orchAnswer, cancelled) = await ConsumeTaskAsync(
+                    var (orchErrors, orchAnswer, cancelled, orchWrites) = await ConsumeTaskAsync(
                         taskId, orchestrator.RunAsync(input, workspace, taskCts.Token), sp, taskCts.Token);
                     if (!cancelled)
-                        ArchiveTask(taskProvider, input, taskId, "orchestrator", orchErrors, orchAnswer);
+                        ArchiveTask(taskProvider, input, taskId, "orchestrator", orchErrors, orchAnswer, orchWrites);
                     if (options.ProjectRoot is not null)
                     {
                         // 【P0-1】失败/取消 → 自动回滚工程改动（P-B：仅回滚本任务）；成功 → 清理本任务 .new 标记
@@ -941,10 +943,10 @@ internal class Program
                     var taskLoop = taskProvider.GetRequiredService<IAgentLoop>();
                     var request = new AgentRequest(sessionId, input, workspace, writeTarget, writeTargetIsFile);
 
-                    var (loopErrors, loopAnswer, cancelled) = await ConsumeTaskAsync(
+                    var (loopErrors, loopAnswer, cancelled, loopWrites) = await ConsumeTaskAsync(
                         taskId, taskLoop.RunAsync(request, taskCts.Token), sp, taskCts.Token);
                     if (!cancelled)
-                        ArchiveTask(taskProvider, input, taskId, "agent", loopErrors, loopAnswer);
+                        ArchiveTask(taskProvider, input, taskId, "agent", loopErrors, loopAnswer, loopWrites);
                     if (options.ProjectRoot is not null)
                     {
                         if (cancelled || loopAnswer is null)
@@ -1034,13 +1036,13 @@ internal class Program
     /// 供后续任务检索——补足模型不自发 remember 时的记忆积累。
     /// </summary>
     static void ArchiveTask(ServiceProvider taskProvider, string input, string taskId,
-        string mode, List<string> errors, string? finalAnswer)
+        string mode, List<string> errors, string? finalAnswer, int writtenFileCount = 0)
     {
         try
         {
             var success = finalAnswer is not null;
             var (topic, content) = Agent.Infrastructure.Memory.TaskMemoryExtractor.Extract(
-                input, success, errors, mode, finalAnswer);
+                input, success, errors, mode, finalAnswer, writtenFileCount);
             var store = taskProvider.GetRequiredService<Agent.Infrastructure.Memory.AgentMemoryStore>();
             // 【任务5】任务归档记忆打特征类标签（跨类注入时被过滤）
             store.Add("task", topic, content, $"task_{taskId}",

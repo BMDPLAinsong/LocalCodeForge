@@ -4,6 +4,7 @@ using System.Text.Json;
 // 命名空间
 namespace Agent.Infrastructure.Tools;
 
+using Agent.Infrastructure.Memory;
 using Agent.Infrastructure.Metrics;
 using Agent.Infrastructure.Project;
 
@@ -30,8 +31,11 @@ public sealed class WriteFileTool : AgentToolBase
     // 第 2 次拒绝即返回确定性指令（数据驱动引导，非提示词）。
     private readonly Dictionary<string, int> _pdRejectionCounts = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>【10-13 阶段3】文件状态记忆（可空：null 跳过——沙箱/无记忆库时零开销）。</summary>
+    private readonly AgentMemoryStore? _memoryStore;
+
     /// <summary>构造函数。</summary>
-    public WriteFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null, IEnumerable<string>? explicitWriteRoots = null)
+    public WriteFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null, IEnumerable<string>? explicitWriteRoots = null, AgentMemoryStore? memoryStore = null)
     {
         // 规范化
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
@@ -43,6 +47,7 @@ public sealed class WriteFileTool : AgentToolBase
             .Where(r => !string.IsNullOrWhiteSpace(r))
             .Select(Path.GetFullPath)
             .ToList() ?? new List<string>();
+        _memoryStore = memoryStore;
     }
 
     /// <summary>记录一次拒绝事件（fail-safe：记录失败不影响工具主流程）。</summary>
@@ -250,8 +255,10 @@ public sealed class WriteFileTool : AgentToolBase
         }
 
         // 工程感知 P1：写工程根内已存在文件前自动备份（可 rollback 恢复）——P-B 按任务隔离
+        var existedLen = -1L;
         if (insideProject && File.Exists(fullPath))
         {
+            existedLen = new FileInfo(fullPath).Length;
             BackupService.Backup(_workspaceRoot, fullPath, _projectRoot!, _taskId);
         }
         // 【P0-1】工程可写模式写【新建】工程文件 → 标记 .backup/<taskId>/.new/<rel>，
@@ -270,6 +277,23 @@ public sealed class WriteFileTool : AgentToolBase
 
         // 写入文件（覆盖模式）
         await File.WriteAllTextAsync(fullPath, content, ct);
+
+        // 【10-13 阶段3】文件状态记忆：覆盖已存在文件 → 改动记录入库（kind=file，topic=文件名）。
+        // 后续任务输入含该文件名（"index.html" token）→ Search 命中自动注入"该文件最近改动"。
+        // 仅工程内已存在文件（有备份语义）；kind=file 非 task，feature 不匹配只降权不剔除。
+        if (existedLen >= 0 && _memoryStore is not null && content.Length != existedLen)
+        {
+            try
+            {
+                _memoryStore.Add("file", Path.GetFileName(fullPath),
+                    $"工程内文件被修改（原 {existedLen} 字符 → 新 {content.Length} 字符），任务 {_taskId}",
+                    $"task_{_taskId}");
+            }
+            catch
+            {
+                // fail-safe：记忆写入失败不影响工具主流程
+            }
+        }
 
         // 【关键】如果写的是 .cs 文件，且同目录下没有 .csproj，自动补一个
         var autoCreatedCsproj = TryAutoCreateCsproj(fullPath, baseRoot);
