@@ -11,10 +11,12 @@ using System.Reflection;
 using System.Text.Json;
 
 // 测试临时根：X 盘（§14-3v，用户要求不在 C 盘 Temp 跑测试）。
+// 不硬编码本地路径（公开仓库可移植）：运行时当前目录在工程盘（bin 下），取其盘根；
+// 若 clone 到其他盘则落对应盘根，语义等价"测试临时目录不入系统 Temp"。
 // workspace 已 gitignore；按进程隔离防并发互删。
 // 【1】test-tmp 清理：启动时删除 >7 天的旧测试目录（实测 99 个 pid 目录累积，防 X 盘膨胀），
 // 保留近期目录避免并发测试互删（当前 pid 目录后续创建）。
-var testTmpRoot = Path.Combine(@"X:\.NET AI\LocalAiWorkbench\workspace", "test-tmp");
+var testTmpRoot = Path.Combine(Path.GetPathRoot(Environment.CurrentDirectory) ?? @"X:\", "law-test-tmp");
 try
 {
     if (Directory.Exists(testTmpRoot))

@@ -32,3 +32,9 @@ build_summary.txt
 tests_fail.txt
 tests_summary.txt
 build_tests_diag.txt
+
+# E2E 诊断输出（含绝对路径日志，不入库）
+e2e_diag.txt
+e2e_out.txt
+e2e_summary.txt
+e2e_sus_diag.txt

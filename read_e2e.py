@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 import io, os
 
-t = open(r'X:\.NET AI\LocalAiWorkbench\e2e_diag.txt', 'rb').read().decode('utf-8', errors='replace')
-out = io.open(r'X:\.NET AI\LocalAiWorkbench\e2e_summary.txt', 'w', encoding='utf-8')
+# 仓库根 = 本脚本所在目录（不硬编码本地路径，clone 到任意位置可跑）
+ROOT = os.path.dirname(os.path.abspath(__file__))
+
+t = open(os.path.join(ROOT, 'e2e_diag.txt'), 'rb').read().decode('utf-8', errors='replace')
+out = io.open(os.path.join(ROOT, 'e2e_summary.txt'), 'w', encoding='utf-8')
 
 # 1. 根因1：use 工程根应为 X:\（非 bin\Debug 目录）
 proj_line = [l for l in t.splitlines() if '[工程]' in l]
@@ -25,7 +28,7 @@ else:
 
 # 4. 任务目录是否有同名残留（写错地方）
 import glob
-resid = glob.glob(r'X:\.NET AI\LocalAiWorkbench\workspace\runs\*\*_law_e2e_test.txt*')
+resid = glob.glob(os.path.join(ROOT, 'workspace', 'runs', '*', '*_law_e2e_test.txt*'))
 out.write('任务目录残留: %d 个\n' % len(resid))
 
 # 5. 第二轮写 X:\_law_e2e_test.txt 是否被路径越界拒绝

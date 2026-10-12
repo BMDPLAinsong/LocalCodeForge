@@ -1,4 +1,4 @@
-# LocalAiWorkbench 开发者维护文档
+﻿# LocalAiWorkbench 开发者维护文档
 
 > **详细版见 `docs/DEVELOPER_DETAILED.md`**（以任务输入→交付完整链路为主线的逐步展开，
 > 含源码级判定规则、数据表 schema、词表全文与改造指引；本文为速查版）。
@@ -37,7 +37,7 @@
 
 3. **只用本地模型**。云端（DashScope）仅预留未来兜底，当前不使用；模型形态已固化为**单 tag&#x20;**`law-unified`**（30B）三角色**，不再额外拉取模型。
 
-4. **测试不落 C 盘 Temp**。统一落 `X:\.NET AI\LocalAiWorkbench\workspace\test-tmp\<PID>`（已 gitignore）。
+4. **测试不落 C 盘 Temp**。统一落 `<workspace>\test-tmp\<PID>`（已 gitignore）。
 
 5. **诚实失败优于假完成**。任务做不了就如实失败（走 H2/H4 防线），禁止 "工具已验证" 式假完成。
 
@@ -81,7 +81,7 @@
 
 
 ```
-Set-Location "X:\.NET AI\LocalAiWorkbench"
+Set-Location <repo>
 
 # 全量构建（注意：必须 slnx 全量，不能只 build CLI，见 §9 构建坑）
 dotnet build LocalAiWorkbench.slnx --no-incremental

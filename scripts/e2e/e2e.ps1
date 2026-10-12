@@ -9,12 +9,15 @@
 # 用法: powershell -File e2e.ps1 [-Cli <exe路径>] [-Demo <demo工程根>]
 # ============================================================
 param(
-    [string]$Cli = "X:\.NET AI\LocalAiWorkbench\src\Agent.Cli\bin\Debug\net10.0\Agent.Cli.exe",
+    [string]$Cli = "",
     [string]$Demo = "X:\lawcheck_demo"
 )
 
 $ErrorActionPreference = "Continue"
-$logDir = "X:\.NET AI\LocalAiWorkbench\workspace\e2e"
+# 仓库根：本脚本位于 scripts\e2e\，上溯两级（不硬编码本地路径，clone 到任意位置可跑）
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+if (-not $Cli) { $Cli = Join-Path $RepoRoot "src\Agent.Cli\bin\Debug\net10.0\Agent.Cli.exe" }
+$logDir = Join-Path $RepoRoot "workspace\e2e"
 New-Item -ItemType Directory -Force $logDir | Out-Null
 $ts = Get-Date -Format "yyyyMMdd-HHmmss"
 $logFile = Join-Path $logDir "e2e_$ts.log"
@@ -33,7 +36,7 @@ if (-not (Test-Path $Cli)) { Write-Log "错误：CLI 不存在 $Cli"; exit 1 }
 if (-not (Test-Path $Demo)) { Write-Log "错误：demo 不存在 $Demo"; exit 1 }
 
 $results = @()
-$runsRoot = "X:\.NET AI\LocalAiWorkbench\workspace\runs"
+$runsRoot = Join-Path $RepoRoot "workspace\runs"
 
 function Run-Case($name, $kind, $userInput, $writeMode, $expectFile) {
     Write-Log "── 用例 [$name] kind=$kind ──"
@@ -52,7 +55,7 @@ function Run-Case($name, $kind, $userInput, $writeMode, $expectFile) {
     # PS 5.1 -File 模式向子进程 stdin 注入 UTF-8 BOM（EF BB BF，管道/直写/BaseStream 均绕不过）
     # → CLI use 命令不命中（use 行被当任务）= E2E 假完成根因。改用 python subprocess 喂 stdin（确定性）
     $cmdB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cmd))
-    python "X:\.NET AI\LocalAiWorkbench\scripts\e2e\runner.py" $Cli $cmdB64 $caseLog
+    python (Join-Path $PSScriptRoot "runner.py") $Cli $cmdB64 $caseLog
     $sw.Stop()
 
     $logText = Get-Content $caseLog -Raw -Encoding UTF8 -ErrorAction SilentlyContinue

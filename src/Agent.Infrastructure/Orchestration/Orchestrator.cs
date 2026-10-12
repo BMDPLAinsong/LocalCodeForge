@@ -944,7 +944,7 @@ public sealed class Orchestrator : IOrchestrator
         }
 
         // C# 编译错误：File.cs(10,15): error CS1234
-        // 【关键修复】允许路径里有空格（原 \s 排除了空格，导致 "X:\.NET AI\..." 匹配失败）
+        // 【关键修复】允许路径里有空格（原 \s 排除了空格，导致 "D:\My Projects\..." 匹配失败）
         var csharpMatch = Regex.Match(output, @"([^\r\n(]+\.cs)\(\d+,\d+\):\s*error");
         if (csharpMatch.Success)
         {

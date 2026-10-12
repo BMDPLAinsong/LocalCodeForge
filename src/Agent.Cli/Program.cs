@@ -690,7 +690,7 @@ internal class Program
                     trimmedInput, out var usePath, out var useWriteFlag))
             {
                 // 【10-08 C】use <path> <任务> 一步到位：路径 = Directory.Exists 校验的最长前缀
-                // （路径可含空格不误切，如 "X:\.NET AI\PDFTest 分析一下这个项目"→ 路径 + "分析一下这个项目"）；
+                // （路径可含空格不误切，如 "D:\My Projects\MyApp 分析一下这个项目"→ 路径 + "分析一下这个项目"）；
                 // 剩余任务自动执行（主循环顶部 pendingTask 消费）。
                 Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask(
                     usePath, out var realUsePath, out var followupTask);
