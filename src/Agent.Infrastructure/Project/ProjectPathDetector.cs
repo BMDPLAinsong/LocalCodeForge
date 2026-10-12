@@ -177,7 +177,7 @@ public static class ProjectPathDetector
             var m = Regex.Match(segment, @"[A-Za-z]:\\");
             if (!m.Success) continue;
 
-            var candidate = segment.Substring(m.Index);
+            var candidate = CleanPathSuffix(segment.Substring(m.Index));   // 【10-12 X2】先清洗方位/类别词，再判存在/形态（防"盘下"脏路径）
             for (var i = 0; i <= 3; i++)
             {
                 string full;
@@ -229,6 +229,52 @@ public static class ProjectPathDetector
         return !string.IsNullOrEmpty(fileName) && fileName.Contains('.') &&
                !fileName.EndsWith(".", StringComparison.Ordinal) &&
                !fileName.EndsWith("..", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 【10-12 X2】剥离路径串中的中文方位/类别词（"x:\盘下index.html文件" → "x:\index.html"）。
+    /// 自然语言里"盘下/文件"常紧贴路径（"读取x:\盘下index.html文件，并修复…"），
+    /// 不清洗会被当作路径成分 → 写目标/注入路径变脏（实测"盘下"误判进显式授权白名单）。
+    /// 两步：① 剥尾部类别词（"文件/目录/文件夹"，循环长词优先）；② 剥任意位置方位词
+    /// （"盘下/根目录下/目录下"——出现在文件名之前，非尾部，须 Replace 处理）。
+    /// 词表为精确中文词：不剥独立"下"（避免误伤"X:\下载"这类真实目录名）。
+    /// </summary>
+    public static string CleanPathSuffix(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s;
+        var tailWords = new[] { "文件目录", "文件夹", "文件", "目录" };
+        var prev = "";
+        while (prev != s)
+        {
+            prev = s;
+            foreach (var w in tailWords)
+                if (s.EndsWith(w, StringComparison.Ordinal)) { s = s[..^w.Length]; break; }
+        }
+        foreach (var w in new[] { "根目录下", "目录下", "盘下" })
+            s = s.Replace(w, "", StringComparison.Ordinal);
+        return s;
+    }
+
+    /// <summary>
+    /// 【10-12 X1】从输入解析"存在的文件绝对路径"（优先于文件名搜索注入）。
+    /// 输入已含盘符绝对路径（"读取x:\盘下index.html文件…"）→ 正则提取候选 → 清洗方位/类别词 →
+    /// File.Exists 校验 → 命中返回干净绝对路径。纯字符 + 文件系统事实，无模糊匹配。
+    /// </summary>
+    public static bool TryResolveAbsolutePath(string input, out string path)
+    {
+        path = null!;
+        if (string.IsNullOrWhiteSpace(input)) return false;
+        var m = System.Text.RegularExpressions.Regex.Match(input, @"[A-Za-z]:\\[^\s，。；、！？,;!?]*");
+        if (!m.Success) return false;
+        var candidate = CleanPathSuffix(m.Value);
+        if (string.IsNullOrWhiteSpace(candidate)) return false;
+        try
+        {
+            var full = Path.GetFullPath(candidate);
+            if (File.Exists(full)) { path = full; return true; }
+        }
+        catch { }
+        return false;
     }
 
     private static bool ContainsCjk(string s)

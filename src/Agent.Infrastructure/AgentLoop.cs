@@ -246,18 +246,24 @@ public sealed class AgentLoop : IAgentLoop
                 userMsg += "\n\n" + coreLines;
         }
 
-        // 【目标文件注入（最小版）】工程可写模式 + 写任务：从输入正则提取目标文件并注入，
-        // 让模型聚焦目标文件（实测跑偏根因：任务说改 BigService.cs，模型却读 Program/TaxService 等无关小文件）。
-        // 数据驱动（正则），非提示词堆砌；只注入事实，不做工具约束。
         // 【2026-10-12 方案B】存在性命中 → 升级为【内容注入】：
         //   位置指引（"目标文件：index.html"）在大工程 CompactBlock 截断时无效——X:\ 根
         //   index.html 未入上下文 → 模型不知道文件存在 → 自创无关任务（实测跑偏）。
         //   内容注入（先例：B 符号定义注入"内容优于位置指引"）让模型拿到真实内容再修复。
         //   文件不存在（新建任务）→ 保持原位置提示；超大/敏感区 → 位置提示（防上下文爆炸/源头拒）。
+        //   【10-12 修正】以 FindExistingProjectFileRef（更宽正则 + 存在性校验）为权威驱动，
+        //   不依赖 ExtractTargetFile 先命中——TargetFileRe 曾缺 html 扩展名导致注入整体跳过
+        //   （双正则漂移实证：模型大海捞针翻无关目录）。
+        //   【10-12 X1】输入已含盘符绝对路径（"读取x:\盘下index.html文件…"）→ 绝对路径优先：
+        //   提取+清洗+File.Exists 命中 → 注入绝对路径全文（模型直接锚定，不再 list_dir 盘根摸底）。
         if (projectBlock is not null && IntentOverride.IsWriteTask(request.Input))
         {
-            var target = ExtractTargetFile(request.Input);
-            if (target is not null)
+            if (ProjectPathDetector.TryResolveAbsolutePath(request.Input, out var absTarget)
+                && TryLoadFileContentByPath(absTarget, out var absContent))
+            {
+                userMsg += $"\n\n（任务引用文件 {absTarget} 已存在，当前内容如下——该文件即任务目标，请基于真实内容读取/修复，无需探索定位：\n```\n{absContent}\n```）";
+            }
+            else
             {
                 var existingRef = ReadOnlyGuard.FindExistingProjectFileRef(request.Input, _options.ProjectRoot!);
                 if (existingRef is not null
@@ -267,7 +273,9 @@ public sealed class AgentLoop : IAgentLoop
                 }
                 else
                 {
-                    userMsg += $"\n\n（任务目标文件：{target}——本次任务只需读取/修改此文件，其余文件与本任务无关，请勿阅读。）";
+                    var target = ExtractTargetFile(request.Input);
+                    if (target is not null)
+                        userMsg += $"\n\n（任务目标文件：{target}——本次任务只需读取/修改此文件，其余文件与本任务无关，请勿阅读。）";
                 }
             }
         }
@@ -1069,7 +1077,7 @@ public sealed class AgentLoop : IAgentLoop
 
     /// <summary>目标文件正则：匹配输入中的文件名（含常见代码/文本扩展名）。数据驱动，供目标文件注入。</summary>
     private static readonly System.Text.RegularExpressions.Regex TargetFileRe = new(
-        @"\b([\w.-]+\.(?:cs|py|js|ts|json|csproj|sln|slnx|md|txt|xml|yaml|yml|java|go))\b",
+        @"\b([\w.-]+\.(?:cs|py|js|ts|json|csproj|sln|slnx|md|txt|xml|yaml|yml|java|go|html|htm))\b",
         System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>从任务输入提取目标文件名（首个命中；排除工作区路径前缀干扰）。未命中返回 null。</summary>
@@ -1095,10 +1103,25 @@ public sealed class AgentLoop : IAgentLoop
         {
             var full = Directory.EnumerateFiles(projectRoot, fileName, SearchOption.AllDirectories).FirstOrDefault();
             if (full is null) return false;
-            var fi = new FileInfo(full);
+            return TryLoadFileContentByPath(full, out content);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>【10-12 X1】按已解析的绝对路径加载文件内容（注入用）。校验同 TryLoadFileContent。</summary>
+    public static bool TryLoadFileContentByPath(string fullPath, out string content)
+    {
+        content = "";
+        try
+        {
+            var fi = new FileInfo(fullPath);
+            if (!fi.Exists) return false;
             if (fi.Length > TargetContentMaxBytes) return false;              // 超大 → 位置指引
-            if (SensitivePathGuard.IsDenied(full)) return false;              // 敏感区源头拒
-            content = File.ReadAllText(full);
+            if (SensitivePathGuard.IsDenied(fullPath)) return false;          // 敏感区源头拒
+            content = File.ReadAllText(fullPath);
             return true;
         }
         catch

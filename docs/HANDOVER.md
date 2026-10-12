@@ -19,7 +19,22 @@
 
 
 
+> **10-12 读改混合定位强化（X1 绝对路径优先注入 + X2 方位词清洗）**
+> **现象**：复测"读取x:\盘下index.html文件，并修复它的语法错误"（工程=盘根 2000 文件/1380MB）——注入已给相对路径 index.html 全文，模型仍第 1 步 list_dir 盘根摸底（1分44秒 + 巨大上下文）。且日志 `[显式授权] 检测到写目标 x:\盘下index.html文件`——"盘下"被当路径成分（脏路径）。
+> **根因**：① 注入只给相对文件名，模型无绝对路径锚点 → 习惯性探索；② TryGetWriteTarget 通道1 `x:\盘下index.html文件` 无空格 → LooksLikeFile（含 .）→ 脏路径直接命中。
+> **修复（数据结构性，非提示词）**：X1=AgentLoop 注入块加绝对路径优先分支——`TryResolveAbsolutePath(input)`（盘符正则提取 → CleanPathSuffix 清洗 → File.Exists 校验）命中 → 注入**绝对路径** + 全文（模型直接锚定，无需 list_dir）；未命中回退 FindExistingProjectFileRef 相对名逻辑（行为不变）。X2=ProjectPathDetector 新增 `CleanPathSuffix`（① 剥尾部类别词"文件/目录/文件夹"，② 剥任意位置方位词"盘下/根目录下/目录下"——不剥独立"下"，防误伤"X:\下载"），TryGetWriteTarget 通道1 候选先清洗再判存在/形态（"盘下"误判修复）。
+> **验证**：构建 0 错误；tests **726 全绿**（719→726：+CleanPathSuffix 4 + TryResolveAbsolutePath 2 + TryGetWriteTarget X2 1；真实临时文件 File.Exists 命中）。端到端效果需真实任务复测（用户决定）。
+> **边界**：输入无盘符路径 → 走原相对文件名逻辑；目录名以"文件/目录/文件夹"结尾的真实路径会被剥尾（少见，接受）；子目录后紧跟方位词无分隔符形态（`...MyApp盘下x`）少见且剥后需补 `\`，本版不处理。
+
+> **10-12 读改混合再修复（双正则漂移 + 交互态 IME 丢字）**
+
+> **现象 2 连击**：复测"index.html 读取并修复"→ 模型仍大海捞针翻无关目录（list_dir 安装包 → read_file Strata README）；再测"use --write X:\index.html 读取这个文件修复里面的语法错误"→ 路由 SimpleQA → small，模型 0 步回复"未明确任务"。
+> **根因 1（双正则漂移）**：方案 B 内容注入以 `ExtractTargetFile` 为入口，其 `TargetFileRe` 扩展名表缺 **html** → `index.html` 提取返回 null → 注入块整体跳过；而存在性校验 `FindExistingProjectFileRef`（`TaskClassifier.FileReferencePattern`，宽正则）能命中——两正则不一致。修复：① TargetFileRe 补 `html|htm`；② **注入块改以 FindExistingProjectFileRef 为权威驱动**（更宽正则 + 存在性校验），ExtractTargetFile 仅作新建任务位置提示兜底——消双路径漂移（tests +2：ExtractTargetFile html/htm）。
+> **根因 2（交互态 IME 丢字）**：交互态自实现 `ReadLineWithTabCompletion` 用 `Console.ReadKey(true)` 逐键读取，与中文 IME 组合/选字竞争 → 任务输入随机丢字（"读取这个文件修复里面的语法错误"→"读取这个修复里面的语法错"，turns id=669/673 实证；"文件"丢失 → CodeContext 不命中 → IsWriteTask/IsReadTask 双双失效 → SimpleQA → small）。管道输入（Console.ReadLine）3 次完整、交互态中文输入 2 次损坏——输入管线差异即根因。修复：交互态读行退化为 `Console.ReadLine()`（原生行编辑，IME 正确）；Tab 补全/↑↓历史随之降级（IME 正确性优先，防打地鼠）；web 端输入不受影响（CommandHub 无 ReadKey）。
+> **验证**：构建 0 错误；tests **719 全绿**（717→719：+2 html/htm 提取）；管道复测与用户 22:12 相同输入，turns 完整 + 路由读改混合 large + 内容注入生效（task_events 实证）；交互态中文输入需用户在真实终端手动验证（自动化难覆盖 IME）。
+
 > **10-12 读改混合任务跑偏修复（A+B：L0.5 排除混合 + 目标文件内容注入）**
+
 > **现象**：`use --write X:\` 巨型盘根工程（2000 文件/11001 目录）下，任务"index.html 读取这个文件，并对这个文件进行修复"跑偏——模型未读 index.html、自创无关 StrataDemo 项目（README.md/Program.cs 写成功，两次写 .csproj 被项目文件守卫拒 → 熔断失败回滚）。
 > **两层根因（已实证）**：① 路由误判——`IntentOverride` 写动词表含"修复"→ 整个任务判纯写任务 → L0.5 数据闭环降级 small（小模型不读目标文件）；② 上下文缺失——X:\ CompactBlock 目录树被 MaxTreeLines 截断，index.html 未注入上下文，模型"不知道文件存在"（与 B 符号定义注入教训同源：位置指引对大模型无效）。
 > **修复（数据驱动，非提示词）**：

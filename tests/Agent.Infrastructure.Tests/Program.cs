@@ -800,6 +800,10 @@ Console.WriteLine("== ExtractTargetFile 目标文件提取 ==");
         Tf("修改 weather.py 里的超时参数") == "weather.py");
     Check("提取 csproj",
         Tf("给 OrderSystem.csproj 添加包引用") == "OrderSystem.csproj");
+    Check("提取 html（10-12 双正则漂移修复）",
+        Tf("index.html 读取并修复这个文件") == "index.html");
+    Check("提取 htm",
+        Tf("修复 page.htm 里的样式") == "page.htm");
     Check("无文件名 → null",
         Tf("帮我分析一下这个项目的架构") == null);
     Check("空输入 → null",
@@ -2787,6 +2791,39 @@ Console.WriteLine("== 批次1：写目标提取（TryGetWriteTarget） ==");
     Check("写目标：读语境（无写词）→ 不触发",
         !Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget("读取一下 X:\\data 的内容", out _, out _));
     Directory.Delete(baseTmp, true);
+}
+
+// 10-12 X1/X2：方位词清洗 + 绝对路径优先解析（index.html 读改混合定位）
+// ═══════════════════════════════════════════════════════════════
+Console.WriteLine("== 10-12 X1/X2：CleanPathSuffix + TryResolveAbsolutePath ==");
+{
+    Check("清洗：盘下+文件 → 干净路径",
+        Agent.Infrastructure.Project.ProjectPathDetector.CleanPathSuffix("x:\\盘下index.html文件") == "x:\\index.html");
+    Check("清洗：尾部文件 → 剥离",
+        Agent.Infrastructure.Project.ProjectPathDetector.CleanPathSuffix("X:\\index.html文件") == "X:\\index.html");
+    Check("清洗：无方位词不动",
+        Agent.Infrastructure.Project.ProjectPathDetector.CleanPathSuffix("x:\\index.html") == "x:\\index.html");
+    Check("清洗：真实目录名'下载'不误伤",
+        Agent.Infrastructure.Project.ProjectPathDetector.CleanPathSuffix("X:\\下载") == "X:\\下载");
+    Check("绝对路径解析：不存在路径 → false",
+        !Agent.Infrastructure.Project.ProjectPathDetector.TryResolveAbsolutePath(
+            "读取x:\\NoSuchDirZZZ_missing_xyz.html文件并修复", out _));
+    // 真实文件 + 自然语言方位词 → 通道1清洗后命中绝对路径
+    // （方位词前补 \：真实用户输入"x:\盘下index.html"盘根自带分隔符；目录名后跟方位词无分隔符属少见形态）
+    var x1Base = Path.Combine(TestTmp, "tests_x1_target");
+    if (Directory.Exists(x1Base)) Directory.Delete(x1Base, true);
+    Directory.CreateDirectory(x1Base);
+    var x1File = Path.Combine(x1Base, "target.html");
+    File.WriteAllText(x1File, "<html>x</html>");
+    Check("绝对路径解析：盘下+文件清洗后命中",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryResolveAbsolutePath(
+            $"读取{x1Base}\\盘下target.html文件，并修复它的语法错误", out var abs1)
+        && abs1.Equals(Path.GetFullPath(x1File), StringComparison.OrdinalIgnoreCase));
+    Check("写目标：盘下+文件清洗后命中（X2 误判修复）",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget(
+            $"读取{x1Base}\\盘下target.html文件，并修复它的语法错误", out var wt, out var wf)
+        && wf && wt.Equals(Path.GetFullPath(x1File), StringComparison.OrdinalIgnoreCase));
+    Directory.Delete(x1Base, true);
 }
 
 Console.WriteLine("== 批次1：完成门（CompletionGate） ==");
