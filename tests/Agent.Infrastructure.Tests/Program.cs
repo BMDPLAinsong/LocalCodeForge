@@ -3663,6 +3663,52 @@ Check("短路：无 path 参数 → false", !Agent.Infrastructure.AgentLoop.TryG
 Check("短路：同文件不同盘符大小写 → true", Agent.Infrastructure.AgentLoop.ReadPathMatches(@"X:\INDEX.HTML", new Agent.Core.Models.AgentRequest("s", "t", @"X:\run", null), @"x:\index.html"));
 Check("短路：不同文件 → false", !Agent.Infrastructure.AgentLoop.ReadPathMatches(@"X:\other.html", new Agent.Core.Models.AgentRequest("s", "t", @"X:\run", null), @"X:\index.html"));
 
+// ── 10-13 批次1：配置校验（AgentConfigValidator）──
+Console.WriteLine("== 10-13 配置校验 ==");
+{
+    var ok = new Agent.Core.Models.AgentOptions();
+    Check("配置：默认配置零错误", Agent.Core.Config.AgentConfigValidator.Validate(ok).Count == 0);
+
+    var bad = new Agent.Core.Models.AgentOptions { ContextFoldThreshold = 10000, ContextToolResultBytes = 25000 };
+    Check("配置：Fold < ToolResult → 报矛盾", Agent.Core.Config.AgentConfigValidator.Validate(bad).Any(x => x.Contains("ContextFoldThreshold")));
+
+    var bad2 = new Agent.Core.Models.AgentOptions { MaxSteps = 0 };
+    Check("配置：MaxSteps=0 → 报错", Agent.Core.Config.AgentConfigValidator.Validate(bad2).Any(x => x.Contains("MaxSteps")));
+
+    var bad3 = new Agent.Core.Models.AgentOptions { RoutingDowngradeMinSuccessRate = 1.5 };
+    Check("配置：路由率>1 → 报错", Agent.Core.Config.AgentConfigValidator.Validate(bad3).Any(x => x.Contains("RoutingDowngradeMinSuccessRate")));
+
+    var bad4 = new Agent.Core.Models.AgentOptions();
+    bad4.Small.Provider = "unknown";
+    Check("配置：Provider 非法 → 报错", Agent.Core.Config.AgentConfigValidator.Validate(bad4).Any(x => x.Contains("Small.Provider")));
+
+    var bad5 = new Agent.Core.Models.AgentOptions { OllamaHttpTimeoutMinutes = 0 };
+    Check("配置：超时=0 → 报错", Agent.Core.Config.AgentConfigValidator.Validate(bad5).Any(x => x.Contains("OllamaHttpTimeoutMinutes")));
+}
+
+// ── 10-13 批次1：会话历史生命周期（SqliteSessionStore.PruneOlderThan）──
+Console.WriteLine("== 10-13 会话历史生命周期 ==");
+{
+    var wsS = Path.Combine(Path.GetTempPath(), "law_turns_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(wsS);
+    var storeS = new Agent.Infrastructure.Session.SqliteSessionStore(Path.Combine(wsS, "s.db"));
+    // 直接插入一条"10 天前"的旧轮次（AppendTurnAsync 恒写 UtcNow，构造过期轮次走原始 SQL）
+    using (var conn0 = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(wsS, "s.db")}"))
+    {
+        conn0.Open();
+        using var cmd0 = conn0.CreateCommand();
+        cmd0.CommandText = "INSERT INTO turns(session_id, role, content, created_at) VALUES ('s1','user','old', $ts);";
+        cmd0.Parameters.AddWithValue("$ts", DateTimeOffset.UtcNow.AddDays(-10).ToUnixTimeSeconds());
+        cmd0.ExecuteNonQuery();
+    }
+    storeS.AppendTurnAsync("s1", new Agent.Core.Models.ChatTurn("user", "new"), default).GetAwaiter().GetResult();
+    var prunedS = storeS.PruneOlderThan(5);
+    Check("会话清理：5 天保留期 → 只删 10 天前（1 条）", prunedS == 1);
+    var histS = storeS.GetHistoryAsync("s1", 10, default).GetAwaiter().GetResult();
+    Check("会话清理：清理后只剩新轮次", histS.Count == 1 && histS[0].Content == "new");
+    try { Directory.Delete(wsS, true); } catch { }
+}
+
 // ── 10-13 阶段1：上下文折叠摘要（ContextFolder）──
 Console.WriteLine("== 10-13 上下文折叠 ==");
 var bigCode = new string('x', 9000) + "\npublic class OrderService {\n    public int Get() { return 1; }\n}\n" + new string('y', 3000);

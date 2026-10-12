@@ -162,6 +162,18 @@ internal class Program
         // ─────────── 构建 DI 容器 ───────────
         var services = new ServiceCollection();
         services.AddAgent(options, workspace, dbPath, options.ProjectRoot);
+        // 【10-13 批次1】配置校验：矛盾/无效配置启动即报错退出（消"无效配置静默生效"缺陷）
+        var cfgErrors = Agent.Core.Config.AgentConfigValidator.Validate(options);
+        if (cfgErrors.Count > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("=== 配置校验失败（请修正后重启） ===");
+            foreach (var err in cfgErrors)
+                Console.WriteLine($"  ✗ {err}");
+            Console.ResetColor();
+            Environment.Exit(1);
+            return;
+        }
         // 【10-07 Dashboard】事件多播总线（跨任务单例）：渲染器直接消费不变，Dashboard SSE 是第二消费者
         services.AddSingleton<Agent.Infrastructure.Events.TaskEventHub>();
         // 【10-07 UI 层 #1】事件持久化（metrics.db 同库 task_events 表）：Dashboard 任务详情回放地基
@@ -173,15 +185,18 @@ internal class Program
         _ = provider.GetRequiredService<IMetricsCollector>();
         // 【3A】显式解析 RoutingDecisionStore，触发 routing_decisions 表建表
         _ = provider.GetRequiredService<Agent.Infrastructure.Routing.RoutingDecisionStore>();
-        // 【C】路由决策表生命周期清理：启动时删除 90 天前明细（防无限增长；调权仅用近 10 条）
-        provider.GetRequiredService<Agent.Infrastructure.Routing.RoutingDecisionStore>().PruneOlderThan(90);
+        // 【C】路由决策表生命周期清理：启动时删除 N 天前明细（防无限增长；调权仅用近 10 条）
+        provider.GetRequiredService<Agent.Infrastructure.Routing.RoutingDecisionStore>().PruneOlderThan(options.RoutingDecisionRetentionDays);
         // 【C】显式解析 ToolRejectionStore，触发 tool_rejections 表建表
         _ = provider.GetRequiredService<Agent.Infrastructure.Metrics.ToolRejectionStore>();
         // 【10-07 Dashboard】事件总线显式解析（主容器单例，任务循环旁路发布 + SSE 订阅）
         var eventHub = provider.GetRequiredService<Agent.Infrastructure.Events.TaskEventHub>();
-        // 【10-07 UI 层 #1】事件持久化显式解析（触发 task_events 建表）+ 30 天生命周期清理
+        // 【10-07 UI 层 #1】事件持久化显式解析（触发 task_events 建表）+ 保留期清理（配置化）
         var eventStore = provider.GetRequiredService<Agent.Infrastructure.Events.TaskEventStore>();
-        eventStore.PruneOlderThan(30);
+        eventStore.PruneOlderThan(options.EventRetentionDays);
+        // 【10-13 批次1】会话历史（turns 表）生命周期：此前只增不清（最大明文表），现启动按保留期清理
+        provider.GetRequiredService<Agent.Core.Abstractions.ISessionStore>()
+            .PruneOlderThan(options.ChatTurnRetentionDays);
 
         // 【D2】启动时加载任务特征类历史聚合（路由数据校准 + stats 归因）
         var featureAggregator = provider.GetRequiredService<Agent.Infrastructure.Routing.TaskMetricsAggregator>();

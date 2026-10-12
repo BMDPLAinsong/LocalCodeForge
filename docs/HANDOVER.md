@@ -19,6 +19,13 @@
 
 
 
+> **10-13 批次1 架构缺陷盘点（⑤ 配置校验 + ④ 持久层生命周期）**
+> **背景**：用户要求按架构缺陷盘点先做批次 1——消两块债：⑤ 配置膨胀无校验（矛盾配置静默生效）＋ ④ 持久层明文只增不清（最大明文表 turns 无生命周期）。排查中修正了盘点口径：TaskEventStore/RoutingDecisionStore 的保留期清理**此前已接线**（硬编码 30/90），真缺口是 **turns 表（会话历史）只增不清**——每轮对话全量明文，无 Prune、无保留期。
+> **⑤ 配置校验（新）**：`src/Agent.Core/Config/AgentConfigValidator.cs`——确定性纯函数 `Validate(AgentOptions) → List<string>`，零依赖可单测。校验：14 个正/非负整数类（步数/重试/记忆/超时/上下文预算×3/保留期×3）、4 个路由调权率∈[0,1]、Temperature∈[0,2]、语义关系（ContextFoldThreshold ≥ ContextToolResultBytes，否则截断永远优先、折叠形同虚设）、4 个端点（Provider∈{ollama,openai}、Model 非空、Endpoint 以 http(s):// 开头）。CLI 在 DI 构建后调用——有错红字逐条列出 + `Environment.Exit(1)`，绝不静默跑在矛盾配置上。
+> **④ 持久层生命周期（收窄后）**：① AgentOptions +3 保留期配置（ChatTurnRetentionDays=90 / EventRetentionDays=30 / RoutingDecisionRetentionDays=90，后两者替换 Program.cs 硬编码魔法数）；② `SqliteSessionStore.PruneOlderThan(int days)` 新方法（turns 按 created_at 全局清理，返回删除条数，失败 0 fail-safe）；③ `ISessionStore` 接口 + PruneOlderThan（DI 注册的是接口，CLI 经接口解析——顺带修掉"具体类未注册会崩溃"的隐患）；④ CLI 启动区 3 处接线（RoutingDecision/TaskEvent 换配置 + turns 清理）。
+> **验证**：构建 0 错误；tests **761 全绿**（753→761：+配置校验 5 + 会话生命周期 2 + 路径短路 1）；无头管道冒烟正常（启动→exit，无配置误杀、无崩溃）。
+> **边界**：task_metrics 不清（stats/归因依赖全历史，量级小）；turns 按全局 created_at 清（不区分会话——过期会话历史一并回收，活跃会话仅保留最近 MaxHistoryTurns 轮有运行时价值）。
+
 > **10-13 记忆分层 1+2+3（上下文不仅压缩，还要存储防失忆：折叠摘要 + 任务事实 + 文件状态记忆）**
 > **背景**：分层上下文预算（f838289）解决"hot 上下文压缩"；用户进一步要求"存储防失忆"（MemGPT/Zep 式 memory hierarchy 的工程化落地）。存量基础设施 60% 可复用：sessions.db / agent_memory（去重合并+Search 注入）/ TaskEventStore（事件全量持久化= cold 层）/ TaskFeatureClassifier。本段按"1+2 3 顺手、4 向量检索等做完再评估"实施三阶段。
 > **阶段 1 折叠摘要（ContextFolder，新）**：read_file 工具结果注入时累计字节（`_ctxToolBytes`，每任务重置）；累计超 `ContextFoldThreshold`(90KB，AgentOptions 可配) → 后续 read_file 结果走确定性折叠（零模型调用）：代码文件（.cs/.py/.ts/.html…）提取结构定义行（class/interface/record/def 等正则）+ 首 5 行 + 尾 5 行 + 行数；文本取头尾。语义保留优于纯截断（截断丢中间结构，折叠留定义）；完整内容声明"见会话事件存储"——TaskEventStore 旁路已全量持久化工具事件，cold 层可回放，折叠只影响 hot 上下文占用。优先级：短路（X1 已注入）> 单次超 25KB 截断 > 累计超 90KB 折叠。

@@ -32,4 +32,11 @@ public interface ISessionStore
     /// <param name="sessionId">会话 ID</param>
     /// <param name="ct">取消令牌</param>
     Task ClearAsync(string sessionId, CancellationToken ct);
+
+    /// <summary>
+    /// 【10-13 批次1】生命周期清理：删除早于 N 天前的轮次（启动时调用，防 turns 表无限增长）。
+    /// </summary>
+    /// <param name="days">保留天数</param>
+    /// <returns>删除条数（失败返回 0）</returns>
+    int PruneOlderThan(int days);
 }

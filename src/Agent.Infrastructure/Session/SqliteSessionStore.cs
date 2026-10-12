@@ -115,4 +115,25 @@ public sealed class SqliteSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("$sid", sessionId);
         await cmd.ExecuteNonQueryAsync(ct);
     }
+
+    /// <summary>【10-13 批次1】生命周期清理：删除早于 N 天前的轮次（turns 表此前只增不清）。
+    /// 会话语义：多轮只带最近 MaxHistoryTurns 轮，旧轮次无运行时价值；按 created_at 全局清理
+    /// （不区分会话——过期会话历史一并回收）。返回删除条数；失败返回 0（fail-safe）。</summary>
+    public int PruneOlderThan(int days)
+    {
+        try
+        {
+            var cutoff = DateTimeOffset.UtcNow.AddDays(-days).ToUnixTimeSeconds();
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM turns WHERE created_at < $cutoff;";
+            cmd.Parameters.AddWithValue("$cutoff", cutoff);
+            return cmd.ExecuteNonQuery();
+        }
+        catch
+        {
+            return 0;
+        }
+    }
 }

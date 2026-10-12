@@ -205,6 +205,19 @@ public sealed class AgentOptions
     /// 默认 90KB——单轮上下文 ≈ 系统提示 15KB + 任务注入 20KB + 工具结果 90KB 内受控。</summary>
     public int ContextFoldThreshold { get; set; } = 90000;
 
+    /// <summary>【10-13 批次1】持久层生命周期：会话历史（turns 表）保留天数。
+    /// 每轮对话全量明文（含生成内容），只增不清；默认 90 天启动清理（> 会话语义所需，
+    /// 且 30B 多轮只带最近 MaxHistoryTurns 轮——旧轮次无运行时价值）。</summary>
+    public int ChatTurnRetentionDays { get; set; } = 90;
+
+    /// <summary>【10-13 批次1】持久层生命周期：任务事件（task_events 表）保留天数。
+    /// Dashboard 详情回放依赖近 N 天事件；默认 30 天（此前硬编码 30，现配置化）。</summary>
+    public int EventRetentionDays { get; set; } = 30;
+
+    /// <summary>【10-13 批次1】持久层生命周期：路由决策明细（routing_decisions 表）保留天数。
+    /// 调权仅用近 10 条聚合；默认 90 天（此前硬编码 90，现配置化）。</summary>
+    public int RoutingDecisionRetentionDays { get; set; } = 90;
+
     /// <summary>
     /// 【时代隔离】模型时代切换点（law-unified 30B 落地时刻，本地时间）。
     /// stats 面板按此拆分 agent_pro 等服务的成功率（当前时代 vs 历史时代）。
