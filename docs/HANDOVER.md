@@ -19,7 +19,15 @@
 
 
 
+> **10-12 读改混合定位修复 A+B 第二轮（TryResolveAbsolutePath 空格化 + use 一步到位盘根提取）**
+> **现象**（22:54 复测）：① 写目标已干净（`x:\index.html` ✓ 第一轮 A 生效），但 `read_file x:/index.html` 仍"路径越界"——B 未注入：TryResolveAbsolutePath 候选正则 `[^\s...]` 排除空格 → 空格分隔形态截断在 `x:\`（盘根是目录，File.Exists=false）→ 不命中；模型随后自创页面写 run 目录。② `use --write 读取 x:\ 盘下 index.html 文件…` 报"盘符不一致"——use 后第一位是任务动词"读取"，TrySplitPathTask 在 `x:\` 断链 → 整段被当路径 → ApplyUse 盘符防御误报。
+> **根因**：写目标通道（TryGetWriteTarget 整段+清洗）与读注入通道（TryResolveAbsolutePath 正则）未共享同一空格形态归一——修了写、漏了读；use 语法假设路径在参数首位，无法表达"--write + 任务文本一步到位"。
+> **修复**：A=TryResolveAbsolutePath 候选正则去 `\s` 排除（截断点=中文标点/行尾）→ 整段提取后 CleanPathSuffix 清洗；File.Exists=false 时逐段剥尾部空格段（最长存在前缀循环）——含空格路径（`D:\My Projects\f.txt`）与尾部自然语言（`f.txt 的内容`）顺带支持，中间空格保留。B=UseCommandParser.TryExtractDiskRoot（首盘根 + 存在性校验）+ Program.cs use 分支：TrySplitPathTask 断链且参数非有效目录 → 提取盘根 ApplyUse(writeFlag) + 整段作 pendingTask；无盘根 → 命令层提示"路径无效"。原"路径开头"use 形态行为不变。
+> **验证**：构建 0 错误；tests **735 全绿**（730→735：+绝对路径空格方位词/含空格路径/尾部剥段 3 + use 盘根提取命中/无盘根 false 2）。端到端效果需真实任务复测（用户决定）。
+> **边界**：use 一步到位提取盘根时任务文本原样执行（工程根=盘根，范围大于精确文件）；路径打错回退盘根的既有边界不变。
+
 > **10-12 读改混合定位修复 A+B（空格形态清洗 + 沙箱显式指向读例外）**
+
 > **现象**（22:45 复测，沙箱模式未 use）：输入"读取 x:\ 盘下 index.html 文件，并修复它的语法错误"（**空格分隔**）→ ① 写目标变脏 `[显式授权] x:\  index.html`（"盘下"Replace 后留双空格，脏路径进白名单）；② read_file X:/index.html **路径越界**——沙箱读严格，模型读不到目标 → 自创页面写 run 目录 → 完成门正确判失败。
 > **根因**：① 空格分隔形态下 CleanPathSuffix 只剥"盘下"词本身，残留双空格，`x:\  index.html` 以"含空格形似文件"判为脏目标；② 沙箱模式（projectRoot null）读仅限 run 目录——"沙箱严格"与"给路径就干活"（输入显式给出 x:\index.html = 用户明确指向）矛盾。
 > **修复（数据结构性）**：A=CleanPathSuffix 三步升级——① 盘根方位词正则归一（`^([A-Za-z]:\)\s*(根目录下|目录下|盘下)\s*` → `$1`）；② 剥尾部类别词；③ 方位词 Replace 改正则 `\s*(根目录下|目录下|盘下)\s*`（连相邻空白一起规整，子目录形态"\盘下 target.html"→"\target.html"）+ TrimEnd。B=ReadFileTool 加任务级 `SetExplicitReadTarget`（AgentLoop 任务开头 TryResolveAbsolutePath(input) 命中即注入；串行安全），沙箱越界检查放行"输入显式指向的绝对路径文件"——黑名单仍源头拒、写仍严格白名单。语义：读=黑名单排除，但额外要求路径出现在用户输入里（比全放开保守）；用户输入里写出来的路径即授权（显式优于隐式）。

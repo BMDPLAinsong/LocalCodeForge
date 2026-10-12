@@ -625,6 +625,23 @@ internal class Program
                 // 剩余任务自动执行（主循环顶部 pendingTask 消费）。
                 Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask(
                     usePath, out var realUsePath, out var followupTask);
+                // 【10-12 B】use 参数非路径开头（如 "use --write 读取 x:\ 盘下 index.html 文件…"）：
+                // TrySplitPathTask 断链（无目录前缀）→ 从整段提取盘根自动 use + 整段作任务（一步到位）；
+                // 无盘根 → 命令层提示。原"路径开头"形态行为不变。
+                if (!Directory.Exists(realUsePath))
+                {
+                    if (Agent.Infrastructure.Project.UseCommandParser.TryExtractDiskRoot(usePath, out var diskRoot))
+                    {
+                        realUsePath = diskRoot;
+                        followupTask = usePath;
+                        renderer.System($"[自动提取] use 参数非路径形态，工程根取 {diskRoot}，整段作为任务执行。");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"错误：use 路径无效：{usePath}。用法：use <路径> [--write]，例如：use --write X:\\myproject");
+                        continue;
+                    }
+                }
                 ApplyUse(provider, options, realUsePath, useWriteFlag, autoSource: null);
                 sessionWriteTargets.Clear();   // 【10-08】切换工程根 → 清空会话写目标（旧目标不跨工程继承）
                 if (!string.IsNullOrWhiteSpace(followupTask))

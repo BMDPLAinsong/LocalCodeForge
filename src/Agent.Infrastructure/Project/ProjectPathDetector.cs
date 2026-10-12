@@ -270,14 +270,25 @@ public static class ProjectPathDetector
     {
         path = null!;
         if (string.IsNullOrWhiteSpace(input)) return false;
-        var m = System.Text.RegularExpressions.Regex.Match(input, @"[A-Za-z]:\\[^\s，。；、！？,;!?]*");
+        // 【10-12 A】候选含空格（原正则排除 \s → 空格分隔形态"x:\ 盘下 index.html"截断在盘根，File.Exists(目录)=false）；
+        // 截断点为中文标点/行尾。
+        var m = System.Text.RegularExpressions.Regex.Match(input, @"[A-Za-z]:\\[^\r\n，。；、！？,;!?]*");
         if (!m.Success) return false;
         var candidate = CleanPathSuffix(m.Value);
         if (string.IsNullOrWhiteSpace(candidate)) return false;
         try
         {
-            var full = Path.GetFullPath(candidate);
-            if (File.Exists(full)) { path = full; return true; }
+            // 最长存在前缀：候选含尾部自然语言（"readme.md 的内容"）时逐段剥尾部空格段重试；
+            // 路径内空格（"D:\My Projects"）不受影响——只剥最后一个空格段，中间空格保留。
+            var cand = candidate;
+            while (cand.Length > 3)
+            {
+                var full = Path.GetFullPath(cand);
+                if (File.Exists(full)) { path = full; return true; }
+                var sp = cand.LastIndexOf(' ');
+                if (sp <= 2) break;
+                cand = cand[..sp].TrimEnd();
+            }
         }
         catch { }
         return false;

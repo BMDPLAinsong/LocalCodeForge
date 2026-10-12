@@ -2856,6 +2856,48 @@ Console.WriteLine("== 10-12 B：沙箱读显式指向例外 ==");
     Directory.Delete(bOuter, true);
 }
 
+// 10-12 A：绝对路径解析空格形态（含空格路径 + 尾部自然语言剥段）
+// ═══════════════════════════════════════════════════════════════
+Console.WriteLine("== 10-12 A：绝对路径解析空格形态 ==");
+{
+    var aBase = Path.Combine(TestTmp, "tests_abs_probe");
+    if (Directory.Exists(aBase)) Directory.Delete(aBase, true);
+    Directory.CreateDirectory(aBase);
+    var aFile = Path.Combine(aBase, "probe.html");
+    File.WriteAllText(aFile, "x");
+    Check("绝对路径解析：空格分隔方位词形态 → 命中",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryResolveAbsolutePath(
+            $"读取 {aBase}\\盘下 probe.html 文件，并修复它", out var pa)
+        && pa.Equals(Path.GetFullPath(aFile), StringComparison.OrdinalIgnoreCase));
+
+    var aSpace = Path.Combine(aBase, "my space dir");
+    Directory.CreateDirectory(aSpace);
+    var aSpaceFile = Path.Combine(aSpace, "readme.md");
+    File.WriteAllText(aSpaceFile, "md");
+    Check("绝对路径解析：含空格目录路径 → 命中",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryResolveAbsolutePath(
+            $"读取 {aSpace}\\readme.md", out var pb)
+        && pb.Equals(Path.GetFullPath(aSpaceFile), StringComparison.OrdinalIgnoreCase));
+    Check("绝对路径解析：尾部自然语言剥段 → 命中",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryResolveAbsolutePath(
+            $"读取 {aSpace}\\readme.md 的内容", out var pc)
+        && pc.Equals(Path.GetFullPath(aSpaceFile), StringComparison.OrdinalIgnoreCase));
+    Directory.Delete(aBase, true);
+}
+
+// 10-12 B：use 一步到位盘根提取
+// ═══════════════════════════════════════════════════════════════
+Console.WriteLine("== 10-12 B：use 盘根提取 ==");
+{
+    var tRoot = Path.GetPathRoot(TestTmp) ?? @"X:\";
+    Check("use盘根提取：任务文本含盘根 → 命中",
+        Agent.Infrastructure.Project.UseCommandParser.TryExtractDiskRoot(
+            $"读取 {tRoot} 盘下 index.html 文件，并修复它", out var root1)
+        && root1.Equals(tRoot, StringComparison.OrdinalIgnoreCase));
+    Check("use盘根提取：无盘符文本 → false",
+        !Agent.Infrastructure.Project.UseCommandParser.TryExtractDiskRoot("读取一下这个文件的内容", out _));
+}
+
 Console.WriteLine("== 批次1：完成门（CompletionGate） ==");
 {
     // 非写任务 → 不过门
