@@ -2544,7 +2544,10 @@ Console.WriteLine("== 双根保护：PathBoundary 逐段比较 ==");
 Console.WriteLine("== 双根保护：SensitivePathGuard 敏感区源头拒 ==");
 {
     Check("系统区命中（C:\\Windows 子路径）", Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(@"C:\Windows\System32\evil.txt"));
-    Check("凭据区命中（.ssh）", Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(@"C:\Users\26543\.ssh\config"));
+    Check("凭据区命中（.ssh）", Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(
+        System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh", "config")));
+    Check("凭据区命中（.aws）", Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(
+        System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".aws", "credentials")));
     Check("前缀假阳性不误伤（C:\\Windows2）", !Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(@"C:\Windows2\evil.txt"));
     Check("普通工程路径不拒", !Agent.Infrastructure.Project.SensitivePathGuard.IsDenied(@"X:\work\proj\src\a.cs"));
 
@@ -2641,7 +2644,8 @@ Console.WriteLine("== 双根保护：run_command 敏感路径源头拒（跨模�
         return tool.InvokeAsync(args, CancellationToken.None).GetAwaiter().GetResult();
     }
 
-    Check("绝对路径敏感命令 → 拒绝", Rc("type C:\\Users\\26543\\.ssh\\config").Contains("敏感"));
+    var sshConfig = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh", "config");
+    Check("绝对路径敏感命令 → 拒绝", Rc("type " + sshConfig).Contains("敏感"));
     Check("环境变量展开后敏感命令 → 拒绝", Rc("type %USERPROFILE%\\.ssh\\config").Contains("敏感"));
     Directory.Delete(baseTmp, true);
 }
@@ -2652,7 +2656,7 @@ Console.WriteLine("== 双根保护：启动重叠自检 ==");
     Check("正常工程根不重叠", overlaps.Count == 0);
     // 工程根落在敏感区内 → 命中
     var overlaps2 = Agent.Infrastructure.Project.SensitivePathGuard.FindWriteRootOverlaps(
-        new[] { @"C:\Users\26543\.ssh\myproj" });
+        new[] { System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh", "myproj") });
     Check("敏感区内工程根 → 重叠检出", overlaps2.Count == 1);
 }
 

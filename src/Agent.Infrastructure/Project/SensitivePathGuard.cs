@@ -27,29 +27,36 @@ public static class SensitivePathGuard
     // 用户自定义 denylist 是否已加载（幂等）
     private static bool _userListLoaded;
 
-    /// <summary>内置拒绝根（系统区 + 凭据区）。</summary>
-    private static readonly string[] BuiltinDeniedRoots =
-    {
-        // ── 第一类：系统区（防误读系统文件）──
-        @"C:\Windows",
-        @"C:\Program Files",
-        @"C:\Program Files (x86)",
-        @"C:\ProgramData",
-
-        // ── 第二类：凭据区（防敏感信息进持久层）──
-        @"C:\Users\26543\.ssh",
-        @"C:\Users\26543\.aws",
-        @"C:\Users\26543\.kube",
-        @"C:\Users\26543\.docker",
-        @"C:\Users\26543\.config\gcloud",
-        @"C:\Users\26543\.git-credentials",
-        @"C:\Users\26543\.npmrc",
-        @"C:\Users\26543\AppData\Local\Microsoft\Credentials",
-        @"C:\Users\26543\AppData\Roaming\Microsoft\Credentials"
-    };
+    /// <summary>内置拒绝根（系统区 + 凭据区）。静态构造中按当前用户动态构建（不硬编码用户名）。</summary>
+    private static readonly string[] BuiltinDeniedRoots;
 
     static SensitivePathGuard()
     {
+        // 动态用户目录：不硬编码用户名（跨机器可用 + 公开仓库不暴露个人环境）
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var appDataLocal = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var appDataRoaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+
+        BuiltinDeniedRoots = new[]
+        {
+            // ── 第一类：系统区（防误读系统文件）──
+            @"C:\Windows",
+            @"C:\Program Files",
+            @"C:\Program Files (x86)",
+            @"C:\ProgramData",
+
+            // ── 第二类：凭据区（防敏感信息进持久层）──
+            Path.Combine(userProfile, ".ssh"),
+            Path.Combine(userProfile, ".aws"),
+            Path.Combine(userProfile, ".kube"),
+            Path.Combine(userProfile, ".docker"),
+            Path.Combine(userProfile, ".config", "gcloud"),
+            Path.Combine(userProfile, ".git-credentials"),
+            Path.Combine(userProfile, ".npmrc"),
+            Path.Combine(appDataLocal, "Microsoft", "Credentials"),
+            Path.Combine(appDataRoaming, "Microsoft", "Credentials")
+        };
+
         foreach (var root in BuiltinDeniedRoots)
         {
             AddDeniedRoot(root);
@@ -127,7 +134,7 @@ public static class SensitivePathGuard
             return true;
 
         // 判定线 3：符号链接 / junction 逐段解析（Windows 最常见的绕过形态是中间段链接：
-        // X:\work\link → C:\Users\26543\.ssh，Path.GetFullPath 不展开；reparse point 在目录段上，
+        // X:\work\link → %USERPROFILE%\.ssh，Path.GetFullPath 不展开；reparse point 在目录段上，
         // 只对 fullPath 整体 ResolveLinkTarget 会漏——必须逐段探测）。
         // 性能：普通路径每段 ResolveLinkTarget 返回 null（毫秒级），只有命中链接才展开最终目标。
         // 用户优化：不存在的段跳过（不存在的路径读不了，解析无意义）。
