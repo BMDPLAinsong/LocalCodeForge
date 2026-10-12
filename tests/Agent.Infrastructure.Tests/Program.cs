@@ -806,6 +806,51 @@ Console.WriteLine("== ExtractTargetFile 目标文件提取 ==");
         Tf("   ") == null);
 }
 
+// 【2026-10-12 方案A】读改混合任务判定（L0.5 不降级依据：读+写动词同时命中）
+Console.WriteLine("== 读改混合任务判定（L0.5 排除降级） ==");
+{
+    bool Mixed(string s) => Agent.Infrastructure.Routing.IntentOverride.IsWriteTask(s)
+        && Agent.Infrastructure.Routing.IntentOverride.IsReadTask(s);
+    bool PureWrite(string s) => Agent.Infrastructure.Routing.IntentOverride.IsWriteTask(s)
+        && !Agent.Infrastructure.Routing.IntentOverride.IsReadTask(s);
+
+    Check("读改混合（读取+修复）→ 混合",
+        Mixed("index.html 读取这个文件，并对这个文件进行修复"));
+    Check("读改混合（查看+修改）→ 混合",
+        Mixed("查看 Program.cs 并修改其中的 Main 方法"));
+    Check("读改混合（检查+加注释）→ 混合",
+        Mixed("检查 BigService.cs 的 Method1500 并加一行注释"));
+    Check("纯新建写任务（写一个）→ 非混合",
+        !Mixed("写一个 C# 判断奇数偶数函数") && PureWrite("写一个 C# 判断奇数偶数函数"));
+    Check("纯读任务（读取）→ 非混合",
+        !Mixed("读取 src/Order.cs 的内容"));
+    Check("纯写任务（创建文件）→ 非混合",
+        !Mixed("创建一个 hello.txt 文件，内容为 hello"));
+}
+
+// 【2026-10-12 方案B】目标文件内容注入（TryLoadFileContent：存在命中/不存在/超大/敏感区）
+Console.WriteLine("== TryLoadFileContent 目标文件内容注入 ==");
+{
+    var baseDir = Path.Combine(testTmpRoot, "tlfc_" + Guid.NewGuid().ToString("N")[..8]);
+    Directory.CreateDirectory(baseDir);
+    try
+    {
+        File.WriteAllText(Path.Combine(baseDir, "target.txt"), "hello 内容注入");
+        Check("命中已存在文件 → 返回内容",
+            Agent.Infrastructure.AgentLoop.TryLoadFileContent(baseDir, "target.txt", out var c1)
+            && c1 == "hello 内容注入");
+        Check("文件不存在 → false",
+            !Agent.Infrastructure.AgentLoop.TryLoadFileContent(baseDir, "missing.cs", out _));
+        File.WriteAllText(Path.Combine(baseDir, "big.txt"), new string('x', 300 * 1024));
+        Check("超大文件（>200KB）→ false（位置指引兜底）",
+            !Agent.Infrastructure.AgentLoop.TryLoadFileContent(baseDir, "big.txt", out _));
+    }
+    finally
+    {
+        Directory.Delete(baseDir, true);
+    }
+}
+
 Console.WriteLine("== IntentOverride 写任务判定（§14-3w 直连 large） ==");
 {
     bool Wr(string s) => Agent.Infrastructure.Routing.IntentOverride.IsWriteTask(s);

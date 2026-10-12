@@ -19,6 +19,15 @@
 
 
 
+> **10-12 读改混合任务跑偏修复（A+B：L0.5 排除混合 + 目标文件内容注入）**
+> **现象**：`use --write X:\` 巨型盘根工程（2000 文件/11001 目录）下，任务"index.html 读取这个文件，并对这个文件进行修复"跑偏——模型未读 index.html、自创无关 StrataDemo 项目（README.md/Program.cs 写成功，两次写 .csproj 被项目文件守卫拒 → 熔断失败回滚）。
+> **两层根因（已实证）**：① 路由误判——`IntentOverride` 写动词表含"修复"→ 整个任务判纯写任务 → L0.5 数据闭环降级 small（小模型不读目标文件）；② 上下文缺失——X:\ CompactBlock 目录树被 MaxTreeLines 截断，index.html 未注入上下文，模型"不知道文件存在"（与 B 符号定义注入教训同源：位置指引对大模型无效）。
+> **修复（数据驱动，非提示词）**：
+> **A（ModelRouter L0.5）**：读改混合任务（`IsWriteTask && IsReadTask` 同时命中）→ 保持 large 不降级，路由决策落库"读改混合任务保持 large（需先读已有文件再修改）"；仅纯新建写任务参与数据闭环降级。
+> **B（AgentLoop 目标文件注入升级）**：写任务引用工程内已存在文件（`ReadOnlyGuard.FindExistingProjectFileRef` 命中）→ 新增 `TryLoadFileContent`（public static，可测）预读全文注入"任务引用文件 {name} 已存在于工程根，当前内容如下——请基于真实内容读取/修复，无需再探索定位"；上限 200KB（超大 → 位置提示兜底）、SensitivePathGuard.IsDenied（敏感区 → 位置提示）、异常一律 false 不阻断；文件不存在（新建任务）保持原位置提示。
+> **词性修复**：ReadVerbs 移除"内容"/"结构"两个名词——"文件内容为 hello"中"内容"是写目标描述非读意图，误命中会把纯写任务判为"读改混合"（tests 716/1 失败实证）。
+> **验证**：构建 0 错误；tests **717 全绿**（708→717：+6 读改混合判定 +3 TryLoadFileContent）；真实复测（X:\ + index.html 任务）task_events 实证——Routing #0 **serviceId=large / "读改混合任务保持 large"**（A 生效），工具序列 #1 list_dir → #3 **read_file index.html** → #4 拿到真实内容（B 生效，模型自主读目标文件，不再自创任务）。任务最终因 30B 推理慢 LLM 调用超时（HttpClient 1200s 任务级超时配置生效）未完成——已知性能边界，非 A+B 缺陷；模型未写任何文件，X:\index.html 未被改动。
+
 > **10-11 复盘④ 可疑成功归因验证（装饰器转换层补测 + 首个真实归因样本）**
 > **审计**：8 条真实可疑成功（is_suspicious=1 ∧ success=1 ∧ is_e2e=0）error_summary **全部为空**——10-10 归因落库（AgentLoopMetricsDecorator 从事件文本提取 [检测]/[边缘成功]/未真正实现 → suspiciousReason 写 ErrorSummary）自实现后无任何真实样本产生过，旧样本未回填，链路处于"写完未验证"状态。
 > **修复/验证（两层）**：

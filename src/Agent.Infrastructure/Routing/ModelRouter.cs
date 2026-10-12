@@ -107,6 +107,22 @@ public sealed class ModelRouter : IModelRouter
         // 一次成功率更高，总时间反而更短。读任务保持 small（已验证能完成）。
         if (IntentOverride.IsWriteTask(context.UserInput))
         {
+            // ──（2026-10-12 方案A）读改混合任务不参与降级──
+            // "index.html 读取这个文件，并对这个文件进行修复" 同时命中读动词+写动词：
+            // 必须先读工程内已存在文件再修改。降级 small 后模型拿到任务却不读目标文件
+            // （大工程 CompactBlock 截断导致目标文件未入上下文时，实测自创无关任务跑偏）。
+            // 只有纯新建写任务（无读动词）才参与 L0.5 数据闭环降级。
+            if (IntentOverride.IsReadTask(context.UserInput))
+            {
+                _logger.LogInformation("[L0.5] 读改混合任务（读+写动词），保持 large 不降级。");
+                var mixedD = new RoutingDecision(
+                    RoutingDecision.Large,
+                    RoutingTier.Rule,
+                    "读改混合任务保持 large（需先读已有文件再修改）");
+                await RecordDecisionAsync(mixedD, context.UserInput, ct);
+                return mixedD;
+            }
+
             // ── 数据闭环（方案 C）：历史数据回流调权 ──
             // 写任务默认直连 large（修复 A 的确定性结论）。
             // 但若历史表明同场景（tier=Rule）small 写任务成功率足够高且显著省时，

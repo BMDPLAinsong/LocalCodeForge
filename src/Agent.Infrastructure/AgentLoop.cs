@@ -249,11 +249,27 @@ public sealed class AgentLoop : IAgentLoop
         // 【目标文件注入（最小版）】工程可写模式 + 写任务：从输入正则提取目标文件并注入，
         // 让模型聚焦目标文件（实测跑偏根因：任务说改 BigService.cs，模型却读 Program/TaxService 等无关小文件）。
         // 数据驱动（正则），非提示词堆砌；只注入事实，不做工具约束。
+        // 【2026-10-12 方案B】存在性命中 → 升级为【内容注入】：
+        //   位置指引（"目标文件：index.html"）在大工程 CompactBlock 截断时无效——X:\ 根
+        //   index.html 未入上下文 → 模型不知道文件存在 → 自创无关任务（实测跑偏）。
+        //   内容注入（先例：B 符号定义注入"内容优于位置指引"）让模型拿到真实内容再修复。
+        //   文件不存在（新建任务）→ 保持原位置提示；超大/敏感区 → 位置提示（防上下文爆炸/源头拒）。
         if (projectBlock is not null && IntentOverride.IsWriteTask(request.Input))
         {
             var target = ExtractTargetFile(request.Input);
             if (target is not null)
-                userMsg += $"\n\n（任务目标文件：{target}——本次任务只需读取/修改此文件，其余文件与本任务无关，请勿阅读。）";
+            {
+                var existingRef = ReadOnlyGuard.FindExistingProjectFileRef(request.Input, _options.ProjectRoot!);
+                if (existingRef is not null
+                    && TryLoadFileContent(_options.ProjectRoot!, existingRef, out var fileContent))
+                {
+                    userMsg += $"\n\n（任务引用文件 {existingRef} 已存在于工程根，当前内容如下——请基于真实内容读取/修复，无需再探索定位：\n```\n{fileContent}\n```）";
+                }
+                else
+                {
+                    userMsg += $"\n\n（任务目标文件：{target}——本次任务只需读取/修改此文件，其余文件与本任务无关，请勿阅读。）";
+                }
+            }
         }
         // 【10-08 会话写目标延续】CLI 已授权的显式写目标（含"这个文件"指代继承的上轮目标）注入：
         // 模型拿到真实路径事实，知道"这个文件"指什么、往哪写——达成门同一 _writeTarget 做落地校验。
@@ -1062,6 +1078,33 @@ public sealed class AgentLoop : IAgentLoop
         if (string.IsNullOrWhiteSpace(input)) return null;
         var m = TargetFileRe.Match(input);
         return m.Success ? m.Groups[1].Value : null;
+    }
+
+    /// <summary>内容注入上限（防上下文爆炸；超大文件降级为位置指引）。</summary>
+    private const long TargetContentMaxBytes = 200 * 1024;
+
+    /// <summary>
+    /// 加载工程内目标文件内容用于注入（2026-10-12 方案B）。
+    /// 命中工程内已存在文件 → 读全文；文件不存在 / 超 200KB / 敏感区 → 返回 false（位置提示兜底）。
+    /// 纯确定性文件操作，无模型调用；异常一律返回 false（不阻断任务，降级为位置指引）。
+    /// </summary>
+    public static bool TryLoadFileContent(string projectRoot, string fileName, out string content)
+    {
+        content = "";
+        try
+        {
+            var full = Directory.EnumerateFiles(projectRoot, fileName, SearchOption.AllDirectories).FirstOrDefault();
+            if (full is null) return false;
+            var fi = new FileInfo(full);
+            if (fi.Length > TargetContentMaxBytes) return false;              // 超大 → 位置指引
+            if (SensitivePathGuard.IsDenied(full)) return false;              // 敏感区源头拒
+            content = File.ReadAllText(full);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>执行一个工具，返回（输出, 是否成功）。</summary>
