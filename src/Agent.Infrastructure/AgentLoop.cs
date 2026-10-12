@@ -284,6 +284,13 @@ public sealed class AgentLoop : IAgentLoop
         if (request.ExplicitWriteTarget is not null)
             userMsg += $"\n\n（本次任务显式写目标：{request.ExplicitWriteTarget}" +
                 $"{(request.ExplicitWriteTargetIsFile ? "（文件）" : "（目录）")}——请直接对该路径执行写操作。）";
+        // 【10-12 B】沙箱读例外：输入显式指向的绝对路径文件 → 注入 ReadFileTool（任务级，串行安全）。
+        // 用户主动在输入里写出路径（"读取x:\index.html…"）= 明确授权读该文件；黑名单仍源头拒。
+        if (ProjectPathDetector.TryResolveAbsolutePath(request.Input, out var explicitReadTarget)
+            && _tools.TryGet("read_file", out var readTool)
+            && readTool is Agent.Infrastructure.Tools.ReadFileTool readFileTool)
+            readFileTool.SetExplicitReadTarget(explicitReadTarget);
+
         chatHistory.AddUserMessage(userMsg);
         await _store.AppendTurnAsync(request.SessionId, new ChatTurn("user", request.Input), ct);
 

@@ -235,13 +235,18 @@ public static class ProjectPathDetector
     /// 【10-12 X2】剥离路径串中的中文方位/类别词（"x:\盘下index.html文件" → "x:\index.html"）。
     /// 自然语言里"盘下/文件"常紧贴路径（"读取x:\盘下index.html文件，并修复…"），
     /// 不清洗会被当作路径成分 → 写目标/注入路径变脏（实测"盘下"误判进显式授权白名单）。
-    /// 两步：① 剥尾部类别词（"文件/目录/文件夹"，循环长词优先）；② 剥任意位置方位词
-    /// （"盘下/根目录下/目录下"——出现在文件名之前，非尾部，须 Replace 处理）。
+    /// 三步：① 盘根方位词正则归一（"x:\ 盘下 index.html" 空格分隔形态 → "x:\index.html"——
+    ///   "盘下"直接替换会留双空格，须连同根后空白一起规整）；② 剥尾部类别词
+    ///   （"文件/目录/文件夹"，循环长词优先）；③ 剥任意位置方位词（"盘下/根目录下/目录下"）。
     /// 词表为精确中文词：不剥独立"下"（避免误伤"X:\下载"这类真实目录名）。
     /// </summary>
     public static string CleanPathSuffix(string s)
     {
         if (string.IsNullOrEmpty(s)) return s;
+        // ① 盘根 + 方位词 + 任意空白 → 盘根（"x:\ 盘下 index.html" → "x:\index.html"）
+        s = System.Text.RegularExpressions.Regex.Replace(
+            s, @"^([A-Za-z]:\\)\s*(根目录下|目录下|盘下)\s*", "$1");
+        // ② 剥尾部类别词
         var tailWords = new[] { "文件目录", "文件夹", "文件", "目录" };
         var prev = "";
         while (prev != s)
@@ -250,9 +255,10 @@ public static class ProjectPathDetector
             foreach (var w in tailWords)
                 if (s.EndsWith(w, StringComparison.Ordinal)) { s = s[..^w.Length]; break; }
         }
-        foreach (var w in new[] { "根目录下", "目录下", "盘下" })
-            s = s.Replace(w, "", StringComparison.Ordinal);
-        return s;
+        // ③ 剥任意位置方位词（连相邻空白一起规整："\盘下 target.html" → "\target.html"，
+        //   "x:\ 盘下 index.html" 盘根开头形态已由 ① 归一，此处兜底子目录/其他位置）
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\s*(根目录下|目录下|盘下)\s*", "");
+        return s.TrimEnd();
     }
 
     /// <summary>

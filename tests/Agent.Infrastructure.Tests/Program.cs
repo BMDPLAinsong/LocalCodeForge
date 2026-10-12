@@ -2803,6 +2803,8 @@ Console.WriteLine("== 10-12 X1/X2：CleanPathSuffix + TryResolveAbsolutePath =="
         Agent.Infrastructure.Project.ProjectPathDetector.CleanPathSuffix("X:\\index.html文件") == "X:\\index.html");
     Check("清洗：无方位词不动",
         Agent.Infrastructure.Project.ProjectPathDetector.CleanPathSuffix("x:\\index.html") == "x:\\index.html");
+    Check("清洗：空格分隔形态（x:\\ 盘下 index.html）→ 干净",
+        Agent.Infrastructure.Project.ProjectPathDetector.CleanPathSuffix("x:\\ 盘下 index.html 文件") == "x:\\index.html");
     Check("清洗：真实目录名'下载'不误伤",
         Agent.Infrastructure.Project.ProjectPathDetector.CleanPathSuffix("X:\\下载") == "X:\\下载");
     Check("绝对路径解析：不存在路径 → false",
@@ -2823,7 +2825,35 @@ Console.WriteLine("== 10-12 X1/X2：CleanPathSuffix + TryResolveAbsolutePath =="
         Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget(
             $"读取{x1Base}\\盘下target.html文件，并修复它的语法错误", out var wt, out var wf)
         && wf && wt.Equals(Path.GetFullPath(x1File), StringComparison.OrdinalIgnoreCase));
+    Check("写目标：空格分隔形态（盘根 x:\\ 盘下 target.html）→ 命中",
+        Agent.Infrastructure.Project.ProjectPathDetector.TryGetWriteTarget(
+            $"读取{x1Base}\\盘下 target.html 文件，并修复它的语法错误", out var wt2, out var wf2)
+        && wf2 && wt2.Equals(Path.GetFullPath(x1File), StringComparison.OrdinalIgnoreCase));
     Directory.Delete(x1Base, true);
+}
+
+// 10-12 B：沙箱读例外（输入显式指向的绝对路径文件 → 放行；未指向 → 仍越界）
+// ═══════════════════════════════════════════════════════════════
+Console.WriteLine("== 10-12 B：沙箱读显式指向例外 ==");
+{
+    var bDir = Path.Combine(TestTmp, "tests_b_read_run");      // run 目录（沙箱）
+    var bOuter = Path.Combine(TestTmp, "tests_b_read_outer");  // run 外（越界目标）
+    if (Directory.Exists(bDir)) Directory.Delete(bDir, true);
+    if (Directory.Exists(bOuter)) Directory.Delete(bOuter, true);
+    Directory.CreateDirectory(bDir);
+    Directory.CreateDirectory(bOuter);
+    var bExt = Path.Combine(bOuter, "ext.txt");
+    File.WriteAllText(bExt, "explicit-target-content");
+    var bTool = new Agent.Infrastructure.Tools.ReadFileTool(bDir);   // 沙箱：run=bDir，无工程根
+    var bArgs = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+        $"{{\"path\":\"{bExt.Replace("\\", "/")}\"}}");
+    Check("沙箱读：未显式指向 → 越界",
+        bTool.InvokeAsync(bArgs, CancellationToken.None).GetAwaiter().GetResult().Contains("路径越界"));
+    bTool.SetExplicitReadTarget(bExt);
+    Check("沙箱读：显式指向 → 放行",
+        bTool.InvokeAsync(bArgs, CancellationToken.None).GetAwaiter().GetResult().Contains("explicit-target-content"));
+    Directory.Delete(bDir, true);
+    Directory.Delete(bOuter, true);
 }
 
 Console.WriteLine("== 批次1：完成门（CompletionGate） ==");

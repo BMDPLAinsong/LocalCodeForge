@@ -19,7 +19,15 @@
 
 
 
+> **10-12 读改混合定位修复 A+B（空格形态清洗 + 沙箱显式指向读例外）**
+> **现象**（22:45 复测，沙箱模式未 use）：输入"读取 x:\ 盘下 index.html 文件，并修复它的语法错误"（**空格分隔**）→ ① 写目标变脏 `[显式授权] x:\  index.html`（"盘下"Replace 后留双空格，脏路径进白名单）；② read_file X:/index.html **路径越界**——沙箱读严格，模型读不到目标 → 自创页面写 run 目录 → 完成门正确判失败。
+> **根因**：① 空格分隔形态下 CleanPathSuffix 只剥"盘下"词本身，残留双空格，`x:\  index.html` 以"含空格形似文件"判为脏目标；② 沙箱模式（projectRoot null）读仅限 run 目录——"沙箱严格"与"给路径就干活"（输入显式给出 x:\index.html = 用户明确指向）矛盾。
+> **修复（数据结构性）**：A=CleanPathSuffix 三步升级——① 盘根方位词正则归一（`^([A-Za-z]:\)\s*(根目录下|目录下|盘下)\s*` → `$1`）；② 剥尾部类别词；③ 方位词 Replace 改正则 `\s*(根目录下|目录下|盘下)\s*`（连相邻空白一起规整，子目录形态"\盘下 target.html"→"\target.html"）+ TrimEnd。B=ReadFileTool 加任务级 `SetExplicitReadTarget`（AgentLoop 任务开头 TryResolveAbsolutePath(input) 命中即注入；串行安全），沙箱越界检查放行"输入显式指向的绝对路径文件"——黑名单仍源头拒、写仍严格白名单。语义：读=黑名单排除，但额外要求路径出现在用户输入里（比全放开保守）；用户输入里写出来的路径即授权（显式优于隐式）。
+> **验证**：构建 0 错误；tests **730 全绿**（726→730：+CleanPathSuffix 空格形态 2 + TryGetWriteTarget 空格形态 1 + ReadFileTool 沙箱未指向越界/指向放行 2；真实临时文件 File.Exists 命中）。端到端效果需真实任务复测（用户决定）。
+> **边界**：沙箱下未显式给出的 run 目录外文件仍越界（隔离语义保持）；"盘下"作真实目录名（极少见）会被剥除，接受；输入无盘符路径走原相对文件名逻辑。
+
 > **10-12 读改混合定位强化（X1 绝对路径优先注入 + X2 方位词清洗）**
+
 > **现象**：复测"读取x:\盘下index.html文件，并修复它的语法错误"（工程=盘根 2000 文件/1380MB）——注入已给相对路径 index.html 全文，模型仍第 1 步 list_dir 盘根摸底（1分44秒 + 巨大上下文）。且日志 `[显式授权] 检测到写目标 x:\盘下index.html文件`——"盘下"被当路径成分（脏路径）。
 > **根因**：① 注入只给相对文件名，模型无绝对路径锚点 → 习惯性探索；② TryGetWriteTarget 通道1 `x:\盘下index.html文件` 无空格 → LooksLikeFile（含 .）→ 脏路径直接命中。
 > **修复（数据结构性，非提示词）**：X1=AgentLoop 注入块加绝对路径优先分支——`TryResolveAbsolutePath(input)`（盘符正则提取 → CleanPathSuffix 清洗 → File.Exists 校验）命中 → 注入**绝对路径** + 全文（模型直接锚定，无需 list_dir）；未命中回退 FindExistingProjectFileRef 相对名逻辑（行为不变）。X2=ProjectPathDetector 新增 `CleanPathSuffix`（① 剥尾部类别词"文件/目录/文件夹"，② 剥任意位置方位词"盘下/根目录下/目录下"——不剥独立"下"，防误伤"X:\下载"），TryGetWriteTarget 通道1 候选先清洗再判存在/形态（"盘下"误判修复）。

@@ -14,6 +14,10 @@ public sealed class ReadFileTool : AgentToolBase
     // 工作区根目录 + 工程根（可选，工程感知 P0）
     private readonly string _workspaceRoot;
     private readonly string? _projectRoot;
+    // 【10-12 B】任务级显式读目标：当前任务输入中显式给出的绝对路径文件（TryResolveAbsolutePath 命中）。
+    // 沙箱模式（无 use）读严格限定 run 目录，但用户主动在输入里写出路径 = 明确指向（给路径就干活）→ 放行；
+    // 敏感区仍源头硬拒。任务串行执行（CommandHub 一次一任务），单例设置无并发风险。
+    private string? _explicitReadTarget;
     // 单文件读取大小上限，防止一次读入过大文件
     private const int MaxBytes = 200 * 1024;
     // 大文件首读重定向阈值：工程模式下超过此大小且未带 offset → 拒绝并引导用符号定位
@@ -26,6 +30,12 @@ public sealed class ReadFileTool : AgentToolBase
         // 规范化路径
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
+    }
+
+    /// <summary>设置任务级显式读目标（AgentLoop 任务开始时注入；null 清除）。</summary>
+    public void SetExplicitReadTarget(string? fullPath)
+    {
+        _explicitReadTarget = string.IsNullOrWhiteSpace(fullPath) ? null : Path.GetFullPath(fullPath);
     }
 
     /// <summary>工具名。</summary>
@@ -73,8 +83,10 @@ public sealed class ReadFileTool : AgentToolBase
 
         // 【读策略 · 双根保护】沙箱模式（projectRoot null）：仅限工作区根内（隔离语义保持）；
         // 工程模式（用户显式授权）：默认放开——"给路径就干活"。
+        // 【10-12 B】沙箱例外：输入显式指向的绝对路径文件（用户主动给出路径 = 明确授权读）。
         // 两种模式统一：敏感区在读取动作【之前】源头硬拒——内容物理不进 chatHistory/SQLite/记忆库。
-        if (_projectRoot is null && !PathBoundary.IsInside(_workspaceRoot, fullPath))
+        if (_projectRoot is null && !PathBoundary.IsInside(_workspaceRoot, fullPath)
+            && (_explicitReadTarget is null || !fullPath.Equals(_explicitReadTarget, StringComparison.OrdinalIgnoreCase)))
             return "错误：路径越界。";
         if (SensitivePathGuard.IsDenied(fullPath))
             return $"错误：路径涉及敏感区（{fullPath}），禁止读取。";
