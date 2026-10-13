@@ -47,26 +47,26 @@ public sealed class DependencyAnalyzerTool : AgentToolBase
     }
     """;
 
-    public override Task<string> InvokeAsync(JsonElement args, CancellationToken ct)
+    public override Task<Agent.Core.Models.ToolResult> InvokeAsync(JsonElement args, CancellationToken ct)
     {
         if (_projectRoot is null)
-            return Task.FromResult("错误：analyze_deps 需要工程模式（先 use <路径> 或 --project）。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.NotProject, "错误：analyze_deps 需要工程模式（先 use <路径> 或 --project）。"));
 
         var relative = args.GetProperty("path").GetString()!;
         var fullPath = Path.GetFullPath(Path.Combine(_projectRoot, relative));
 
         // 【读策略 · 双根保护】工程模式放开 + 敏感区源头硬拒（analyze_deps 只服务工程模式）
         if (SensitivePathGuard.IsDenied(fullPath))
-            return Task.FromResult($"错误：路径涉及敏感区（{fullPath}），禁止读取。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.SensitivePath, $"错误：路径涉及敏感区（{fullPath}），禁止读取。"));
         if (!File.Exists(fullPath))
-            return Task.FromResult($"错误：文件不存在：{relative}");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.NotFound, $"错误：文件不存在：{relative}"));
 
         // 惰性构建符号索引（复用 find_symbol 的持久化索引）
         if (!_store.HasIndex(_projectRoot))
         {
             var built = _store.BuildAndSave(_projectRoot);
             if (built == 0)
-                return Task.FromResult("未在工程中发现可索引的代码符号（工程过大或无代码定义）。");
+                return Task.FromResult(Agent.Core.Models.ToolResult.Ok("未在工程中发现可索引的代码符号（工程过大或无代码定义）。"));
         }
         else
         {
@@ -76,7 +76,7 @@ public sealed class DependencyAnalyzerTool : AgentToolBase
 
         var symbols = _store.GetAll(_projectRoot);
         if (symbols.Count == 0)
-            return Task.FromResult("符号索引为空。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Ok("符号索引为空。"));
 
         var edges = DependencyAnalyzer.Build(_projectRoot, symbols);
         var norm = relative.Replace('\\', '/');
@@ -101,6 +101,6 @@ public sealed class DependencyAnalyzerTool : AgentToolBase
             sb.AppendLine($"    ← {r}");
 
         sb.AppendLine("（依赖基于类型符号引用，粗粒度；含注释/字符串内出现，仅供参考方向）");
-        return Task.FromResult(sb.ToString());
+        return Task.FromResult(Agent.Core.Models.ToolResult.Ok(sb.ToString()));
     }
 }

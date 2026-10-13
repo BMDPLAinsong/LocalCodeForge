@@ -60,7 +60,7 @@ public sealed class ReadFileTool : AgentToolBase
     """;
 
     /// <summary>执行工具。</summary>
-    public override async Task<string> InvokeAsync(JsonElement args, CancellationToken ct)
+    public override async Task<Agent.Core.Models.ToolResult> InvokeAsync(JsonElement args, CancellationToken ct)
     {
         // 取出 path 参数
         var relative = args.GetProperty("path").GetString()!;
@@ -87,9 +87,9 @@ public sealed class ReadFileTool : AgentToolBase
         // 两种模式统一：敏感区在读取动作【之前】源头硬拒——内容物理不进 chatHistory/SQLite/记忆库。
         if (_projectRoot is null && !PathBoundary.IsInside(_workspaceRoot, fullPath)
             && (_explicitReadTarget is null || !fullPath.Equals(_explicitReadTarget, StringComparison.OrdinalIgnoreCase)))
-            return "错误：路径越界。";
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.OutOfBounds, "错误：路径越界。");
         if (SensitivePathGuard.IsDenied(fullPath))
-            return $"错误：路径涉及敏感区（{fullPath}），禁止读取。";
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.SensitivePath, $"错误：路径涉及敏感区（{fullPath}），禁止读取。");
 
         // 文件不存在（【10-09 方案1】工程模式下附候选路径：同名/近似文件——数据驱动，
         // 消灭模型"猜路径 → 失败 → 继续猜"的确定性浪费；沙箱模式无工程索引，保持原样）
@@ -99,9 +99,9 @@ public sealed class ReadFileTool : AgentToolBase
             {
                 var candidates = ProjectScanner.FindFileCandidates(_projectRoot, relative);
                 if (candidates.Count > 0)
-                    return $"错误：文件不存在：{relative}。工程中相近文件（候选路径）：{string.Join(", ", candidates)}。请用候选路径重试。";
+                    return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.NotFound, $"错误：文件不存在：{relative}。工程中相近文件（候选路径）：{string.Join(", ", candidates)}。请用候选路径重试。");
             }
-            return $"错误：文件不存在：{relative}";
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.NotFound, $"错误：文件不存在：{relative}");
         }
 
         // 【大文件首读重定向】工程模式 + 大文件 + 未带 offset → 拒绝，强制走符号定位
@@ -111,9 +111,10 @@ public sealed class ReadFileTool : AgentToolBase
         if (_projectRoot is not null && info.Length > RedirectThreshold && !hasOffset)
         {
             var totalLines = File.ReadLines(fullPath).Count();
-            return $"错误：文件过大（{info.Length} bytes，约 {totalLines} 行）。" +
-                   $"请先调用 find_symbol <目标类/方法名> 或 analyze_code 获取符号地图定位目标位置，" +
-                   $"再使用 read_file 并携带 offset/limit 参数精确读取目标区间；不要整页翻阅大文件。";
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.TooLarge,
+                $"错误：文件过大（{info.Length} bytes，约 {totalLines} 行）。" +
+                $"请先调用 find_symbol <目标类/方法名> 或 analyze_code 获取符号地图定位目标位置，" +
+                $"再使用 read_file 并携带 offset/limit 参数精确读取目标区间；不要整页翻阅大文件。");
         }
 
         // 文件过大：不再拒绝，改分页（行级续读）——默认返回前 limit 行 + 总行数提示
@@ -136,6 +137,6 @@ public sealed class ReadFileTool : AgentToolBase
         }
 
         // 返回
-        return header + string.Join("\n", slice);
+        return Agent.Core.Models.ToolResult.Ok(header + string.Join("\n", slice));
     }
 }

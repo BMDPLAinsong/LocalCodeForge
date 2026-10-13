@@ -45,7 +45,7 @@ public sealed class ListDirTool : AgentToolBase
     """;
 
     /// <summary>执行工具。</summary>
-    public override Task<string> InvokeAsync(JsonElement args, CancellationToken ct)
+    public override Task<Agent.Core.Models.ToolResult> InvokeAsync(JsonElement args, CancellationToken ct)
     {
         // 取出 path 参数
         var relative = args.TryGetProperty("path", out var p) ? p.GetString() ?? "." : ".";
@@ -60,17 +60,17 @@ public sealed class ListDirTool : AgentToolBase
         // 统一：敏感区源头硬拒（内容不进上下文）。
         if (_projectRoot is null && !PathBoundary.IsInside(_workspaceRoot, fullPath))
         {
-            return Task.FromResult("错误：路径越界。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.OutOfBounds, "错误：路径越界。"));
         }
         if (SensitivePathGuard.IsDenied(fullPath))
         {
-            return Task.FromResult($"错误：路径涉及敏感区（{fullPath}），禁止读取。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.SensitivePath, $"错误：路径涉及敏感区（{fullPath}），禁止读取。"));
         }
 
         // 目录不存在
         if (!Directory.Exists(fullPath))
         {
-            return Task.FromResult($"错误：目录不存在：{relative}");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.NotFound, $"错误：目录不存在：{relative}"));
         }
 
         // 【防呆】条目上限 500：读放开后 list_dir C:\Users 可能几万行——封顶并提示缩小范围
@@ -79,9 +79,10 @@ public sealed class ListDirTool : AgentToolBase
         var files = Directory.GetFiles(fullPath);
         if (dirs.Length + files.Length > 500)
         {
-            return Task.FromResult(
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(
+                Agent.Core.Models.ToolErrorCodes.TooLarge,
                 $"错误：目录条目过多（{dirs.Length + files.Length} 项），仅返回前 500 项会造成信息失真。" +
-                $"请缩小范围（列出子目录后用 list_dir 逐级进入）。");
+                $"请缩小范围（列出子目录后用 list_dir 逐级进入）。"));
         }
 
         // 逐个子目录
@@ -102,10 +103,10 @@ public sealed class ListDirTool : AgentToolBase
         // 如果目录为空，返回明确提示（而不是空字符串）
         if (sb.Length == 0)
         {
-            return Task.FromResult($"(目录 {relative} 是空的，没有任何文件或子目录)");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Ok($"(目录 {relative} 是空的，没有任何文件或子目录)"));
         }
 
         // 返回文本结果
-        return Task.FromResult(sb.ToString());
+        return Task.FromResult(Agent.Core.Models.ToolResult.Ok(sb.ToString()));
     }
 }

@@ -3881,6 +3881,38 @@ Console.WriteLine("== 10-10 401/403 凭据信号收紧 ==");
     Check("长数字 1401 → 不误伤", !Agent.Infrastructure.Quality.OutputVerifier.HasCredentialFailure("count=1401", out _));
 }
 
+// ── 10-13 批次4 工具契约结构化：ToolResult 字段 / Code 词表 / 兼容转发 ──
+Console.WriteLine("== 10-13 工具契约结构化 ==");
+{
+    // Ok/Fail 字段语义
+    var ok = Agent.Core.Models.ToolResult.Ok("已写入 x.cs，共 3 字符。");
+    Check("Ok.Success=true", ok.Success);
+    Check("Ok.Code=null", ok.Code == null);
+    Check("Ok.Message 逐字保留", ok.Message == "已写入 x.cs，共 3 字符。");
+    var failRes = Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.OutOfBounds, "错误：路径越界。");
+    Check("Fail.Success=false", !failRes.Success);
+    Check("Fail.Code=OutOfBounds", failRes.Code == Agent.Core.Models.ToolErrorCodes.OutOfBounds);
+    Check("Fail.Message 逐字保留", failRes.Message == "错误：路径越界。");
+    // ToString == Message（渲染/E2E/事件存储零冲击的验收标准）
+    Check("ToString()==Message", failRes.ToString() == "错误：路径越界。");
+    // 兼容转发：旧字符串用法编译且语义等价
+    Check("转发 StartsWith 语义", failRes.StartsWith("错误："));
+    Check("转发 Contains 语义", failRes.Contains("路径越界"));
+    Check("转发 EndsWith 语义", ok.EndsWith("字符。"));
+    Check("转发 Length 语义", ok.Length == ok.Message.Length);
+    // implicit operator string
+    string s = ok;
+    Check("隐式转 string 取 Message", s == "已写入 x.cs，共 3 字符。");
+    // 词表对齐：现成 rejection code（tool_rejections 表落库码）必须能在 ToolErrorCodes 找到
+    Check("词表对齐 out_of_bounds", string.Equals(Agent.Core.Models.ToolErrorCodes.OutOfBounds, "out_of_bounds", StringComparison.OrdinalIgnoreCase) || Agent.Core.Models.ToolErrorCodes.OutOfBounds == "out_of_bounds");
+    Check("词表对齐 pd_conflict", Agent.Core.Models.ToolErrorCodes.PdConflict == "pd_conflict");
+    Check("词表对齐 read_only", Agent.Core.Models.ToolErrorCodes.ReadOnly == "read_only");
+    Check("词表对齐 project_file", Agent.Core.Models.ToolErrorCodes.ProjectFile == "project_file");
+    // 语义等价性：文本判定(IsToolSemanticFailure) 与 字段判定(!Success) 对同一 Message 结论一致
+    Check("文本判定与字段判定等价(失败)", Agent.Infrastructure.AgentLoop.IsToolSemanticFailure(failRes.Message) == !failRes.Success);
+    Check("文本判定与字段判定等价(成功)", Agent.Infrastructure.AgentLoop.IsToolSemanticFailure(ok.Message) == !ok.Success);
+}
+
 Console.WriteLine($"\n结果: {pass} 通过 / {fail} 失败");
 return fail == 0 ? 0 : 1;
 

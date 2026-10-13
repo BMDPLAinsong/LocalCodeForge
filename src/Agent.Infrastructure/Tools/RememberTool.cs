@@ -52,17 +52,17 @@ public sealed class RememberTool : AgentToolBase
     """;
 
     /// <summary>执行工具。</summary>
-    public override Task<string> InvokeAsync(JsonElement args, CancellationToken ct)
+    public override Task<Agent.Core.Models.ToolResult> InvokeAsync(JsonElement args, CancellationToken ct)
     {
         var topic = args.TryGetProperty("topic", out var t) ? t.GetString() : null;
         var content = args.TryGetProperty("content", out var c) ? c.GetString() : null;
         if (string.IsNullOrWhiteSpace(topic) || string.IsNullOrWhiteSpace(content))
-            return Task.FromResult("错误：topic 和 content 都不能为空。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.InvalidArg, "错误：topic 和 content 都不能为空。"));
 
         // 【任务5】决策记忆按主题打特征类标签（跨类注入时降权保留）
         _store.Add("model", topic, content,
             feature: Agent.Infrastructure.Routing.TaskFeatureClassifier
                 .Classify(topic ?? "").ToString());
-        return Task.FromResult($"已记住：{topic.Trim()}");
+        return Task.FromResult(Agent.Core.Models.ToolResult.Ok($"已记住：{topic.Trim()}"));
     }
 }

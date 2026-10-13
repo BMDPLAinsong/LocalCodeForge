@@ -89,7 +89,7 @@ public sealed class RunCommandTool : AgentToolBase
     """;
 
     /// <summary>执行工具。</summary>
-    public override async Task<string> InvokeAsync(JsonElement args, CancellationToken ct)
+    public override async Task<Agent.Core.Models.ToolResult> InvokeAsync(JsonElement args, CancellationToken ct)
     {
         // 取出 command 参数
         var command = args.GetProperty("command").GetString()!;
@@ -103,7 +103,7 @@ public sealed class RunCommandTool : AgentToolBase
         var sensitiveError = CheckSensitivePaths(command);
         if (sensitiveError is not null)
         {
-            return sensitiveError;
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.SensitiveCmd, sensitiveError);
         }
 
         // 【工程感知 §14-3t】工程模式路径边界：命令中的显式盘符路径必须落在
@@ -114,7 +114,7 @@ public sealed class RunCommandTool : AgentToolBase
             var boundaryError = CheckPathBoundary(command, _workspaceRoot, _projectRoot);
             if (boundaryError is not null)
             {
-                return boundaryError;
+                return Agent.Core.Models.ToolResult.Fail(boundaryError.Value.Code, boundaryError.Value.Message);
             }
 
             // 【D1 衍生】项目名幻觉校验（10-10 修正基准）：命令中的 .csproj 引用必须以
@@ -126,7 +126,7 @@ public sealed class RunCommandTool : AgentToolBase
             var projError = CheckProjectName(command, ResolveWorkingDirectory(_workspaceRoot, _projectRoot, _projectWriteEnabled));
             if (projError is not null)
             {
-                return projError;
+                return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.NotFound, projError);
             }
 
             // 【10-11 ③ 多 csproj 歧义】dotnet run 不带 --project 且 cwd 顶层 ≥2 个 .csproj
@@ -135,7 +135,7 @@ public sealed class RunCommandTool : AgentToolBase
             var ambError = CheckDotnetRunAmbiguity(command, ResolveWorkingDirectory(_workspaceRoot, _projectRoot, _projectWriteEnabled));
             if (ambError is not null)
             {
-                return ambError;
+                return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.InvalidArg, ambError);
             }
         }
 
@@ -146,14 +146,14 @@ public sealed class RunCommandTool : AgentToolBase
         if (!AllowedCommands.Contains(firstToken))
             // 【修复】返回体必须带非 0 退出码，否则下游（Orchestrator/AgentLoop）
             // 只认"退出码：N"判定失败，会把拒绝误判成成功
-            return $"错误：命令 {firstToken} 不在白名单中。\n退出码：127";
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.CmdNotAllowed, $"错误：命令 {firstToken} 不在白名单中。\n退出码：127");
 
         // 【修复】拒绝 inline 执行——必须在启动进程之前检查
         // （原来放在进程跑完之后，命令实际已经执行过了）
         if (command.Contains(" -c ", StringComparison.OrdinalIgnoreCase) ||
             command.Contains(" -e ", StringComparison.OrdinalIgnoreCase))
         {
-            return "错误：出于安全考虑，禁止使用 -c / -e 的内联执行方式。请改用脚本文件。\n退出码：126";
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.InlineExec, "错误：出于安全考虑，禁止使用 -c / -e 的内联执行方式。请改用脚本文件。\n退出码：126");
         }
 
         // 【新增】Python 解释器归一化（2026-09-22）：
@@ -205,7 +205,7 @@ public sealed class RunCommandTool : AgentToolBase
             try { process.Kill(entireProcessTree: true); } catch { /* 忽略 */ }
             // 【修复】带非 0 退出码（124 = timeout 惯用码），
             // 并注明常见原因：交互式程序（ReadLine/input）等待输入会一直挂起
-            return $"错误：命令执行超时（>{timeoutSeconds}秒）。常见原因：程序含交互输入（Console.ReadLine/input）或死循环。\n退出码：124";
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.Timeout, $"错误：命令执行超时（>{timeoutSeconds}秒）。常见原因：程序含交互输入（Console.ReadLine/input）或死循环。\n退出码：124");
         }
 
         // 拿到输出
@@ -219,7 +219,7 @@ public sealed class RunCommandTool : AgentToolBase
         if (!string.IsNullOrWhiteSpace(stderr)) sb.AppendLine("--- stderr ---").AppendLine(stderr);
 
         // 返回
-        return sb.ToString();
+        return Agent.Core.Models.ToolResult.Ok(sb.ToString());
     }
 
     /// <summary>
@@ -350,14 +350,14 @@ public sealed class RunCommandTool : AgentToolBase
     /// 1) 命令含 .. 路径片段（..\ 或 ../）→ 拒绝（防穿越逃逸）。
     /// 2) 显式盘符绝对路径（含引号包裹的空格路径）→ Path.GetFullPath 解析，
     ///    必须位于任务工作区 或 工程根 内，否则拒绝。
-    /// 返回 null 表示放行，否则返回错误消息（带非 0 退出码）。
+    /// 返回 (Code, Message) 表示拒绝；null 表示放行（结构化契约：调用方直接读 Code 包 ToolResult）。
     /// </summary>
-    private static string? CheckPathBoundary(string command, string workspaceRoot, string projectRoot)
+    private static (string Code, string Message)? CheckPathBoundary(string command, string workspaceRoot, string projectRoot)
     {
         // 1) 路径穿越
         if (System.Text.RegularExpressions.Regex.IsMatch(command, @"\.\.(\\|/)"))
         {
-            return "错误：路径越界（命令含路径穿越 ..），拒绝执行。\n退出码：126";
+            return (Agent.Core.Models.ToolErrorCodes.PathEscape, "错误：路径越界（命令含路径穿越 ..），拒绝执行。\n退出码：126");
         }
 
         // 2) 显式盘符绝对路径：引号包裹的完整路径 或 未加引号的盘符路径
@@ -374,7 +374,7 @@ public sealed class RunCommandTool : AgentToolBase
             var insideProject = Agent.Infrastructure.Project.PathBoundary.IsInside(projectRoot, full);
             if (!insideWorkspace && !insideProject)
             {
-                return $"错误：路径越界（命令引用工作区/工程根之外的路径）：{token}\n退出码：126";
+                return (Agent.Core.Models.ToolErrorCodes.OutOfBounds, $"错误：路径越界（命令引用工作区/工程根之外的路径）：{token}\n退出码：126");
             }
         }
 

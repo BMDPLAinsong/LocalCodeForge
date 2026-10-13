@@ -43,21 +43,21 @@ public sealed class FindSymbolTool : AgentToolBase
     }
     """;
 
-    public override Task<string> InvokeAsync(JsonElement args, CancellationToken ct)
+    public override Task<Agent.Core.Models.ToolResult> InvokeAsync(JsonElement args, CancellationToken ct)
     {
         if (_projectRoot is null)
-            return Task.FromResult("错误：find_symbol 需要工程模式（先 use <路径> 或 --project）。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.NotProject, "错误：find_symbol 需要工程模式（先 use <路径> 或 --project）。"));
 
         var name = args.GetProperty("name").GetString()?.Trim() ?? "";
         if (name.Length == 0)
-            return Task.FromResult("错误：name 不能为空。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.InvalidArg, "错误：name 不能为空。"));
 
         // 惰性构建：工程未索引 → 首次调用建索引（SQLite 持久化，后续秒查）
         if (!_store.HasIndex(_projectRoot))
         {
             var built = _store.BuildAndSave(_projectRoot);
             if (built == 0)
-                return Task.FromResult("未在工程中发现可索引的代码符号（无 .cs/.py/.java/.go/.js/.ts 定义或工程过大被跳过）。");
+                return Task.FromResult(Agent.Core.Models.ToolResult.Ok("未在工程中发现可索引的代码符号（无 .cs/.py/.java/.go/.js/.ts 定义或工程过大被跳过）。"));
         }
         else
         {
@@ -77,7 +77,7 @@ public sealed class FindSymbolTool : AgentToolBase
         if (hits.Count == 0)
         {
             // 无精确命中 → 前缀模糊提示（相似符号）
-            return Task.FromResult($"未找到符号 {name} 的定义。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.NotFound, $"未找到符号 {name} 的定义。"));
         }
 
         var sb = new StringBuilder();
@@ -92,6 +92,6 @@ public sealed class FindSymbolTool : AgentToolBase
         sb.AppendLine(
             $"操作指引：请用 read_file 携带 offset={start}（limit=30）读取 [{first.File}] 第 {first.Line} 行附近内容确认上下文，" +
             $"确认后调用 edit_file 修改该位置。不要整页读取大文件。");
-        return Task.FromResult(sb.ToString());
+        return Task.FromResult(Agent.Core.Models.ToolResult.Ok(sb.ToString()));
     }
 }

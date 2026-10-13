@@ -33,6 +33,6 @@ public interface IAgentTool
     /// </summary>
     /// <param name="args">LLM 按 Schema 生成的参数</param>
     /// <param name="ct">取消令牌</param>
-    /// <returns>给 LLM 看的文本输出</returns>
-    Task<string> InvokeAsync(JsonElement args, CancellationToken ct);
+    /// <returns>结构化工具结果（Message 即给 LLM 看的文本输出，文本逐字兼容旧契约）</returns>
+    Task<Agent.Core.Models.ToolResult> InvokeAsync(JsonElement args, CancellationToken ct);
 }

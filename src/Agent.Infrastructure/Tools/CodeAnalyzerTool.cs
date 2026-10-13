@@ -60,7 +60,7 @@ public sealed class CodeAnalyzerTool : AgentToolBase
     }
     """;
 
-    public override Task<string> InvokeAsync(JsonElement args, CancellationToken ct)
+    public override Task<Agent.Core.Models.ToolResult> InvokeAsync(JsonElement args, CancellationToken ct)
     {
         var relative = args.GetProperty("path").GetString()!;
         var baseRoot = _projectRoot ?? _workspaceRoot;
@@ -68,16 +68,16 @@ public sealed class CodeAnalyzerTool : AgentToolBase
 
         // 【读策略 · 双根保护】沙箱模式仅限工作区根内；工程模式放开。敏感区源头硬拒。
         if (_projectRoot is null && !PathBoundary.IsInside(_workspaceRoot, fullPath))
-            return Task.FromResult("错误：路径越界。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.OutOfBounds, "错误：路径越界。"));
         if (SensitivePathGuard.IsDenied(fullPath))
-            return Task.FromResult($"错误：路径涉及敏感区（{fullPath}），禁止读取。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.SensitivePath, $"错误：路径涉及敏感区（{fullPath}），禁止读取。"));
 
         if (!File.Exists(fullPath))
-            return Task.FromResult($"错误：文件不存在：{relative}");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.NotFound, $"错误：文件不存在：{relative}"));
 
         var info = new FileInfo(fullPath);
         if (info.Length > MaxBytes)
-            return Task.FromResult($"错误：文件过大（{info.Length} bytes）。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.TooLarge, $"错误：文件过大（{info.Length} bytes）。"));
 
         var ext = Path.GetExtension(fullPath).ToLowerInvariant();
         var content = File.ReadAllText(fullPath);
@@ -102,13 +102,13 @@ public sealed class CodeAnalyzerTool : AgentToolBase
             var raw = r.GetString();
             var m = RangeRe.Match(raw ?? "");
             if (!m.Success)
-                return Task.FromResult("错误：range 格式应为 起-止（1-based 行号，含边界），如 range=\"1500-1550\"。");
+                return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.InvalidArg, "错误：range 格式应为 起-止（1-based 行号，含边界），如 range=\"1500-1550\"。"));
             var s = int.Parse(m.Groups[1].Value);
             var e = int.Parse(m.Groups[2].Value);
             if (s < 1 || e < s)
-                return Task.FromResult($"错误：range 无效（{raw}）。起止应为 1-based 行号且 起 ≤ 止。");
+                return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.InvalidArg, $"错误：range 无效（{raw}）。起止应为 1-based 行号且 起 ≤ 止。"));
             if (s > lines.Length)
-                return Task.FromResult($"错误：range 起点 {s} 超出文件总行数 {lines.Length}。");
+                return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.InvalidArg, $"错误：range 起点 {s} 超出文件总行数 {lines.Length}。"));
             startLine = s - 1;
             endLine = Math.Min(e, lines.Length);
             rangeDesc = $" | 分析行段: {s}-{endLine}";
@@ -132,7 +132,7 @@ public sealed class CodeAnalyzerTool : AgentToolBase
             sb.Append("（非代码文件，无符号索引）");
         }
 
-        return Task.FromResult(sb.ToString());
+        return Task.FromResult(Agent.Core.Models.ToolResult.Ok(sb.ToString()));
     }
 
     /// <summary>统一渲染：全量超限截断（前 HeadSymbolEntries + 省略行 + 定向引导），否则全量输出。</summary>

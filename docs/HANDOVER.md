@@ -19,6 +19,11 @@
 
 
 
+> **10-13 批次4 架构缺陷盘点（① 工具契约结构化：ToolResult 落地）**
+> 根因级项：工具返回从"错误：xxx"文本前缀升级为结构化契约。新 `ToolResult(Success, Code, Message)` + `ToolErrorCodes` 16 码词表（单一来源，与 tool_rejections 落库码 out_of_bounds/pd_conflict/read_only/project_file/sensitive 对齐）。双轨消费：模型/渲染/E2E 仍吃 Message 文本（`ToString()==Message` + Contains/StartsWith/EndsWith/Length 兼容转发 + implicit operator string），机器判定读 Success/Code 字段——54 处 tests InvokeAsync 零改动编译通过。
+> 改造面：IAgentTool/AgentToolBase 签名 `Task<ToolResult>`；10 工具（Remember/FindSymbol/ListDir/DependencyAnalyzer/CreateDir/ReadFile/WriteFile/EditFile/CodeAnalyzer/RunCommand）错误点按语义给码（OutOfBounds/SensitivePath/NotFound/TooLarge/InvalidArg/PdConflict/ProjectFile/ReadOnly/InteractiveInput/CmdNotAllowed/InlineExec/Timeout/PathEscape/SensitiveCmd），成功点 Ok。RunCommandTool 的 CheckPathBoundary 元组化 (Code, Message)，InvokeAsync 直接包 Fail；CheckProjectName 保持 string?（public、tests 用），调用处包 NotFound。
+> 接入点：AgentLoop.ExecuteToolAsync `(output, toolResult.Success)`（1227 与 1360/1363 从文本前缀改为读 Success 字段；SK BuildPlugin 函数结果保持字符串契约）；Orchestrator 三处（677 WriteFileAsync / 706 RunCommandAsync 检查 0 / 874 ReadFileAsync）读 Success 字段；run_command stdout/stderr 提取继续在 Message 上做（显式 .Message）。IsToolSemanticFailure（渲染后文本的语义函数）与 `错误：工具` 特例豁免保留。
+> 验证：build 0 错误 / tests 788 通过（770+18 新增：Ok/Fail 字段、Code 词表对齐、兼容转发、文本判定与字段判定等价性）/ 无头冒烟 SMOKE_EXIT=0。后续轮：FailureCategorizer 读 Code（需与 RecordMetric 存储格式对齐）、TestRunnerService 判测试输出（进程输出语义，保持文本）。
 > **10-13 批次3 架构缺陷盘点（② 模型后端超时收窄 + ⑦ 记忆索引）**
 > **背景**：架构盘点批次 3。② 盘点口径修正：KernelFactory 经排查**已支持双 Provider**（ollama → /v1 兼容端点、openai → 任意 OpenAI 兼容服务，含 strata）——"只能 Ollama"不成立；真缺口是 **openai 分支硬编码 5 分钟超时**（strata 本地 30B 走 openai 分支被 5 分钟腰斩，与 ollama 分支 20 分钟不一致）。⑦ 记忆搜索实证**全表扫描**：`SELECT ... FROM agent_memory` 拉全部行到 C# 逐个 Contains（N 行 × M 关键词）。
 > **② 修复**：KernelFactory openai 分支超时 `5 分钟硬编码` → `options.OllamaHttpTimeoutMinutes`（语义=本地模型 HTTP 超时，云端短任务可配置调小）——strata 切换从此超时口径一致。

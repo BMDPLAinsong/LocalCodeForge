@@ -84,7 +84,7 @@ public sealed class WriteFileTool : AgentToolBase
     """;
 
     /// <summary>执行工具。</summary>
-    public override async Task<string> InvokeAsync(JsonElement args, CancellationToken ct)
+    public override async Task<Agent.Core.Models.ToolResult> InvokeAsync(JsonElement args, CancellationToken ct)
     {
         // 取出 path
         var relative = args.GetProperty("path").GetString()!;
@@ -108,7 +108,7 @@ public sealed class WriteFileTool : AgentToolBase
             {
                 var err = "错误：内容为空，拒绝写入。如果需要创建空占位文件（如 __init__.py），请写入单个换行符 \"\\n\"。";
                 await RecordRejectionAsync("empty_content", relative, err, ct);
-                return err;
+                return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.InvalidArg, err);
             }
 
             // 白名单文件允许空内容——继续往下走，不做替换
@@ -122,7 +122,7 @@ public sealed class WriteFileTool : AgentToolBase
         if (interactiveError is not null)
         {
             await RecordRejectionAsync("interactive", relative, interactiveError, ct);
-            return interactiveError;
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.InteractiveInput, interactiveError);
         }
 
         // 【后处理 2】csproj 文件名检查：如果是 ".csproj" 或异常名，自动改名
@@ -163,7 +163,7 @@ public sealed class WriteFileTool : AgentToolBase
         {
             var err = "错误：路径越界。";
             await RecordRejectionAsync("out_of_bounds", relative, err, ct);
-            return err;
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.OutOfBounds, err);
         }
 
         // 【批次1·E】敏感区源头兜底：白名单通过但路径命中敏感区（授权入口已滤，此处防漏网）
@@ -172,7 +172,7 @@ public sealed class WriteFileTool : AgentToolBase
         {
             var err = "错误：路径属于敏感区（系统/凭据），拒绝写入。";
             await RecordRejectionAsync("sensitive", relative, err, ct);
-            return err;
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.SensitivePath, err);
         }
 
         // 【10-08 B 扩展】同文件内自重复类型定义检测（独立于工程模式：沙箱/工程均拦截）。
@@ -187,7 +187,7 @@ public sealed class WriteFileTool : AgentToolBase
                 var err = $"错误：{relative} 的新内容自身重复定义类型：{string.Join("；", selfDups)}。\n" +
                        "请只保留一份该类型定义（删除多余副本），不要在同一文件里重复定义同名类型。";
                 await RecordRejectionAsync("pd_conflict", relative, err, ct);
-                return err;
+                return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.PdConflict, err);
             }
         }
 
@@ -209,7 +209,7 @@ public sealed class WriteFileTool : AgentToolBase
                 var err = $"错误：工程模式禁止修改/新建项目文件 {relative}。工程结构由工程根已有项目锚定；" +
                        "本任务只需新增/修改 .cs 源文件，无需改动项目文件。\n退出码：126";
                 await RecordRejectionAsync("project_file", relative, err, ct);
-                return err;
+                return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.ProjectFile, err);
             }
 
             var conflicts = TypeConflictDetector.DetectDuplicateTypes(_projectRoot, fullPath, content);
@@ -229,14 +229,14 @@ public sealed class WriteFileTool : AgentToolBase
                            $"必须改用 edit_file 做局部修改（保留文件其余内容）；如需定义新类型，请用 write_file 写入独立的新文件名。\n" +
                            $"{hint}";
                     await RecordRejectionAsync("pd_conflict", relative, err, ct);
-                    return err;
+                    return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.PdConflict, err);
                 }
 
                 var err1 = $"错误：检测到类型重复定义：{string.Join("；", conflicts)}。\n" +
                        $"{hint}\n" +
                        $"请勿在 {relative} 中重复定义工程已有类型；如需修改已有类型，请用 edit_file 局部编辑，不要整体重写文件。";
                 await RecordRejectionAsync("pd_conflict", relative, err1, ct);
-                return err1;
+                return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.PdConflict, err1);
             }
         }
 
@@ -250,7 +250,7 @@ public sealed class WriteFileTool : AgentToolBase
             {
                 var err = $"错误：工程只读模式（use 未带 --write），拒绝写入工程文件 {relative}。\n如需修改工程文件，请使用 use --write 开启工程可写后重试。";
                 await RecordRejectionAsync("read_only", relative, err, ct);
-                return err;
+                return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.ReadOnly, err);
             }
         }
 
@@ -310,7 +310,7 @@ public sealed class WriteFileTool : AgentToolBase
             msg += $"\n[自动补全] 检测到缺少 .csproj，已创建 {autoCreatedCsproj}";
         }
 
-        return msg;
+        return Agent.Core.Models.ToolResult.Ok(msg);
     }
 
     // ─────────── 后处理 ───────────

@@ -1217,14 +1217,16 @@ public sealed class AgentLoop : IAgentLoop
                 name = name[(dashIndex + 1)..];
             }
 
-            var output = await tool.InvokeAsync(args, ct);
+            // 【10-13 批次4】工具契约结构化：InvokeAsync 返回 ToolResult（Success/Code/Message）。
+            // 双轨消费：模型/渲染仍吃 Message 文本；机器判定读 Success 字段（不再匹配"错误："前缀）。
+            var toolResult = await tool.InvokeAsync(args, ct);
+            var output = toolResult.Message;
 
             // ─────────── 特殊处理 run_command ───────────
             if (name == "run_command")
             {
-                // 【修复】工具层拒绝（超时/白名单）直接判失败
-                // 超时的输出以"错误"开头且不带退出码，原逻辑会误判为成功
-                if (output.StartsWith("错误", StringComparison.Ordinal))
+                // 【修复】工具层拒绝（超时/白名单/路径边界）直接判失败——读结构化 Success 字段
+                if (!toolResult.Success)
                 {
                     return (output, false);
                 }
@@ -1357,10 +1359,10 @@ public sealed class AgentLoop : IAgentLoop
                 }
             }
 
-            return (output, true);
+            return (output, toolResult.Success);
             }
 
-            return (output, true);
+            return (output, toolResult.Success);
         }
         catch (Exception ex)
         {
@@ -1466,7 +1468,9 @@ public sealed class AgentLoop : IAgentLoop
                 {
                     var dict = args.ToDictionary(kv => kv.Key, kv => kv.Value);
                     var json = JsonSerializer.SerializeToElement(dict);
-                    return await tool.InvokeAsync(json, ct);
+                    // 【10-13 批次4】SK 函数结果保持字符串契约（ToolResult 双轨：字段仅供机器判定）
+                    var r = await tool.InvokeAsync(json, ct);
+                    return r.Message;
                 },
                 functionName: tool.Name,
                 description: tool.Description);

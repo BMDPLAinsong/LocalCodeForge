@@ -55,7 +55,7 @@ public sealed class CreateDirTool : AgentToolBase
     """;
 
     /// <summary>执行工具。</summary>
-    public override Task<string> InvokeAsync(JsonElement args, CancellationToken ct)
+    public override Task<Agent.Core.Models.ToolResult> InvokeAsync(JsonElement args, CancellationToken ct)
     {
         var relative = args.GetProperty("path").GetString()!;
 
@@ -69,15 +69,15 @@ public sealed class CreateDirTool : AgentToolBase
             && PathBoundary.IsInside(_projectRoot, fullPath);
         var insideExplicit = _explicitWriteRoots.Any(r => PathBoundary.IsInside(r, fullPath));
         if (!insideWorkspace && !insideProject && !insideExplicit)
-            return Task.FromResult("错误：路径越界。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.OutOfBounds, "错误：路径越界。"));
 
         // 【批次1·E】敏感区源头兜底（授权入口已滤，此处防漏网）
         if (SensitivePathGuard.IsDenied(fullPath))
-            return Task.FromResult("错误：路径属于敏感区（系统/凭据），拒绝创建。");
+            return Task.FromResult(Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.SensitivePath, "错误：路径属于敏感区（系统/凭据），拒绝创建。"));
 
         // 创建（幂等）
         Directory.CreateDirectory(fullPath);
 
-        return Task.FromResult($"已创建目录 {relative}。");
+        return Task.FromResult(Agent.Core.Models.ToolResult.Ok($"已创建目录 {relative}。"));
     }
 }

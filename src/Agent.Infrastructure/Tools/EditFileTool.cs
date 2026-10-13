@@ -88,7 +88,7 @@ public sealed class EditFileTool : AgentToolBase
     """;
 
     /// <summary>执行工具。</summary>
-    public override async Task<string> InvokeAsync(JsonElement args, CancellationToken ct)
+    public override async Task<Agent.Core.Models.ToolResult> InvokeAsync(JsonElement args, CancellationToken ct)
     {
         var relative = args.GetProperty("path").GetString()!;
         var oldStr = args.GetProperty("old_string").GetString()!;
@@ -99,7 +99,7 @@ public sealed class EditFileTool : AgentToolBase
         {
             var err = "错误：old_string 不能为空。如需向空文件写入内容，请用 write_file。";
             await RecordRejectionAsync("bad_args", relative, err, ct);
-            return err;
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.InvalidArg, err);
         }
 
         // 解析基准：工程可写时以工程根为基准（工程感知 P1），否则任务目录
@@ -116,7 +116,7 @@ public sealed class EditFileTool : AgentToolBase
         {
             var err = "错误：路径越界。";
             await RecordRejectionAsync("out_of_bounds", relative, err, ct);
-            return err;
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.OutOfBounds, err);
         }
 
         // 【批次1·E】敏感区源头兜底（授权入口已滤，此处防漏网）
@@ -124,7 +124,7 @@ public sealed class EditFileTool : AgentToolBase
         {
             var err = "错误：路径属于敏感区（系统/凭据），拒绝编辑。";
             await RecordRejectionAsync("sensitive", relative, err, ct);
-            return err;
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.SensitivePath, err);
         }
 
         // 【10-08 B 扩展】编辑内容自重复类型定义检测（独立于工程模式）。
@@ -138,7 +138,7 @@ public sealed class EditFileTool : AgentToolBase
                 var err = $"错误：{relative} 的编辑内容自身重复定义类型：{string.Join("；", selfDups)}。\n" +
                        "请只保留一份该类型定义（删除多余副本），不要在同一文件里重复定义同名类型。";
                 await RecordRejectionAsync("pd_conflict", relative, err, ct);
-                return err;
+                return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.PdConflict, err);
             }
         }
 
@@ -157,7 +157,7 @@ public sealed class EditFileTool : AgentToolBase
                 var err = $"错误：工程模式禁止修改项目文件 {relative}。工程结构由工程根已有项目锚定；" +
                        "本任务只需新增/修改 .cs 源文件，无需改动项目文件。\n退出码：126";
                 await RecordRejectionAsync("project_file", relative, err, ct);
-                return err;
+                return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.ProjectFile, err);
             }
 
             var conflicts = TypeConflictDetector.DetectDuplicateTypes(_projectRoot, fullPath, newStr);
@@ -170,7 +170,7 @@ public sealed class EditFileTool : AgentToolBase
                        $"{hint}\n" +
                        $"请勿在 {relative} 中重复定义工程已有类型；如需修改已有类型，请替换类型内部实现而不是重新定义。";
                 await RecordRejectionAsync("pd_conflict", relative, err, ct);
-                return err;
+                return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.PdConflict, err);
             }
         }
 
@@ -188,7 +188,7 @@ public sealed class EditFileTool : AgentToolBase
             {
                 var err = $"错误：工程只读模式（use 未带 --write），拒绝修改工程文件 {relative}。\n如需修改工程文件，请使用 use --write 开启工程可写后重试。";
                 await RecordRejectionAsync("read_only", relative, err, ct);
-                return err;
+                return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.ReadOnly, err);
             }
         }
 
@@ -197,7 +197,7 @@ public sealed class EditFileTool : AgentToolBase
         {
             var err = $"错误：文件不存在：{relative}。请先用 write_file 创建。";
             await RecordRejectionAsync("not_found", relative, err, ct);
-            return err;
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.NotFound, err);
         }
 
         // 读取内容
@@ -221,13 +221,13 @@ public sealed class EditFileTool : AgentToolBase
                     var err = $"错误：在 {relative} 中找不到 old_string，且该文件自最近备份（{backupHit.Stamp}）后内容已变化" +
                            "——疑似被外部/前一任务修改（漂移）。请先 read_file 查看当前内容后重试；如需放弃本次改动可 rollback 恢复。";
                     await RecordRejectionAsync("drift", relative, err, ct);
-                    return err;
+                    return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.NotFound, err);
                 }
             }
 
             var err2 = $"错误：在 {relative} 中找不到 old_string。请先用 read_file 查看文件当前内容。";
             await RecordRejectionAsync("old_not_found", relative, err2, ct);
-            return err2;
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.NotFound, err2);
         }
 
         // 检查唯一性
@@ -236,7 +236,7 @@ public sealed class EditFileTool : AgentToolBase
         {
             var err3 = $"错误：old_string 在 {relative} 中出现了多次，请扩大上下文使其唯一。";
             await RecordRejectionAsync("not_unique", relative, err3, ct);
-            return err3;
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.InvalidArg, err3);
         }
 
         // 执行替换
@@ -248,7 +248,7 @@ public sealed class EditFileTool : AgentToolBase
         if (interactiveError is not null)
         {
             await RecordRejectionAsync("interactive", relative, interactiveError, ct);
-            return interactiveError;
+            return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.InteractiveInput, interactiveError);
         }
 
         if (ext == ".py")
@@ -259,6 +259,6 @@ public sealed class EditFileTool : AgentToolBase
         // 写回
         await File.WriteAllTextAsync(fullPath, updated, ct);
 
-        return $"已修改 {relative}：替换 {oldStr.Length} 字符 → {newStr.Length} 字符。";
+        return Agent.Core.Models.ToolResult.Ok($"已修改 {relative}：替换 {oldStr.Length} 字符 → {newStr.Length} 字符。");
     }
 }

@@ -44,5 +44,5 @@ public abstract class AgentToolBase : IAgentTool
     }
 
     /// <summary>执行工具，子类实现。</summary>
-    public abstract Task<string> InvokeAsync(JsonElement args, CancellationToken ct);
+    public abstract Task<Agent.Core.Models.ToolResult> InvokeAsync(JsonElement args, CancellationToken ct);
 }

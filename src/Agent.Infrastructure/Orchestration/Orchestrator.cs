@@ -673,8 +673,9 @@ public sealed class Orchestrator : IOrchestrator
 
         try
         {
+            // 【10-13 批次4】读结构化 Success 字段（不再匹配"错误："前缀）
             var result = await tool.InvokeAsync(args, ct);
-            var ok = !result.StartsWith("错误");
+            var ok = result.Success;
             return (ok, result);
         }
         catch (Exception ex)
@@ -698,12 +699,13 @@ public sealed class Orchestrator : IOrchestrator
 
         try
         {
-            var result = await tool.InvokeAsync(args, ct);
+            // 【10-13 批次4】ToolResult 双轨：Success 供判定，Message 文本供后续解析（stdout/stderr 提取）
+            var toolResult = await tool.InvokeAsync(args, ct);
+            var result = toolResult.Message;
 
-            // ─────────── 检查 0：工具层拒绝（超时/白名单）───────────
-            // 【修复】超时、白名单拒绝等输出以"错误"开头且可能不带退出码，
-            // 必须判失败，否则交互式死循环程序会被误判为"验证通过"
-            if (result.StartsWith("错误", StringComparison.Ordinal))
+            // ─────────── 检查 0：工具层拒绝（超时/白名单/路径边界）───────────
+            // 【修复】读结构化 Success 字段（超时/白名单拒绝不再靠"错误"前缀文本判定）
+            if (!toolResult.Success)
             {
                 return (false, result);
             }
@@ -871,7 +873,7 @@ public sealed class Orchestrator : IOrchestrator
         try
         {
             var content = await tool.InvokeAsync(args, ct);
-            return content.StartsWith("错误") ? null : content;
+            return content.Success ? content.Message : null;
         }
         catch
         {
