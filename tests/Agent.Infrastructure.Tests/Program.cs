@@ -138,5 +138,9 @@ Suites_OutputVerifier.Run3885();
 // ── 批次6 ⑧ 能力分层断言（无标题，追加于 91 区段之后，不进入 baseline 顺序核验）──
 Suites_Routing.RunToolLayering();
 
+// ── 批次7 ⑨⑩ 断言（无标题，追加于 91 区段之后）──
+Suites_Routing.RunDeterministicClassifier();
+await Suites_Dashboard.RunEventSchemaVersion();
+
 Console.WriteLine($"\n结果: {Pass} 通过 / {Fail} 失败");
 return Fail == 0 ? 0 : 1;

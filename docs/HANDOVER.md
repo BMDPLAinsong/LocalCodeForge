@@ -19,7 +19,21 @@
 
 
 
-> > > **10-13 批次6 架构缺陷盘点（⑧ 能力分层：工具按目标服务分层注入）**
+> > > > **10-13 批次7 架构缺陷盘点（⑨ 单模型串行 + ⑩ 事件 schema 版本化）**
+> ⑨ 单模型串行（用户确认解读 A=意图分类去模型化）：热路径此前"多模型串行"——L2 意图
+> 分类先调独立 classifier（qwen2.5:1.5b）再调主模型；而 L0/L0.5/L1 三层已全确定性规则。
+> 新增 DeterministicIntentClassifier（纯词表六类判定：Search→ComplexReason→FileProcess
+> (IsReadTask)→CodeGenerate(IsWriteTask)→SimpleQA→Unknown；Search 词表不含文件读词防
+> 读任务误判走云端）；DI 注册切换（模型版 IntentClassifier 类保留可一行回退）。任务内
+> 模型调用收敛为"主模型单模型串行"：省一次 1.5b 调用 / 少一个常驻模型依赖 / 分类确定。
+> ⑩ 事件 schema 无版本：task_events 表此前无 schema 版本列、payload 无版本标签——schema
+> 演进无锚点。TaskEventStore 加 CurrentSchemaVersion=1 + 表 schema_version 列（DEFAULT 1）
+> + 老库 PRAGMA 检测 ALTER 补列迁移 + StoredEvent 加 SchemaVersion 字段（读写往返携带）。
+> **验证**：build 0 错误 / tests **810 通过 0 失败**（799+11 新增：⑨ 7 断言 + ⑩ 4 断言，
+> 无标题不污染 91 顺序核验）/ 91 标题顺序一致 / 无头冒烟健康检查 4 OK。
+> 架构缺陷盘点 10 项至此全部处理（①~⑩）。
+
+**10-13 批次6 架构缺陷盘点（⑧ 能力分层：工具按目标服务分层注入）**
 > 根因级项：AgentLoop.BuildPlugin 无条件全量注入 10 个工具——small/agent_pro/large 三层模型
 > 看到完全相同工具集（含 run_command 危险工具、analyze_code/dependency_analyzer/find_symbol
 > 分析类、remember 记忆类），低层模型拿满权限，能力不分层。

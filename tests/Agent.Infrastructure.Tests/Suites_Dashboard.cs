@@ -459,4 +459,50 @@ public static class Suites_Dashboard
             }
         }
     }
+
+    // ── 批次7 ⑩ 事件 schema 版本：task_events 版本列 + 老库迁移（无标题，追加于 91 区段之后）──
+    public static async Task RunEventSchemaVersion()
+    {
+        var ws = Path.Combine(TestTmp, "ev-schema");
+        Directory.CreateDirectory(ws);
+
+        // 1. 新库：建表默认带 schema_version=1，写入/读取往返携带版本
+        var db1 = Path.Combine(ws, "new.db");
+        var store1 = new Agent.Infrastructure.Events.TaskEventStore(db1);
+        store1.RecordAsync("t1", 0, new Agent.Core.Models.AgentEvent.Thinking("x"));
+        var evs1 = store1.GetEventsAsync("t1");
+        Check("事件 schema：常量版本=1", Agent.Infrastructure.Events.TaskEventStore.CurrentSchemaVersion == 1);
+        Check("事件 schema：新库写入记录版本=1",
+            evs1.Count == 1 && evs1[0].SchemaVersion == Agent.Infrastructure.Events.TaskEventStore.CurrentSchemaVersion);
+
+        // 2. 老库迁移：手工建旧 schema（无 schema_version 列）+ 塞一条历史数据 → Initialize 补列 →
+        //    历史数据默认 1、新写入带 1
+        var db2 = Path.Combine(ws, "old.db");
+        using (var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={db2}"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE task_events (
+                    task_id     TEXT NOT NULL,
+                    seq         INTEGER NOT NULL,
+                    type        TEXT NOT NULL,
+                    payload     TEXT NOT NULL,
+                    created_at  INTEGER NOT NULL,
+                    PRIMARY KEY (task_id, seq)
+                );
+                INSERT INTO task_events(task_id, seq, type, payload, created_at)
+                VALUES ('legacy', 0, 'Thinking', '{"text":"old"}', 1);
+            """;
+            cmd.ExecuteNonQuery();
+        }
+        var store2 = new Agent.Infrastructure.Events.TaskEventStore(db2);   // Initialize 触发迁移
+        var legacy = store2.GetEventsAsync("legacy");
+        Check("事件 schema：老库迁移后历史数据版本默认 1",
+            legacy.Count == 1 && legacy[0].SchemaVersion == 1);
+        store2.RecordAsync("t2", 0, new Agent.Core.Models.AgentEvent.Thinking("new"));
+        var newEvs = store2.GetEventsAsync("t2");
+        Check("事件 schema：迁移后新写入记录版本=1",
+            newEvs.Count == 1 && newEvs[0].SchemaVersion == Agent.Infrastructure.Events.TaskEventStore.CurrentSchemaVersion);
+    }
 }

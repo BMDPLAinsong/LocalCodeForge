@@ -68,12 +68,10 @@ public static class DependencyInjection
         });
 
         // ─────────── 路由：Layer 2 ───────────
-        services.AddSingleton<IIntentClassifier>(sp =>
-        {
-            var k = sp.GetRequiredService<Kernel>();
-            var chat = k.GetRequiredService<IChatCompletionService>(RoutingDecision.Classifier);
-            return new IntentClassifier(chat);
-        });
+        // 【批次7 ⑨ 单模型串行】L2 意图分类去模型化：注册确定性分类器（纯规则词表，无模型调用）——
+        // 热路径不再调 classifier（qwen2.5:1.5b），任务内模型调用收敛为主模型单模型串行。
+        // 回退：换回 `return new IntentClassifier(chat)` 即恢复模型版（类文件保留）。
+        services.AddSingleton<IIntentClassifier>(_ => new DeterministicIntentClassifier());
 
         // ─────────── 路由：Layer 3 ───────────
         // 【关键】要把 AgentOptions 注入进去（AgentPro 分流用）

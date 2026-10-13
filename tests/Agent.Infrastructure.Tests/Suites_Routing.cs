@@ -602,6 +602,21 @@ public static class Suites_Routing
         Check("服务层级：small 有 basic（分层开）", Agent.Infrastructure.Routing.ToolLayering.ServiceHasTier("small", "basic", true));
         Check("服务层级：分层关 → 全放行", Agent.Infrastructure.Routing.ToolLayering.ServiceHasTier("small", "analysis", false));
     }
+
+    // ── 批次7 ⑨ 单模型串行：确定性意图分类器（无标题，追加于 91 区段之后）──
+    public static void RunDeterministicClassifier()
+    {
+        var c = new Agent.Infrastructure.Routing.DeterministicIntentClassifier();
+        var r = (string s) => c.ClassifyAsync(s, default).GetAwaiter().GetResult();
+
+        Check("确定性分类：搜索词 → Search", r("搜索一下 最新 新闻") == Agent.Infrastructure.Routing.IntentType.Search);
+        Check("确定性分类：架构词 → ComplexReason", r("帮我设计一个系统架构方案") == Agent.Infrastructure.Routing.IntentType.ComplexReason);
+        Check("确定性分类：读文件 → FileProcess", r("读取一下这个文件") == Agent.Infrastructure.Routing.IntentType.FileProcess);
+        Check("确定性分类：写代码 → CodeGenerate", r("写一个C#方法") == Agent.Infrastructure.Routing.IntentType.CodeGenerate);
+        Check("确定性分类：天气 → Search", r("今天天气怎么样") == Agent.Infrastructure.Routing.IntentType.Search);
+        Check("确定性分类：普通问答 → SimpleQA", r("1+1等于几") == Agent.Infrastructure.Routing.IntentType.SimpleQA);
+        Check("确定性分类：空输入 → Unknown", r("") == Agent.Infrastructure.Routing.IntentType.Unknown);
+    }
 }
 
 /// <summary>批次6 能力分层测试用假工具（只带名字，Invoke 不触发）。</summary>
