@@ -19,7 +19,20 @@
 
 
 
-> **10-13 批次4 架构缺陷盘点（① 工具契约结构化：ToolResult 落地）**
+> > **10-13 批次5 架构缺陷盘点（⑥ tests 单文件治理）**
+> 根因级项：单文件回归已达 3949 行 / 91 个 Console.WriteLine("== … ==") 区段 / 788 Check 断言，
+> 改一处牵动全文、区段间符号相互可见，任何"移区段"都易错位（本批次脚本核验即发现 8 处 Run 语义偏差）。
+> **拆分**：12 个新文件——TestHarness.cs（公共静态 Harness：Pass/Fail/Check、TestTmpRoot/TestTmp、
+> OutputVerifier 反射句柄 + Cred/Strip/Generic/Struct/PhKey 包装、Invoke/M/TryCompileRegex、
+> MPhOutPublic/MTmplPublic）+ 11 个 Suites_*.cs 主题文件（OutputVerifier/Tools/Memory/Routing/Project/
+> Backup/Tuning/Config/PathGuard/DiffSpectre/Dashboard，91 个 Run 方法全量覆盖）；Program.cs 瘦身为
+> 入口 + test-tmp 清理 + Harness 接线 + 按原行号顺序调用 91 个 Run + 摘要 return。
+> **权威核对**：sections_baseline.txt（91 标题→原行号）为顺序唯一权威；Python 脚本逐条对比
+> "输出标题 == baseline 行号序"。
+> **验证**：build 0 错误（9 warning 非阻断）/ tests **788 通过 0 失败**（与批次4 同基线，断言数不变）/
+> 91 标题输出顺序与 baseline 完全一致 / 无头冒烟 SMOKE_EXIT=0。后续轮：复测与否由用户拍板。
+
+**10-13 批次4 架构缺陷盘点（① 工具契约结构化：ToolResult 落地）**
 > 根因级项：工具返回从"错误：xxx"文本前缀升级为结构化契约。新 `ToolResult(Success, Code, Message)` + `ToolErrorCodes` 16 码词表（单一来源，与 tool_rejections 落库码 out_of_bounds/pd_conflict/read_only/project_file/sensitive 对齐）。双轨消费：模型/渲染/E2E 仍吃 Message 文本（`ToString()==Message` + Contains/StartsWith/EndsWith/Length 兼容转发 + implicit operator string），机器判定读 Success/Code 字段——54 处 tests InvokeAsync 零改动编译通过。
 > 改造面：IAgentTool/AgentToolBase 签名 `Task<ToolResult>`；10 工具（Remember/FindSymbol/ListDir/DependencyAnalyzer/CreateDir/ReadFile/WriteFile/EditFile/CodeAnalyzer/RunCommand）错误点按语义给码（OutOfBounds/SensitivePath/NotFound/TooLarge/InvalidArg/PdConflict/ProjectFile/ReadOnly/InteractiveInput/CmdNotAllowed/InlineExec/Timeout/PathEscape/SensitiveCmd），成功点 Ok。RunCommandTool 的 CheckPathBoundary 元组化 (Code, Message)，InvokeAsync 直接包 Fail；CheckProjectName 保持 string?（public、tests 用），调用处包 NotFound。
 > 接入点：AgentLoop.ExecuteToolAsync `(output, toolResult.Success)`（1227 与 1360/1363 从文本前缀改为读 Success 字段；SK BuildPlugin 函数结果保持字符串契约）；Orchestrator 三处（677 WriteFileAsync / 706 RunCommandAsync 检查 0 / 874 ReadFileAsync）读 Success 字段；run_command stdout/stderr 提取继续在 Message 上做（显式 .Message）。IsToolSemanticFailure（渲染后文本的语义函数）与 `错误：工具` 特例豁免保留。
