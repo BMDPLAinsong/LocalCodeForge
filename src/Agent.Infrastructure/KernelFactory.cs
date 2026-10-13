@@ -64,10 +64,12 @@ public static class KernelFactory
                         $"服务 {serviceId} 的 Provider 为 openai，但 ApiKey 为空。");
                 }
 
-                // 云端也用长超时，避免长时间生成被中断
+                // 【10-13 批次3】云端/本地 OpenAI 兼容统一长超时（此前硬编码 5 分钟——strata 本地
+                // 30B 走 openai 分支时被 5 分钟腰斩，与 ollama 分支 20 分钟不一致；统一取
+                // OllamaHttpTimeoutMinutes（语义=本地模型 HTTP 超时），云端短任务可配置调小）。
                 var cloudHttp = new HttpClient
                 {
-                    Timeout = TimeSpan.FromMinutes(5)
+                    Timeout = TimeSpan.FromMinutes(options.OllamaHttpTimeoutMinutes)
                 };
 
                 builder.AddOpenAIChatCompletion(

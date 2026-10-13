@@ -3724,6 +3724,28 @@ Console.WriteLine("== 10-13 注入归一 ==");
     Check("归一：空串原样", empty == "");
 }
 
+// ── 10-13 批次3：记忆搜索 SQL LIKE 下推 + 通配符转义 ──
+Console.WriteLine("== 10-13 记忆索引 ==");
+{
+    var wsM = Path.Combine(Path.GetTempPath(), "law_mem_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(wsM);
+    var storeM = new Agent.Infrastructure.Memory.AgentMemoryStore(Path.Combine(wsM, "m.db"));
+    storeM.Add("task", "BigService 重构", "给 BigService.cs 的 Method1500 加了注释", "t1");
+    storeM.Add("task", "PDF_RAG 分析", "项目结构分析完成", "t2");
+    // 转义对照：无转义时 %Method1_500%（_ 通配单字符）会误命中 Method1x500；转义后 %Method1500% 精确匹配
+    storeM.Add("task", "Method1x500 演练", "无关内容", "t3");
+    var hit1 = storeM.Search("Method1500", 5);
+    Check("记忆：下划线 token 精确命中（Method1500 不被 _ 通配误命中 Method1x500）", hit1.Any(h => h.Topic.Contains("BigService")) && !hit1.Any(h => h.Topic.Contains("Method1x500")));
+    var hit2 = storeM.Search("PDF_RAG", 5);
+    Check("记忆：topic 命中计分", hit2.Any(h => h.Topic.Contains("PDF_RAG")));
+    var hit3 = storeM.Search("不存在的关键词xyz不存在", 5);
+    Check("记忆：无命中返回空（LIKE 下推不误拉全表）", hit3.Count == 0);
+    var hit4 = storeM.Search("注释", 5);
+    Check("记忆：content 命中（content LIKE 下推）", hit4.Any(h => h.Content.Contains("Method1500")));
+    try { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); } catch { }
+    try { Directory.Delete(wsM, true); } catch { }
+}
+
 // ── 10-13 阶段1：上下文折叠摘要（ContextFolder）──
 Console.WriteLine("== 10-13 上下文折叠 ==");
 var bigCode = new string('x', 9000) + "\npublic class OrderService {\n    public int Get() { return 1; }\n}\n" + new string('y', 3000);

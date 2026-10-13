@@ -6,6 +6,7 @@
 // 确定性 SQLite 操作 + 关键词匹配（Tokenize：中文串/标识符/文件名），无模型调用。
 // ============================================================
 
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 
@@ -166,10 +167,18 @@ public sealed class AgentMemoryStore
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = """
-                SELECT id, kind, topic, content, hit_count, count, created_at, COALESCE(last_hit_at, ''), COALESCE(feature, '')
-                FROM agent_memory;
-            """;
+            // 【10-13 批次3】⑦ 记忆索引：关键词过滤下沉 SQL（LIKE 下推）——此前全表 SELECT
+            // 拉全部行到 C# 逐个 Contains（N 行 × M 关键词 全部传输+打分）；
+            // 现按关键词 OR 下推，只拉含任一关键词的行进 C# 打分（行数级过滤，非全表）。
+            // 转义：LIKE 通配符 % _ \ 前缀转义（关键词含 Method1500 等下划线 token），ESCAPE '\' 声明。
+            var like = new StringBuilder("SELECT id, kind, topic, content, hit_count, count, created_at, COALESCE(last_hit_at, ''), COALESCE(feature, '') FROM agent_memory WHERE ");
+            for (var i = 0; i < keywords.Count; i++)
+            {
+                if (i > 0) like.Append(" OR ");
+                like.Append("(topic LIKE $k").Append(i).Append(" ESCAPE '\\' OR content LIKE $k").Append(i).Append(" ESCAPE '\\')");
+                cmd.Parameters.AddWithValue($"$k{i}", "%" + EscapeLike(keywords[i]) + "%");
+            }
+            cmd.CommandText = like.ToString();
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -439,4 +448,9 @@ public sealed class AgentMemoryStore
 
         return result.Distinct(StringComparer.OrdinalIgnoreCase).Take(20).ToList();
     }
+
+    /// <summary>【10-13 批次3】LIKE 通配符转义（% _ \）——关键词含 Method1500 等下划线 token，
+    /// 不转义会把下划线当单字符通配符造成误匹配；与 SQL `ESCAPE '\'` 配套。</summary>
+    private static string EscapeLike(string s) =>
+        s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }

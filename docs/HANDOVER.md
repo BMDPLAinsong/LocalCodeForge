@@ -19,6 +19,13 @@
 
 
 
+> **10-13 批次3 架构缺陷盘点（② 模型后端超时收窄 + ⑦ 记忆索引）**
+> **背景**：架构盘点批次 3。② 盘点口径修正：KernelFactory 经排查**已支持双 Provider**（ollama → /v1 兼容端点、openai → 任意 OpenAI 兼容服务，含 strata）——"只能 Ollama"不成立；真缺口是 **openai 分支硬编码 5 分钟超时**（strata 本地 30B 走 openai 分支被 5 分钟腰斩，与 ollama 分支 20 分钟不一致）。⑦ 记忆搜索实证**全表扫描**：`SELECT ... FROM agent_memory` 拉全部行到 C# 逐个 Contains（N 行 × M 关键词）。
+> **② 修复**：KernelFactory openai 分支超时 `5 分钟硬编码` → `options.OllamaHttpTimeoutMinutes`（语义=本地模型 HTTP 超时，云端短任务可配置调小）——strata 切换从此超时口径一致。
+> **⑦ 修复**：AgentMemoryStore.Search 关键词过滤**下沉 SQL**（逐关键词 `topic LIKE $k ESCAPE '' OR content LIKE $k`，参数化）；`EscapeLike` 转义 `% _ \`（关键词含 Method1500 等下划线 token，不转义会把 _ 当单字符通配符误命中 Method1x500）；C# 只对命中行打分（topic+2/content+1 计分逻辑不变），行数级过滤替代全表传输。
+> **验证**：构建 0 错误；tests **770 全绿**（766→+4：记忆索引 4 断言——下划线精确命中/无命中不拉全表/content 命中）；无头冒烟正常。
+> **边界**：LIKE '%..%' 前缀通配天然不走 B-tree 索引，但记忆量级（数百条）行数过滤已足够；若未来上万条再评估倒排表（成本高，暂不做）。
+
 > **10-13 批次2 架构缺陷盘点（③ 注入双实现归一）**
 > **背景**：架构盘点批次 2——消"工具结果注入双实现漂移"。排查实证：截断逻辑此前三处各写各的——AgentLoop.SummarizeOutput（头尾+省略提示，进化版）、ExecutorService ×2 裸 `Substring` 1500/2000（原始版，无提示、无折叠感知）。折叠预算只加了 AgentLoop 主分支，Executor 分支无感知（漂移已具现）。
 > **归一**：新 `src/Agent.Infrastructure/Context/ToolResultNormalizer.cs`——全注入点唯一截断实现 `Truncate(text, head, tail)`（含总字符数省略提示）。① AgentLoop 4 处调用替换 + 删除 SummarizeOutput 私有方法（537 run_command 摘要 160/80、547/727 run_command 400/300、559 read_file 6000/2000——行为等价）；② ExecutorService 2 处裸截断替换（267 预览 1500/0、490 修复参考 2000/0——获得省略提示，30B 不再误以为"内容完整"）。
