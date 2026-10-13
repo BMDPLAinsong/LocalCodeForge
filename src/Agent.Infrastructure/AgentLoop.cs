@@ -301,12 +301,14 @@ public sealed class AgentLoop : IAgentLoop
                 {
                     userMsg += $"\n\n（任务引用文件 {absTarget} 已存在，当前内容如下——该文件即任务目标，请基于真实内容读取/修复，无需探索定位：\n```\n{absContent}\n```）";
                     _injectedTargetFullPath = absTarget;
+                    _logger.LogWarning("[上下文预算] 目标文件全文注入（{Path}，{N} 字符）。", absTarget, absContent.Length);
                 }
                 else
                 {
                     var lines = absContent.Split('\n');
                     var head = string.Join("\n", lines.Take(50));
                     userMsg += $"\n\n（任务目标文件 {absTarget}，共 {lines.Length} 行 / {absContent.Length} 字符。文件较大已注入前 50 行供定位：\n```\n{head}\n```\n后续内容请用 read_file 分页读取，不要一次性读全文。）";
+                    _logger.LogWarning("[上下文预算] 目标文件骨架注入（{Path}，{N} 字符 > 阈值 {T}）。", absTarget, absContent.Length, _options.ContextTargetInjectBytes);
                 }
             }
             else if (projectBlock is not null)
@@ -586,31 +588,11 @@ public sealed class AgentLoop : IAgentLoop
                     //     ② 超阈值截断——> ContextToolResultBytes 头尾截断 + 行数提示（完整靠 offset 分页）。
                     //   · edit_file 精度：短路仅发生在"注入=File.ReadAllText(同文件)"时，内容同一来源，
                     //     old_string 匹配不受影响；超阈值截断文件无短路注入，模型拿到头尾+分页提示。
-                    var condensed = cleanName == "run_command" ? Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(output) : output;
-                    if (cleanName == "read_file")
-                    {
-                        if (_injectedTargetFullPath is not null
-                            && TryGetReadPath(argsJson, out var readPath)
-                            && ReadPathMatches(readPath, request, _injectedTargetFullPath))
-                        {
-                            condensed = "（文件全文已在上文任务目标文件注入块中，内容一致，无需重复读取——直接基于注入内容修复。）";
-                            _logger.LogWarning("[上下文预算] read_file 短路命中（{Path} 已全文注入，消双份冗余）。", readPath);
-                        }
-                        else if (output.Length > _options.ContextToolResultBytes)
-                        {
-                            condensed = Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(output, head: 6000, tail: 2000);
-                            _logger.LogWarning("[上下文预算] read_file 结果超 {Limit} 截断（头 6000 + 尾 2000），完整内容可 offset 分页续读。", _options.ContextToolResultBytes);
-                        }
-                        // 【10-13 阶段1】累计注入超预算 → 折叠摘要（结构定义+头尾，语义保留；完整内容在事件存储）
-                        else if (_ctxToolBytes + output.Length > _options.ContextFoldThreshold)
-                        {
-                            TryGetReadPath(argsJson, out var foldPath);
-                            condensed = Agent.Infrastructure.Context.ContextFolder.FoldToolResult(
-                                output, string.IsNullOrEmpty(foldPath) ? null : Path.GetFileName(foldPath));
-                            _logger.LogWarning("[上下文预算] 累计注入超 {Limit}，read_file 结果折叠摘要（{Path}）。", _options.ContextFoldThreshold, foldPath);
-                        }
-                    }
-                    _ctxToolBytes += condensed.Length;
+                    //   【10-13 B】压缩逻辑抽公共方法 CondenseToolResult：情况 A（结构化调用）与
+                    //   情况 B（文本兜底 TryParseToolCallsFromText）共用——30B 走文本路径，此前该路径
+                    //   read_file 无短路/截断/折叠，39KB 结果原样进上下文（38KB 注入 + 39KB 结果 = 77KB，
+                    //   CPU prefill >20min 实证），消双路径漂移。
+                    var condensed = CondenseToolResult(cleanName, argsJson, output, request);
                     _lastFailureSummary = condensed;
 
                     // ── 方案 2：循环熔断（工具序列重复且无新进展 → 以工具验证收尾）──
@@ -766,7 +748,8 @@ public sealed class AgentLoop : IAgentLoop
 
                     _lastToolName = pc.Name;
                     _lastStepFailed = !ok && !output.StartsWith("错误：工具");
-                    var condensed = pc.Name == "run_command" ? Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(output) : output;
+                    // 【10-13 B】与情况 A 共用同一压缩逻辑（短路/截断/折叠 + _ctxToolBytes 累计）
+                    var condensed = CondenseToolResult(pc.Name, pc.Args, output, request);
                     _lastFailureSummary = condensed;
 
                     var frc = new FunctionResultContent(
@@ -1584,6 +1567,42 @@ public sealed class AgentLoop : IAgentLoop
     }
 
     /// <summary>【10-13 上下文预算】从 read_file 参数提取 path 字符串。非对象/无 path/空 → false。</summary>
+    /// <summary>
+    /// 【10-13 上下文预算】工具结果注入压缩（情况 A 结构化调用 / 情况 B 文本兜底共用，消双路径漂移）：
+    /// run_command 截断；read_file ① 短路（读取目标 == 已全文注入文件 → 短提示，消双份冗余）
+    /// ② 超阈值截断 ③ 累计超预算折叠。同时累计 _ctxToolBytes。纯确定性逻辑。
+    /// </summary>
+    private string CondenseToolResult(string cleanName, System.Text.Json.JsonElement args, string output, Agent.Core.Models.AgentRequest request)
+    {
+        var condensed = cleanName == "run_command"
+            ? Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(output)
+            : output;
+        if (cleanName == "read_file")
+        {
+            if (_injectedTargetFullPath is not null
+                && TryGetReadPath(args, out var readPath)
+                && ReadPathMatches(readPath, request, _injectedTargetFullPath))
+            {
+                condensed = "（文件全文已在上文任务目标文件注入块中，内容一致，无需重复读取——直接基于注入内容修复。）";
+                _logger.LogWarning("[上下文预算] read_file 短路命中（{Path} 已全文注入，消双份冗余）。", readPath);
+            }
+            else if (output.Length > _options.ContextToolResultBytes)
+            {
+                condensed = Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(output, head: 6000, tail: 2000);
+                _logger.LogWarning("[上下文预算] read_file 结果超 {Limit} 截断（头 6000 + 尾 2000），完整内容可 offset 分页续读。", _options.ContextToolResultBytes);
+            }
+            else if (_ctxToolBytes + output.Length > _options.ContextFoldThreshold)
+            {
+                TryGetReadPath(args, out var foldPath);
+                condensed = Agent.Infrastructure.Context.ContextFolder.FoldToolResult(
+                    output, string.IsNullOrEmpty(foldPath) ? null : Path.GetFileName(foldPath));
+                _logger.LogWarning("[上下文预算] 累计注入超 {Limit}，read_file 结果折叠摘要（{Path}）。", _options.ContextFoldThreshold, foldPath);
+            }
+        }
+        _ctxToolBytes += condensed.Length;
+        return condensed;
+    }
+
     public static bool TryGetReadPath(System.Text.Json.JsonElement args, out string path)
     {
         path = "";
