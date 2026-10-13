@@ -534,7 +534,7 @@ public sealed class AgentLoop : IAgentLoop
                     if (cleanName == "run_command")
                     {
                         _lastRunCommandOk = ok;
-                        _lastRunCommandSummary = SummarizeOutput(output, head: 160, tail: 80);
+                        _lastRunCommandSummary = Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(output, head: 160, tail: 80);
                     }
 
                     // 【10-13 上下文预算】工具结果注入压缩（数据结构性）：
@@ -544,7 +544,7 @@ public sealed class AgentLoop : IAgentLoop
                     //     ② 超阈值截断——> ContextToolResultBytes 头尾截断 + 行数提示（完整靠 offset 分页）。
                     //   · edit_file 精度：短路仅发生在"注入=File.ReadAllText(同文件)"时，内容同一来源，
                     //     old_string 匹配不受影响；超阈值截断文件无短路注入，模型拿到头尾+分页提示。
-                    var condensed = cleanName == "run_command" ? SummarizeOutput(output) : output;
+                    var condensed = cleanName == "run_command" ? Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(output) : output;
                     if (cleanName == "read_file")
                     {
                         if (_injectedTargetFullPath is not null
@@ -556,7 +556,7 @@ public sealed class AgentLoop : IAgentLoop
                         }
                         else if (output.Length > _options.ContextToolResultBytes)
                         {
-                            condensed = SummarizeOutput(output, head: 6000, tail: 2000);
+                            condensed = Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(output, head: 6000, tail: 2000);
                             _logger.LogWarning("[上下文预算] read_file 结果超 {Limit} 截断（头 6000 + 尾 2000），完整内容可 offset 分页续读。", _options.ContextToolResultBytes);
                         }
                         // 【10-13 阶段1】累计注入超预算 → 折叠摘要（结构定义+头尾，语义保留；完整内容在事件存储）
@@ -724,7 +724,7 @@ public sealed class AgentLoop : IAgentLoop
 
                     _lastToolName = pc.Name;
                     _lastStepFailed = !ok && !output.StartsWith("错误：工具");
-                    var condensed = pc.Name == "run_command" ? SummarizeOutput(output) : output;
+                    var condensed = pc.Name == "run_command" ? Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(output) : output;
                     _lastFailureSummary = condensed;
 
                     var frc = new FunctionResultContent(
@@ -1535,12 +1535,6 @@ public sealed class AgentLoop : IAgentLoop
         const string baseMsg = "任务写入文件但验证未通过（run_command 未成功），熔断终止，防假成功。";
         if (string.IsNullOrWhiteSpace(lastRunSummary)) return baseMsg;
         return baseMsg + " 最近 run_command：" + lastRunSummary;
-    }
-
-    private static string SummarizeOutput(string output, int head = 400, int tail = 300)
-    {
-        if (output.Length <= head + tail) return output;
-        return output[..head] + "\n...(中间省略，共 " + output.Length + " 字符)...\n" + output[^tail..];
     }
 
     /// <summary>【10-13 上下文预算】从 read_file 参数提取 path 字符串。非对象/无 path/空 → false。</summary>

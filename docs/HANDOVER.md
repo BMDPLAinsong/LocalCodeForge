@@ -19,6 +19,12 @@
 
 
 
+> **10-13 批次2 架构缺陷盘点（③ 注入双实现归一）**
+> **背景**：架构盘点批次 2——消"工具结果注入双实现漂移"。排查实证：截断逻辑此前三处各写各的——AgentLoop.SummarizeOutput（头尾+省略提示，进化版）、ExecutorService ×2 裸 `Substring` 1500/2000（原始版，无提示、无折叠感知）。折叠预算只加了 AgentLoop 主分支，Executor 分支无感知（漂移已具现）。
+> **归一**：新 `src/Agent.Infrastructure/Context/ToolResultNormalizer.cs`——全注入点唯一截断实现 `Truncate(text, head, tail)`（含总字符数省略提示）。① AgentLoop 4 处调用替换 + 删除 SummarizeOutput 私有方法（537 run_command 摘要 160/80、547/727 run_command 400/300、559 read_file 6000/2000——行为等价）；② ExecutorService 2 处裸截断替换（267 预览 1500/0、490 修复参考 2000/0——获得省略提示，30B 不再误以为"内容完整"）。
+> **设计要点**：归一的是"实现"不是"阈值"——各调用点预算参数保持场景语义（预览/修复/工具结果本就该不同），消的是同一策略三份实现的漂移风险；后续加折叠/预算升级只需改 ToolResultNormalizer 一处。
+> **验证**：构建 0 错误；tests **766 全绿**（761→+5：ToolResultNormalizer 截断/边界/空串/tail=0 5 断言）；无头冒烟正常。
+
 > **10-13 批次1 架构缺陷盘点（⑤ 配置校验 + ④ 持久层生命周期）**
 > **背景**：用户要求按架构缺陷盘点先做批次 1——消两块债：⑤ 配置膨胀无校验（矛盾配置静默生效）＋ ④ 持久层明文只增不清（最大明文表 turns 无生命周期）。排查中修正了盘点口径：TaskEventStore/RoutingDecisionStore 的保留期清理**此前已接线**（硬编码 30/90），真缺口是 **turns 表（会话历史）只增不清**——每轮对话全量明文，无 Prune、无保留期。
 > **⑤ 配置校验（新）**：`src/Agent.Core/Config/AgentConfigValidator.cs`——确定性纯函数 `Validate(AgentOptions) → List<string>`，零依赖可单测。校验：14 个正/非负整数类（步数/重试/记忆/超时/上下文预算×3/保留期×3）、4 个路由调权率∈[0,1]、Temperature∈[0,2]、语义关系（ContextFoldThreshold ≥ ContextToolResultBytes，否则截断永远优先、折叠形同虚设）、4 个端点（Provider∈{ollama,openai}、Model 非空、Endpoint 以 http(s):// 开头）。CLI 在 DI 构建后调用——有错红字逐条列出 + `Environment.Exit(1)`，绝不静默跑在矛盾配置上。

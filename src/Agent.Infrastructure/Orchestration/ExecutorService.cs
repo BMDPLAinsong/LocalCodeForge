@@ -263,9 +263,7 @@ class Program
                 contextLines.Add($"### {path}");
                 contextLines.Add("```");
 
-                var preview = content.Length > 1500
-                    ? content[..1500] + "\n...(截断)"
-                    : content;
+                var preview = Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(content, head: 1500, tail: 0);
 
                 contextLines.Add(preview);
                 contextLines.Add("```");
@@ -486,9 +484,7 @@ class Program
             contextLines.Add($"### {path}{marker}");
             contextLines.Add("```");
 
-            var preview = content.Length > 2000
-                ? content[..2000] + "\n...(截断)"
-                : content;
+            var preview = Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(content, head: 2000, tail: 0);
 
             contextLines.Add(preview);
             contextLines.Add("```");

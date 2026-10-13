@@ -2,7 +2,7 @@
 info: Agent.Infrastructure.Routing.RuleEngine[0]
       RuleEngine 已加载 8 条规则。
 === Local AI Workbench ===
-运行目录: X:\.NET AI\LocalAiWorkbench\workspace\runs\20261013-005300-bcdc
+运行目录: X:\.NET AI\LocalAiWorkbench\workspace\runs\20261013-103529-6c3e
 会话库:   X:\.NET AI\LocalAiWorkbench\workspace\sessions.db
 输入需求，回车执行。输入 exit 退出。输入 new 开启新会话。
 

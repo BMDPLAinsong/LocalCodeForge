@@ -3709,6 +3709,21 @@ Console.WriteLine("== 10-13 会话历史生命周期 ==");
     try { Directory.Delete(wsS, true); } catch { }
 }
 
+// ── 10-13 批次2：工具结果注入归一（ToolResultNormalizer 统一截断）──
+Console.WriteLine("== 10-13 注入归一 ==");
+{
+    var short1 = Agent.Infrastructure.Context.ToolResultNormalizer.Truncate("abc");
+    Check("归一：短内容原样返回", short1 == "abc");
+    var long1 = Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(new string('x', 1000), head: 10, tail: 5);
+    Check("归一：超限头尾截断+总字符提示", long1.StartsWith(new string('x', 10)) && long1.Contains("共 1000 字符") && long1.EndsWith(new string('x', 5)));
+    var headOnly = Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(new string('y', 3000), head: 1500, tail: 0);
+    Check("归一：tail=0 仅头 + 提示（Executor 预览语义）", headOnly.StartsWith(new string('y', 1500)) && headOnly.Contains("共 3000 字符") && !headOnly.Contains(new string('y', 1501)));
+    var boundary = Agent.Infrastructure.Context.ToolResultNormalizer.Truncate(new string('z', 700), head: 400, tail: 300);
+    Check("归一：恰好 head+tail 不截断", boundary.Length == 700);
+    var empty = Agent.Infrastructure.Context.ToolResultNormalizer.Truncate("");
+    Check("归一：空串原样", empty == "");
+}
+
 // ── 10-13 阶段1：上下文折叠摘要（ContextFolder）──
 Console.WriteLine("== 10-13 上下文折叠 ==");
 var bigCode = new string('x', 9000) + "\npublic class OrderService {\n    public int Get() { return 1; }\n}\n" + new string('y', 3000);
