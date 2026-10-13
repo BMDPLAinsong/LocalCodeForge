@@ -217,6 +217,25 @@ public sealed class AgentLoop : IAgentLoop
                 chatHistory.AddAssistantMessage(turn.Content);
         }
 
+        // 【批次6 ⑧ 能力分层】预路由：循环前先定目标服务——
+        // 工具集按服务注入、工程引导按服务裁剪都依赖它（原循环内 step0 才路由，插件注册被挤到路由前）。
+        // 与循环内 step0 路由同输入同调用，总调用次数不变（循环内 firstDecision 复用，不重复路由）。
+        RoutingDecision? firstDecision;
+        if (_options.EnableRouting)
+        {
+            var rc0 = new RoutingContext(
+                UserInput: request.Input,
+                Step: 0,
+                LastToolName: null,
+                LastStepFailed: false,
+                HistoryTurns: chatHistory.Count);
+            firstDecision = await _router.RouteAsync(rc0, ct);
+        }
+        else
+        {
+            firstDecision = new RoutingDecision(RoutingDecision.Large, RoutingTier.LargeModel, "路由未启用");
+        }
+
         // 注入外部数据任务的环境约束（若命中）：让模型在生成阶段就知道环境事实
         var envConstraint = ExternalTaskDetector.Detect(request.Input);
 
@@ -234,7 +253,12 @@ public sealed class AgentLoop : IAgentLoop
         if (memoryBlock is not null) userMsg += "\n\n" + memoryBlock;
         // agent_pro 工程理解专项：读/分析意图（确定性词表）→ 引导优先用符号地图，
         // 避免模型逐行 read_file 探索两步链（4B 生成不稳的根源）。
-        if (projectBlock is not null && Agent.Infrastructure.Routing.IntentOverride.IsReadTask(request.Input))
+        // 【批次6 ⑧ 能力分层】仅当目标服务可见 analyze_code（analysis 层）时注入——
+        // small 分层后无此工具，注入引导会让模型调用不存在的工具。
+        if (projectBlock is not null
+            && Agent.Infrastructure.Routing.IntentOverride.IsReadTask(request.Input)
+            && Agent.Infrastructure.Routing.ToolLayering.ServiceHasTier(
+                firstDecision!.ServiceId, Agent.Infrastructure.Routing.ToolLayering.Analysis, _options.EnableToolLayering))
             userMsg += "\n\n（工程提示：理解代码结构请优先调用 analyze_code 获取类/方法/行号索引，再按需 read_file 读具体行段——符号地图比逐行探索高效。）";
 
         // 【10-09 方案2】分析/总结类任务注入核心文件清单（数据驱动，非提示词）：
@@ -313,18 +337,36 @@ public sealed class AgentLoop : IAgentLoop
             && readTool is Agent.Infrastructure.Tools.ReadFileTool readFileTool)
             readFileTool.SetExplicitReadTarget(explicitReadTarget);
 
+        // 【批次6 ⑧ 能力分层】按目标服务过滤工具集 + 注入可用工具清单：
+        // 过滤后若有缩减（small 隐藏分析/记忆工具）→ 注入"可用工具"行，让模型知道边界，
+        // 不会尝试调用被隐藏的工具；agent_pro/large 全量 → 不注入（无冗余）。
+        IReadOnlyCollection<Agent.Core.Abstractions.IAgentTool> toolSet;
+        if (_options.EnableToolLayering)
+        {
+            toolSet = Agent.Infrastructure.Routing.ToolLayering.Filter(
+                _tools.All, firstDecision!.ServiceId, enabled: true);
+            if (toolSet.Count < _tools.All.Count)
+                userMsg += $"\n\n（本次任务可用工具：{string.Join(", ", toolSet.Select(t => t.Name))}。其余工具本次任务不可用。）";
+        }
+        else
+        {
+            toolSet = _tools.All.ToList();
+        }
+
         chatHistory.AddUserMessage(userMsg);
         await _store.AppendTurnAsync(request.SessionId, new ChatTurn("user", request.Input), ct);
         // 【10-13 上下文预算】首轮注入量日志（可观测：X1/记忆/工程块合计，调参有数据）
         _logger.LogInformation("[上下文预算] 任务注入 {Bytes} 字符（≈{KB} KB）。",
             userMsg.Length, userMsg.Length / 1024);
 
-        // 注册工具 Plugin
-        var plugin = BuildPlugin();
-        if (!_kernel.Plugins.Contains(plugin.Name))
-            _kernel.Plugins.Add(plugin);
+        // 注册工具 Plugin（【批次6 ⑧ 能力分层】按目标服务过滤后的工具集；kernel 跨任务复用，
+        // 先移除旧插件再添加，防上个任务的工具集残留到本任务）
+        var plugin = BuildPlugin(toolSet);
+        var existingPlugin = _kernel.Plugins.FirstOrDefault(p => p.Name == plugin.Name);
+        if (existingPlugin is not null)
+            _kernel.Plugins.Remove(existingPlugin);
+        _kernel.Plugins.Add(plugin);
 
-        RoutingDecision? firstDecision = null;
         RoutingDecision? lastYieldedDecision = null;
         int forceContinueCount = 0;
         int emptyAnswerCount = 0;
@@ -360,7 +402,7 @@ public sealed class AgentLoop : IAgentLoop
                     LastStepFailed: _lastStepFailed,
                     HistoryTurns: chatHistory.Count);
 
-                if (step == 0 || firstDecision is null)
+                if (firstDecision is null)
                 {
                     decision = await _router.RouteAsync(routingContext, ct);
                     firstDecision = decision;
@@ -1458,10 +1500,10 @@ public sealed class AgentLoop : IAgentLoop
         }
     }
 
-    /// <summary>把 IAgentTool 集合包装成 SK 的 KernelPlugin。</summary>
-    private KernelPlugin BuildPlugin()
+    /// <summary>把 IAgentTool 集合包装成 SK 的 KernelPlugin（【批次6 ⑧】接收按服务过滤后的子集）。</summary>
+    private KernelPlugin BuildPlugin(IReadOnlyCollection<Agent.Core.Abstractions.IAgentTool> tools)
     {
-        var functions = _tools.All.Select(tool =>
+        var functions = tools.Select(tool =>
         {
             return KernelFunctionFactory.CreateFromMethod(
                 async (KernelArguments args, CancellationToken ct) =>

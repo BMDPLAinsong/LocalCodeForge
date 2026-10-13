@@ -92,6 +92,13 @@ public sealed class AgentOptions
     /// </summary>
     public bool StrictOutputVerification { get; set; } = false;
 
+    /// <summary>【批次6 ⑧ 能力分层】工具按目标服务分层注入开关。
+    /// true（默认）= 按 ToolLayering 表过滤：small 仅基础工具（read/write/edit/list/create/run），
+    ///                分析类（find_symbol/analyze_code/dependency_analyzer）与记忆类（remember）仅
+    ///                agent_pro/large 可见；false = 全量注入（兼容旧行为）。
+    /// 分层是数据驱动（工具能力标签表，非提示词）；低层模型不暴露高阶工具防误用/乱用。</summary>
+    public bool EnableToolLayering { get; set; } = true;
+
     // ─────────── 循环配置 ───────────
 
     /// <summary>

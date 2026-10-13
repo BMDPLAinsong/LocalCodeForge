@@ -135,5 +135,8 @@ Suites_Tools.Run3824();
 Suites_OutputVerifier.Run3873();
 Suites_OutputVerifier.Run3885();
 
+// ── 批次6 ⑧ 能力分层断言（无标题，追加于 91 区段之后，不进入 baseline 顺序核验）──
+Suites_Routing.RunToolLayering();
+
 Console.WriteLine($"\n结果: {Pass} 通过 / {Fail} 失败");
 return Fail == 0 ? 0 : 1;

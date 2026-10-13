@@ -19,7 +19,22 @@
 
 
 
-> > **10-13 批次5 架构缺陷盘点（⑥ tests 单文件治理）**
+> > > **10-13 批次6 架构缺陷盘点（⑧ 能力分层：工具按目标服务分层注入）**
+> 根因级项：AgentLoop.BuildPlugin 无条件全量注入 10 个工具——small/agent_pro/large 三层模型
+> 看到完全相同工具集（含 run_command 危险工具、analyze_code/dependency_analyzer/find_symbol
+> 分析类、remember 记忆类），低层模型拿满权限，能力不分层。
+> **落地**（数据驱动，非提示词）：新 ToolLayering 表（工具名→层级 basic/analysis/memory；
+> 服务→允许层级：small=basic，agent_pro/large=全量；新增工具未登记默认 basic 防静默全可见）
+> + AgentOptions.EnableToolLayering 开关（默认 true，可回退）。AgentLoop 改造：循环前预路由
+> 定目标服务 → ToolLayering.Filter 过滤工具集 → BuildPlugin 按子集注入 + kernel 插件按任务
+> 替换（防跨任务残留）；仅缩减时注入"可用工具"清单（让模型知道边界）；analyze_code 工程
+> 引导按服务裁剪（small 无此工具时不注入，防引导模型调用不存在的工具）。预路由与循环内
+> step0 路由同输入同调用，总调用次数不变。
+> **验证**：build 0 错误 / tests **799 通过 0 失败**（788+11 新增：层级表/过滤/服务层级 11
+> 断言，无标题追加不污染 91 顺序核验）/ 91 标题输出顺序一致 / 无头冒烟 SMOKE_EXIT=0。
+> 后续轮：⑨ 单模型串行、⑩ 事件 schema 无版本。
+
+**10-13 批次5 架构缺陷盘点（⑥ tests 单文件治理）**
 > 根因级项：单文件回归已达 3949 行 / 91 个 Console.WriteLine("== … ==") 区段 / 788 Check 断言，
 > 改一处牵动全文、区段间符号相互可见，任何"移区段"都易错位（本批次脚本核验即发现 8 处 Run 语义偏差）。
 > **拆分**：12 个新文件——TestHarness.cs（公共静态 Harness：Pass/Fail/Check、TestTmpRoot/TestTmp、

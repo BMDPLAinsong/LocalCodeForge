@@ -581,4 +581,36 @@ public static class Suites_Routing
         Check("cwd：可写工程模式 → projectRoot", Agent.Infrastructure.Tools.RunCommandTool.ResolveWorkingDirectory(@"X:\run", @"X:\proj", true) == Path.GetFullPath(@"X:\proj"));
         Check("cwd：可写工程但无工程根 → workspaceRoot", Agent.Infrastructure.Tools.RunCommandTool.ResolveWorkingDirectory(@"X:\run", null, true) == Path.GetFullPath(@"X:\run"));
     }
+
+    // ── 批次6 ⑧ 能力分层：ToolLayering 数据表与过滤（无标题，追加于 91 区段之后）──
+    public static void RunToolLayering()
+    {
+        Agent.Core.Abstractions.IAgentTool Fake(string name) => new FakeTool(name);
+        var all = new[] { "read_file", "write_file", "edit_file", "list_dir", "create_dir", "run_command",
+                          "find_symbol", "analyze_code", "dependency_analyzer", "remember" }
+            .Select(Fake).ToList();
+
+        Check("层级表：未知工具默认 basic", Agent.Infrastructure.Routing.ToolLayering.TierOf("unknown_tool") == "basic");
+        Check("层级表：analyze_code → analysis", Agent.Infrastructure.Routing.ToolLayering.TierOf("analyze_code") == "analysis");
+        Check("层级表：remember → memory", Agent.Infrastructure.Routing.ToolLayering.TierOf("remember") == "memory");
+        Check("过滤：分层关闭 → 全量 10", Agent.Infrastructure.Routing.ToolLayering.Filter(all, "small", false).Count == 10);
+        Check("过滤：small → 仅基础 6 个", Agent.Infrastructure.Routing.ToolLayering.Filter(all, "small", true).Count == 6);
+        Check("过滤：agent_pro → 全量 10", Agent.Infrastructure.Routing.ToolLayering.Filter(all, "agent_pro", true).Count == 10);
+        Check("过滤：large → 全量 10", Agent.Infrastructure.Routing.ToolLayering.Filter(all, "large", true).Count == 10);
+        Check("服务层级：small 无 analysis（分层开）", !Agent.Infrastructure.Routing.ToolLayering.ServiceHasTier("small", "analysis", true));
+        Check("服务层级：agent_pro 有 analysis（分层开）", Agent.Infrastructure.Routing.ToolLayering.ServiceHasTier("agent_pro", "analysis", true));
+        Check("服务层级：small 有 basic（分层开）", Agent.Infrastructure.Routing.ToolLayering.ServiceHasTier("small", "basic", true));
+        Check("服务层级：分层关 → 全放行", Agent.Infrastructure.Routing.ToolLayering.ServiceHasTier("small", "analysis", false));
+    }
+}
+
+/// <summary>批次6 能力分层测试用假工具（只带名字，Invoke 不触发）。</summary>
+sealed class FakeTool : Agent.Core.Abstractions.IAgentTool
+{
+    public FakeTool(string name) { Name = name; }
+    public string Name { get; }
+    public string Description => "test";
+    public System.Text.Json.JsonElement InputSchema => default;
+    public Task<Agent.Core.Models.ToolResult> InvokeAsync(System.Text.Json.JsonElement args, CancellationToken ct)
+        => System.Threading.Tasks.Task.FromResult(Agent.Core.Models.ToolResult.Ok("ok"));
 }
