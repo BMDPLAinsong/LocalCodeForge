@@ -24,11 +24,11 @@ public sealed class DependencyAnalyzerTool : AgentToolBase
     private readonly string? _projectRoot;
     private readonly SymbolIndexStore _store;
 
-    public DependencyAnalyzerTool(string workspaceRoot, string? projectRoot, string dbPath)
+    public DependencyAnalyzerTool(string workspaceRoot, string? projectRoot, SymbolIndexStore store)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
-        _store = new SymbolIndexStore(dbPath);
+        _store = store;   // 【10-14 P2-3】进程内单例（DI 注入），不再各自 new
     }
 
     public override string Name => "analyze_deps";

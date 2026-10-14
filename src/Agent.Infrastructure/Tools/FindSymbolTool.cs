@@ -21,10 +21,10 @@ public sealed class FindSymbolTool : AgentToolBase
     private readonly SymbolIndexStore _store;
 
     /// <summary>构造函数。</summary>
-    public FindSymbolTool(string workspaceRoot, string? projectRoot, string dbPath)
+    public FindSymbolTool(string workspaceRoot, string? projectRoot, SymbolIndexStore store)
     {
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
-        _store = new SymbolIndexStore(dbPath);
+        _store = store;   // 【10-14 P2-3】进程内单例（DI 注入），不再各自 new
     }
 
     public override string Name => "find_symbol";

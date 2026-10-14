@@ -629,7 +629,7 @@ public static class Suites_Tools
             var db = Path.Combine(TestTmp, "symdb_" + Guid.NewGuid().ToString("N")[..6] + ".db");
             var work = Path.Combine(TestTmp, "symwork_" + Guid.NewGuid().ToString("N")[..6]);
             Directory.CreateDirectory(work);
-            var fst = new Agent.Infrastructure.Tools.FindSymbolTool(work, proj, db);
+            var fst = new Agent.Infrastructure.Tools.FindSymbolTool(work, proj, new Agent.Infrastructure.Project.SymbolIndexStore(db));
             var out1 = fst.InvokeAsync(System.Text.Json.JsonDocument.Parse(
                 "{\"name\":\"Order\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
             Check("find_symbol 命中 Order", out1.Contains("class Order") && out1.Contains("Order.cs"));
@@ -640,7 +640,7 @@ public static class Suites_Tools
                 "{\"name\":\"NoSuchSymbol\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
             Check("find_symbol 未命中 → 提示", out3.Contains("未找到"));
             // 无工程 → 拒绝
-            var fst2 = new Agent.Infrastructure.Tools.FindSymbolTool(work, null, db);
+            var fst2 = new Agent.Infrastructure.Tools.FindSymbolTool(work, null, new Agent.Infrastructure.Project.SymbolIndexStore(db));
             var out4 = fst2.InvokeAsync(System.Text.Json.JsonDocument.Parse(
                 "{\"name\":\"Order\"}").RootElement, CancellationToken.None).GetAwaiter().GetResult();
             Check("无工程模式 → 拒绝", out4.Contains("工程模式"));
@@ -862,12 +862,13 @@ public static class Suites_Tools
 
             // analyze_deps 工具端到端（惰性建索引）
             var tool = new Agent.Infrastructure.Tools.DependencyAnalyzerTool(proj, proj,
-                Path.Combine(TestTmp, "sym_epoch_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db"));
+                new Agent.Infrastructure.Project.SymbolIndexStore(
+                    Path.Combine(TestTmp, "sym_epoch_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6] + ".db")));
             var json = System.Text.Json.JsonDocument.Parse("{\"path\":\"Order.cs\"}").RootElement;
             var outText = tool.InvokeAsync(json, CancellationToken.None).GetAwaiter().GetResult();
             Check("analyze_deps 输出反向依赖", outText.Contains("反向依赖") && outText.Contains("OrderService.cs"));
             Check("analyze_deps 非工程模式报错",
-                new Agent.Infrastructure.Tools.DependencyAnalyzerTool(proj, null, Path.Combine(TestTmp, "x.db"))
+                new Agent.Infrastructure.Tools.DependencyAnalyzerTool(proj, null, new Agent.Infrastructure.Project.SymbolIndexStore(Path.Combine(TestTmp, "x.db")))
                     .InvokeAsync(json, CancellationToken.None).GetAwaiter().GetResult().Contains("工程模式"));
         }
     }
