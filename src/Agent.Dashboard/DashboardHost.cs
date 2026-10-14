@@ -493,7 +493,12 @@ public static class DashboardHost
         return map;
     }
 
-    private static string WireType(string typeName) =>
+    /// <summary>
+    /// wire 短名解析（类名 → 前端契约短名，如 Thinking → thinking）。
+    /// 【10-14 P2-2】映射由 Agent.Core 的 [WireName] 特性反射构建；未标记/未知类名兜底原样（不吞事件）。
+    /// public：宿主映射的真实验证入口（tests 直接断言，避免"标注存在但映射未生效"的静默失效）。
+    /// </summary>
+    public static string WireType(string typeName) =>
         WireTypeMap.TryGetValue(typeName, out var w) ? w : typeName;
 
     // ── 【P2-4】依赖图缓存（30s TTL）：原 /api/deps 每次请求都"增量索引检查 + 全量依赖边重算"，

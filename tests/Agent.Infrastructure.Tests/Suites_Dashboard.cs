@@ -48,6 +48,11 @@ public static class Suites_Dashboard
             Check("P2-2 wire 短名：8 类事件 [WireName] 标注齐全且与前端契约一致",
                 wireNames.All(x => x.T.GetCustomAttributes(typeof(Agent.Core.Models.WireNameAttribute), false)
                     .OfType<Agent.Core.Models.WireNameAttribute>().FirstOrDefault()?.Name == x.Name));
+            // ①b 验证宿主映射真的生效（反射构建的 WireTypeMap）：8 类逐一解析 + 未知类名兜底不吞
+            Check("P2-2 宿主 wire 映射生效：8 类解析为契约短名",
+                wireNames.All(x => Agent.Dashboard.DashboardHost.WireType(x.T.Name) == x.Name));
+            Check("P2-2 宿主 wire 映射兜底：未知类名原样返回（不吞事件）",
+                Agent.Dashboard.DashboardHost.WireType("SomeFutureEvent") == "SomeFutureEvent");
             // ② 锁同源序列化：SSE 现走"Serialize(evt, GetType(), TaskEventStore.JsonOpts) + 宿主补 type"
             //    （原为 ToWire 手工匿名对象 34 行——record 加字段时回放可见、SSE 不可见的分叉温床）
             var sseNode = JsonSerializer.SerializeToNode(

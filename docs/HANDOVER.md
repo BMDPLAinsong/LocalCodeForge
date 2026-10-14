@@ -1042,6 +1042,8 @@ powershell -NoProfile -File scripts/e2e/e2e.ps1
 
 4f. **【已完成】P2-5 SymbolIndexStore 批量插入（10-14，任务5-B4）**：`BuildAndSave`/`BuildAndSaveIncremental` 原逐行 `ExecuteNonQuery`（300 文件工程单次全量构建持锁上千次，增量每文件同样逐行）。实施：新增私有 `InsertBatch`——按批拼 multi-VALUES `INSERT`（每批 ≤100 行 = 600 参数，远低于 SQLite 变量上限），全量与增量两条路径共用；增量侧改为每文件一次批插。**验证**：构建 0 错误；tests 825/825（符号索引增量断言照旧：`BuildAndSave ≥3 符号`、`BuildAndSaveIncremental` 重扫计数与总数）。
 
+4g. **【已完成】P2-2/4/5 批次门禁自检（10-14）**：按约定自检本批次，查出并修正**验证盲区一处**：P2-2 新增断言只校验了 `[WireName]` 标注存在，**未验证宿主反射映射真的生效**——若 `GetNestedTypes()` 返回空，wire 名会静默退化为类名，前端事件全部不渲染且无任何报错（最坏形态）。实施：`DashboardHost.WireType` 提升为 public（宿主映射的真实验证入口），新增 2 项断言：8 类事件经宿主解析逐一等于契约短名 + 未知类名兜底原样（不吞）。**同批确认无遗漏**：①`ToWire` 全域仅存于注释（无代码残留）；②`SymbolIndexer` 已无逐行 `ExecuteNonQuery` 插入（余下调用均为 Initialize 迁移 / DELETE 清理 / `InsertBatch` 单次执行）；③`DashboardHost` 内无任何每请求 store 构造；④本批补齐 3 项断言，覆盖此前**无任何测试覆盖**的 SSE 载荷与 wire 契约。**验证**：构建 0 错误（警告基线 9）；tests 825→827 全绿。
+
 4. **补 Executor prompt 禁令**：「禁止 Console.ReadLine/while (true)」，让交互式任务在规划层就规避，而不是靠超时判失败。5. **清理 RoutingRules.json 重名规则**，合并语义；**EnableOrchestration 接线或删除**。
 
 6. `git init`**&#x20;纳入版本控制**；为 TaskClassifier / RuleEngine / TryParseToolCallsFromText 补单元测试。
