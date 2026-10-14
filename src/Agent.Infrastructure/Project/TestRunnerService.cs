@@ -6,6 +6,7 @@
 
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Agent.Infrastructure.Project;
 
@@ -17,6 +18,19 @@ public sealed record TestRunResult(int? ExitCode, string Summary, string Output,
 /// </summary>
 public static class TestRunnerService
 {
+    // ── 【10-14 P0 词边界】csproj 名判定收紧：子串 Contains("Test") 会误报 Contestant/MyTester/Latest
+    // 等非测试工程（测试门是失败判定依据，误报会错杀正常工程）。Test/Tests 须为独立词（start/分隔符
+    // .-_ 空格 之后）或 PascalCase 段（小写→大写 hump，如 UnitTests/MyProjectTests）；词尾须为
+    // end/分隔符/大写或数字。全大写（TESTS.csproj）不命中——罕见形态，宁漏检不误报。
+    // TestProjectDetector.HasTests 同步改调本方法（双出口防漂移，9/22 双路径教训）。
+    private static readonly Regex TestWordRe = new(
+        @"(?:(?<=^|[._\-\s])[Tt]ests?|(?<=[a-z0-9])Tests?)(?=$|[._\-\s]|(?=[A-Z0-9]))",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    /// <summary>csproj 文件名（不含扩展名）是否为测试工程名：Test/Tests 为独立词或 PascalCase 段。</summary>
+    public static bool IsTestProjectName(string? nameWithoutExtension) =>
+        !string.IsNullOrEmpty(nameWithoutExtension) && TestWordRe.IsMatch(nameWithoutExtension);
+
     /// <summary>
     /// 检测工程的测试命令。任一命中即返回 (命令, 参数, 显示名)；无测试入口返回 null。
     /// 优先级：
@@ -34,7 +48,7 @@ public static class TestRunnerService
         {
             // 1) 测试工程（.csproj 文件名含 Test）
             var csprojs = Directory.GetFiles(projectRoot, "*.csproj", SearchOption.AllDirectories)
-                .Where(p => Path.GetFileNameWithoutExtension(p).Contains("Test", StringComparison.OrdinalIgnoreCase))
+                .Where(p => IsTestProjectName(Path.GetFileNameWithoutExtension(p)))
                 .ToList();
             foreach (var p in csprojs)
             {

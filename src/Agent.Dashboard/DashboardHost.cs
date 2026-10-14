@@ -301,14 +301,17 @@ public static class DashboardHost
             var smallRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.Small, "Rule");
             var largeRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.Large, "Rule");
             var proRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.AgentPro, "Rule");
-            var proL3 = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.AgentPro, "SmallModel");
 
             var downgrade = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDowngrade(
                 smallRule, largeRule, opt.RoutingTuningMinSamples, opt.RoutingDowngradeMinSuccessRate, out var dowReason);
             var readUp = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestReadTier(
                 proRule, smallRule, opt.RoutingTuningMinSamples, opt.RoutingReadUpgradeBadRate, opt.RoutingReadUpgradeMinSuccessRate, out var readReason);
+            // 【10-14 P0 双出口同步】10-11 在 CLI 侧修复 P2 调权错配（Program.cs proRuleP2：agent_pro 层级
+            // SmallModel→Rule，SmallModel 过滤永远 0 样本）时本端点漏改——web 端 P2 从未真正评估。
+            // 现与 CLI 对齐复用 proRule（同为 AgentPro+Rule，亦避免 CLI 侧 proRule/proRuleP2 的重复查询）。
+            // 双出口长期收敛方案：RoutingTuningReporter 单源（架构审查 P1-8）。
             var dropPro = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDropAgentPro(
-                proL3, opt.RoutingDropAgentProMinSamples, opt.RoutingDropAgentProMinSuccessRate, out var dropReason);
+                proRule, opt.RoutingDropAgentProMinSamples, opt.RoutingDropAgentProMinSuccessRate, out var dropReason);
 
             return Results.Json(new
             {
@@ -324,7 +327,7 @@ public static class DashboardHost
                 },
                 writeDowngrade = new { sampleCount = smallRule.TotalCount, successRate = Rate(smallRule), threshold = opt.RoutingDowngradeMinSuccessRate, triggered = downgrade, reason = dowReason },
                 readUpgrade = new { small = new { sampleCount = smallRule.TotalCount, successRate = Rate(smallRule) }, pro = new { sampleCount = proRule.TotalCount, successRate = Rate(proRule) }, badRateThreshold = opt.RoutingReadUpgradeBadRate, minSuccessRate = opt.RoutingReadUpgradeMinSuccessRate, triggered = readUp, reason = readReason },
-                complexDrop = new { sampleCount = proL3.TotalCount, successRate = Rate(proL3), threshold = opt.RoutingDropAgentProMinSuccessRate, triggered = dropPro, reason = dropReason },
+                complexDrop = new { sampleCount = proRule.TotalCount, successRate = Rate(proRule), threshold = opt.RoutingDropAgentProMinSuccessRate, triggered = dropPro, reason = dropReason },
             }, JsonOpts);
         });
 

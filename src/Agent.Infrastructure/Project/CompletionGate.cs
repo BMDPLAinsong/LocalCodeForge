@@ -104,15 +104,14 @@ public static class CompletionGate
         return null;
     }
 
-    /// <summary>路径等价比较（归一化 + 忽略大小写，Windows 路径不区分大小写）。</summary>
+    /// <summary>路径等价比较（GetFullPath 归一化 + 忽略大小写，Windows 路径不区分大小写）。
+    /// 【10-14 P0】删 TrimEnd('\\','/')：GetFullPath 对非根路径已消除尾分隔符（"X:\dir\" → "X:\dir"），
+    /// 仅盘符根保留一个 '\'（"X:\"）——TrimEnd 会削成非规范形态 "X:"。纯 GetFullPath 比较即可。</summary>
     private static bool PathsEqual(string a, string b)
     {
         try
         {
-            return string.Equals(
-                Path.GetFullPath(a).TrimEnd('\\', '/'),
-                Path.GetFullPath(b).TrimEnd('\\', '/'),
-                StringComparison.OrdinalIgnoreCase);
+            return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception)
         {

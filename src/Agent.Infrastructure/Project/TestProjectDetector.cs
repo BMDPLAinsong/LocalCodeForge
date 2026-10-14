@@ -16,7 +16,7 @@ public static class TestProjectDetector
     /// <summary>
     /// 任一命中即视为有测试：
     ///  1. 工程根下存在 tests/ test/ Tests/ Test 目录；
-    ///  2. 工程根下存在文件名含 Test(s) 的 .csproj（*.Tests.csproj 等）；
+    ///  2. 工程根下存在测试工程名 .csproj（Test/Tests 为独立词或 PascalCase 段，如 *.Tests.csproj）；
     ///  3. 存在 pytest.ini / pyproject.toml（含 pytest）；
     ///  4. package.json 含 "test" script。
     /// </summary>
@@ -34,11 +34,12 @@ public static class TestProjectDetector
                     return true;
             }
 
-            // 2) 测试工程文件（文件名含 Test(s)）
+            // 2) 测试工程文件（词边界判定，防 Contestant/MyTester 误报）
             var csprojs = Directory.GetFiles(projectRoot, "*.csproj", SearchOption.AllDirectories);
             foreach (var p in csprojs)
             {
-                if (Path.GetFileNameWithoutExtension(p).Contains("Test", StringComparison.OrdinalIgnoreCase))
+                // 【10-14 P0】与 TestRunnerService.DetectTest 同源判定（调其 IsTestProjectName，双出口防漂移）
+                if (TestRunnerService.IsTestProjectName(Path.GetFileNameWithoutExtension(p)))
                     return true;
             }
 

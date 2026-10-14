@@ -1016,6 +1016,12 @@ powershell -NoProfile -File scripts/e2e/e2e.ps1
 
 3s. **【已完成】E2E BOM 根因修复（10-04）**：双管齐下——① CLI 侧 `use` 命令前 `TrimStart('\uFEFF')` 剥离 BOM（Program.cs，产品级管道调用鲁棒性）；② 测试侧新增 `scripts\e2e\runner.py`（python subprocess 启动 CLI 喂 stdin，确定性无 BOM 注入，UTF-8 严格 / GBK 回退解码），e2e.ps1 弃用 PS 直写 stdin。**E2E run9 = 3/4**：single 31s / multi 81s / read 29s 全 PASS（耗时较此前 59-160s 大降）；incremental 安全层全生效（use 工程模式 + P-D 类型拦截触发并附工程已有类型清单 + 无侧路项目文件写入）；剩余失败 = **30B 增量修改能力上限**（被 P-D 拦后不读工程、不换 edit_file 局部改、直接 dotnet run 验证旧代码假完成——与 ShippingService 幻觉字段同类，用户已接受现状，非安全漏洞）。tests 308/308；提交 f247faf。
 
+3t. **【已完成】P0 双出口同步：Dashboard 调权 dropPro 层级错配（10-14，架构审查任务8-A1）**：10-11 CLI 侧修复 P2 调权错配（agent_pro 层级实为 Rule——SmallModel 过滤永远 0 样本，P2 从未真正评估）时 `/api/tuning` 端点漏改，web 端同源 bug 存活。实施：`DashboardHost.cs` 删 `proL3`（AgentPro+SmallModel）查询，`dropPro` 判定与 `complexDrop` 展示复用 `proRule`（AgentPro+Rule，与 CLI `proRuleP2` 同语义，且避免 CLI 侧 proRule/proRuleP2 的重复查询——审查任务7-B4）。**验证**：构建 0 错误；tests 813/813（`/api/tuning` 结构断言不受影响）。
+
+3u. **【已完成】P0 CompletionGate.PathsEqual 删误导性 TrimEnd（10-14，审查任务5-A12）**：`TrimEnd('\\','/')` 对 GetFullPath 归一化后的非根路径是死代码（已无尾分隔符），对盘符根（"X:\"）反而削成非规范形态 "X:"。实施：纯 `GetFullPath + OrdinalIgnoreCase` 比较，语义不变（两侧同函数归一化）。**验证**：构建 0 错误；tests 813/813（完成门 B/D 区段不受影响）。
+
+3v. **【已完成】P0 测试工程名词边界（防误报，10-14，审查任务5-B6）**：`Contains("Test")` 子串匹配误报 `Contestant.csproj`/`MyTester.csproj`/`Latest.csproj` 等非测试工程（测试门是失败判定依据，误报会错杀正常工程）。实施：`TestRunnerService` 新增 `IsTestProjectName` 词边界正则（Test/Tests 须为独立词——start/分隔符后，或小写→大写 PascalCase 段如 UnitTests/MyProjectTests；词尾须 end/分隔符/大写数字；全大写 TESTS.csproj 宁漏检不误报），`DetectTest` 与 `TestProjectDetector.HasTests` 双出口同源改调（9/22 双路径教训）。**验证**：tests 新增 3 项断言（Contestant.csproj→false / 正例 MyApp.Tests·UnitTests·MyProjectTests / 负例 Contestant·MyTester·Latest·Testing）813/813；构建 0 错误。
+
 4. **补 Executor prompt 禁令**：「禁止 Console.ReadLine/while (true)」，让交互式任务在规划层就规避，而不是靠超时判失败。5. **清理 RoutingRules.json 重名规则**，合并语义；**EnableOrchestration 接线或删除**。
 
 6. `git init`**&#x20;纳入版本控制**；为 TaskClassifier / RuleEngine / TryParseToolCallsFromText 补单元测试。

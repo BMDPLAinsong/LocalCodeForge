@@ -83,6 +83,14 @@ public static class Suites_Project
             Check("pytest.ini → true",
                 Agent.Infrastructure.Project.TestProjectDetector.HasTests(gateDir3));
 
+            // 【10-14 P0】词边界：子串含 test 的非测试工程不误报
+            var gateDir4 = Path.Combine(TestTmp, "gate4_" + Guid.NewGuid().ToString("N")[..6]);
+            Directory.CreateDirectory(gateDir4);
+            File.WriteAllText(Path.Combine(gateDir4, "Contestant.csproj"), "<Project Sdk='Microsoft.NET.Sdk' />");
+            Check("Contestant.csproj（子串含 test）→ false（词边界）",
+                !Agent.Infrastructure.Project.TestProjectDetector.HasTests(gateDir4));
+            Directory.Delete(gateDir4, true);
+
             // 空根/越界 → false
             Check("空根 → false",
                 !Agent.Infrastructure.Project.TestProjectDetector.HasTests(""));
@@ -169,6 +177,17 @@ public static class Suites_Project
     {
         Console.WriteLine("== TestRunnerService（测试命令检测） ==");
         {
+            // 【10-14 P0】词边界判定单点断言（正/负例）
+            Check("IsTestProjectName：独立词与 PascalCase 段命中",
+                Agent.Infrastructure.Project.TestRunnerService.IsTestProjectName("MyApp.Tests")
+                && Agent.Infrastructure.Project.TestRunnerService.IsTestProjectName("UnitTests")
+                && Agent.Infrastructure.Project.TestRunnerService.IsTestProjectName("MyProjectTests"));
+            Check("IsTestProjectName：Contestant/MyTester/Latest/Testing 不命中",
+                !Agent.Infrastructure.Project.TestRunnerService.IsTestProjectName("Contestant")
+                && !Agent.Infrastructure.Project.TestRunnerService.IsTestProjectName("MyTester")
+                && !Agent.Infrastructure.Project.TestRunnerService.IsTestProjectName("Latest")
+                && !Agent.Infrastructure.Project.TestRunnerService.IsTestProjectName("Testing"));
+
             var trDir = Path.Combine(TestTmp, "tr_" + Guid.NewGuid().ToString("N")[..6]);
             Directory.CreateDirectory(trDir);
 
