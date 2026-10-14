@@ -1044,6 +1044,10 @@ powershell -NoProfile -File scripts/e2e/e2e.ps1
 
 4g. **【已完成】P2-2/4/5 批次门禁自检（10-14）**：按约定自检本批次，查出并修正**验证盲区一处**：P2-2 新增断言只校验了 `[WireName]` 标注存在，**未验证宿主反射映射真的生效**——若 `GetNestedTypes()` 返回空，wire 名会静默退化为类名，前端事件全部不渲染且无任何报错（最坏形态）。实施：`DashboardHost.WireType` 提升为 public（宿主映射的真实验证入口），新增 2 项断言：8 类事件经宿主解析逐一等于契约短名 + 未知类名兜底原样（不吞）。**同批确认无遗漏**：①`ToWire` 全域仅存于注释（无代码残留）；②`SymbolIndexer` 已无逐行 `ExecuteNonQuery` 插入（余下调用均为 Initialize 迁移 / DELETE 清理 / `InsertBatch` 单次执行）；③`DashboardHost` 内无任何每请求 store 构造；④本批补齐 3 项断言，覆盖此前**无任何测试覆盖**的 SSE 载荷与 wire 契约。**验证**：构建 0 错误（警告基线 9）；tests 825→827 全绿。
 
+5a. **【已完成】P3-1 工程上下文缓存：签名计算内联 + 内存缓存上限（10-14，任务5-A14/B3）**：原流程要求调用方手工串`ComputeSignature`（一次 Walk）→ `TryGet` →（未命中）`Scan` → `Put` 四步——顺序错或漏算签名即退化为每任务全量重扫。实施：①新增 `ProjectContextStore.GetOrCompute(root, out bool cacheHit)` 封装全链（命中路径仍是 1 次签名 Walk，与原实现同——价值是**封装防漏**，不是省一次 Walk，不夸大收益）；②`AgentLoop.LoadProjectCompactBlock` 收敛为一次调用（缓存命中/未命中日志原样保留）；③内存缓存原为**无界 Dictionary**（多 use 不同工程根时进程内线性增长）→ 8 条上限 + FIFO 淘汰（`RememberInMemory`，SQLite 回填与 `Put` 两处同走）。**验证**：构建 0 错误（警告基线 9）；tests 827/827。
+
+5b. **【已完成】P3-2 敏感区守卫：静态构造去 P/Invoke + 正向判定缓存（10-14，任务5-A7/A8）**：①原静态构造对 13 个内置拒绝根各做一次 `GetShortPathNameW`（P/Invoke）——**首次触发本类任意成员即阻塞**（网络盘/异常用户目录可挂住进程）；现静态构造只登记长名（零 P/Invoke），8.3 短名在首次 `IsDenied` 时经 `EnsureShortRootsExpanded` 加锁一次性展开（含启动后追加的用户/测试根，避免"启动期集合"与"懒展开期集合"两套短名不一致）。②判定结果缓存**只缓存"已判定为敏感"的正向结果**（有界 4096、超限整体清空）；**明确不做负向缓存**——两次判定之间若有人把中间目录换成指向敏感区的 junction，陈旧 false 会放行读取，这是安全漏洞而非性能取舍（理由已写入代码注释，不留给后人误加）。**验证**：构建 0 错误；tests 827/827，关键断言 `8.3 短名绕过被拦（C:\PROGRA~1）`、`符号链接最终目标命中敏感区（link→C:\Windows）` 均 [OK]——惰性展开未削弱任一判定线。
+
 4. **补 Executor prompt 禁令**：「禁止 Console.ReadLine/while (true)」，让交互式任务在规划层就规避，而不是靠超时判失败。5. **清理 RoutingRules.json 重名规则**，合并语义；**EnableOrchestration 接线或删除**。
 
 6. `git init`**&#x20;纳入版本控制**；为 TaskClassifier / RuleEngine / TryParseToolCallsFromText 补单元测试。

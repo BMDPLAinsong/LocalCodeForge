@@ -406,7 +406,7 @@ CompletionGate.Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFi
 | 机制 | 文件 | 实现细节 |
 | ---- | ---- | ---- |
 | 只读扫描 | ProjectScanner.cs | 文件树/入口/依赖识别；产出工程上下文数据块（CompactBlock 注入瘦身版） |
-| 工程缓存 | ProjectContextStore.cs | project_context.db + 4 元签名（FileCount/DirCount/TotalBytes/MaxMtimeTicks）——签名一致命中缓存复用，变更自动重扫 |
+| 工程缓存 | ProjectContextStore.cs | project_context.db + 4 元签名（FileCount/DirCount/TotalBytes/MaxMtimeTicks）——签名一致命中缓存复用，变更自动重扫；**GetOrCompute**（10-14 P3-1：签名计算内化，调用方不再手工串「算签名→TryGet→Scan→Put」四步，防顺序错/漏算退化为每任务全量重扫）；内存缓存 8 条上限 + FIFO 淘汰（原为无界 Dictionary） |
 | 可写回滚 | BackupService.cs | **taskId 隔离**：备份 `.backup/<taskId>/<stamp>/<rel>` + 新建标记 `.new/<rel>`；RollbackTask 取**最早**备份；PruneBackups keepLastN=8；DryRunRollbackTask |
 | 符号索引 | SymbolIndexer.cs | 正则提取类型/方法/属性；SQLite 持久化；增量刷新（mtime 对比）；文件枚举走 **FileGrammar** 单源；**批量插入**（10-14 P2-5：multi-VALUES 分批，每批 ≤100 行 = 600 参数，全量/增量共用 `InsertBatch`） |
 | 依赖分析 | DependencyAnalyzer.cs | 类型级符号 + 引用扫描 → 文件依赖边；枚举走 **FileGrammar** 单源（原私有 26 行内联复制已删） |
@@ -415,7 +415,7 @@ CompletionGate.Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFi
 | **文件系统语法** | FileGrammar.cs | **单源（10-14 P1-4 + 交付后自检补齐）**：ExcludedDirNames（段级排除，任意层级；原 4 份行级复制归一，含 Orchestrator）/ CodeExtensions / ProjectManifestExtensions（.sln/.csproj 等，原 2 份归一）/ EnumerateCodeFiles（惰性+IO 容忍）/ 盘符两语法（中文"X盘" + 字面"X:\"含存在性校验）。头注释登记 3 处**故意不合并**的异用途清单（CoreFileLines.sourceExts / KnownFileExtensions / DashboardHost.TextExts），勿当遗漏再归一 |
 | 计划校验 | Orchestrator.CheckIncrementalPlanConflicts | 工程增量任务 Plan「已有文件≥2」→ Planner 阶段拒绝（防整体重写）；合法形态（新增1+接入1）放行 |
 | **路径边界** | PathBoundary.cs | **逐路径分段比较**（OrdinalIgnoreCase + 分隔符归一）：root 自身/子目录=true；`X:\proj2` 对 `X:\proj`=false（StartsWith 前缀假阳性根治）；`..` 跳脱经 GetFullPath 归一必越界 |
-| **敏感源头拒** | SensitivePathGuard.cs | **读=黑名单排除**：系统区 4（C:\Windows/Program Files/(x86)/ProgramData）+ 凭据区 9（.ssh/.aws/.kube/.docker/.config\gcloud/.git-credentials/.npmrc/两处 Credentials）+ 用户 denylist（workspace\sensitive_denylist.txt，# 注释/空行跳过/幂等）。四条判定线：①长名逐段匹配 ②8.3 短名双向展开（GetLongPathNameW/GetShortPathNameW P/Invoke）③符号链接/junction 逐段 ResolveLinkTarget ④UNC `\\?\` 前缀剥除。模式分档：工程模式读放开+黑名单硬拒；沙箱模式读仍限 workspaceRoot。FindWriteRootOverlaps 启动自检。已知边界：脚本内敏感读不做 |
+| **敏感源头拒** | SensitivePathGuard.cs | **读=黑名单排除**：系统区 4（C:\Windows/Program Files/(x86)/ProgramData）+ 凭据区 9（.ssh/.aws/.kube/.docker/.config\gcloud/.git-credentials/.npmrc/两处 Credentials）+ 用户 denylist（workspace\sensitive_denylist.txt，# 注释/空行跳过/幂等）。四条判定线：①长名逐段匹配 ②8.3 短名双向展开（GetLongPathNameW/GetShortPathNameW P/Invoke）③符号链接/junction 逐段 ResolveLinkTarget ④UNC `\\?\` 前缀剥除。模式分档：工程模式读放开+黑名单硬拒；沙箱模式读仍限 workspaceRoot。FindWriteRootOverlaps 启动自检。已知边界：脚本内敏感读不做；**10-14 P3-2**：静态构造零 P/Invoke（8.3 短名改首次 `IsDenied` 惰性展开 + 加锁，含启动后追加根）；判定结果**只缓存正向（敏感）**，**负向不缓存**——两次判定之间中间目录被换成指向敏感区的 junction 时，陈旧 false 会放行读取（安全漏洞，非性能取舍，勿"优化"掉） |
 | **输入路径自动识别** | ProjectPathDetector.cs | TryExtractProjectPath（分片正则不含 ':'——盘符冒号是路径组成部分；Directory.Exists 校验；尾部 CJK 语境词剥离 ≤3 次）；HasReadContext/HasWriteContext；TryGetAutoUsePath（非写 + 读语境 + 非敏感） |
 | **写目标提取** | ProjectPathDetector.cs | TryGetWriteTarget：通道1 完整绝对路径（盘符起点分片 + Exists + LooksLikeFile）；通道2 自然语言盘符（"X盘根目录"+文件名 → 文件级；无文件名 → 目录级）；文件名正则用 **ASCII 类**（.NET \w 默认含 Unicode 中文会吞掉"新建一下test.txt"） |
 | **完成门** | CompletionGate.cs | Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFile) → CompletionVerdict?（§4.5） |

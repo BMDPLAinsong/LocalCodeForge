@@ -23,6 +23,21 @@ public sealed class ProjectContextStore
     private readonly string _connectionString;
     private readonly Dictionary<string, CacheEntry> _memory = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>内存缓存条目上限（【10-14 P3-1】原为无界 Dictionary——多 use 不同工程根时进程内线性增长）。
+    /// 超限按插入顺序淘汰最旧一条（FIFO，非按访问时间：工程上下文每任务刷新，访问时间意义有限）。</summary>
+    private const int MemoryCacheCapacity = 8;
+
+    /// <summary>写入内存缓存（FIFO 上限淘汰）。</summary>
+    private void RememberInMemory(string key, CacheEntry entry)
+    {
+        if (_memory.Count >= MemoryCacheCapacity && !_memory.ContainsKey(key))
+        {
+            var oldest = _memory.First();          // Dictionary 保序 → First() 即最早插入
+            _memory.Remove(oldest.Key);
+        }
+        _memory[key] = entry;
+    }
+
     private sealed record CacheEntry(
         string Overview,
         string ContextBlock,
@@ -126,7 +141,7 @@ public sealed class ProjectContextStore
                     reader.GetString(8));
                 if (!SignatureMatches(entry, fileCount, dirCount, totalBytes, maxMtimeTicks))
                     return null;
-                _memory[key] = entry; // 回填内存缓存
+                RememberInMemory(key, entry); // 回填内存缓存（FIFO 上限）
                 return ToResult(entry);
             }
         }
@@ -150,7 +165,7 @@ public sealed class ProjectContextStore
             result.TotalBytes,
             result.MaxMtimeTicks,
             DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-        _memory[key] = entry;
+        RememberInMemory(key, entry);
 
         try
         {
@@ -178,6 +193,29 @@ public sealed class ProjectContextStore
         {
             // DB 不可用不阻塞任务
         }
+    }
+
+    /// <summary>
+    /// 取用工程上下文（【10-14 P3-1】签名计算内化）：签名一致 → 返回缓存；未命中/签名变化 →
+    /// 现场扫描并回填。cacheHit 输出本次是否命中缓存（调用方日志用）。
+    /// 原流程要求调用方手工串"ComputeSignature（一次 Walk）→ TryGet →（未命中）Scan → Put"四步，
+    /// 顺序错或漏算签名即退化为每次任务全量重扫；本方法把这条链封进存储层，无法写错。
+    /// 命中路径仍是 1 次签名 Walk（与原实现同）——价值是封装与防漏，不是省一次 Walk。
+    /// </summary>
+    public ProjectScanner.ScanResult GetOrCompute(string projectRoot, out bool cacheHit)
+    {
+        var (fileCount, dirCount, totalBytes, maxMtimeTicks) = ProjectScanner.ComputeSignature(projectRoot);
+        var cached = TryGet(projectRoot, fileCount, dirCount, totalBytes, maxMtimeTicks);
+        if (cached is not null)
+        {
+            cacheHit = true;
+            return cached;
+        }
+
+        var scanned = ProjectScanner.Scan(projectRoot);
+        Put(projectRoot, scanned);
+        cacheHit = false;
+        return scanned;
     }
 
     private static bool SignatureMatches(CacheEntry entry, int fileCount, int dirCount, long totalBytes, long maxMtimeTicks)

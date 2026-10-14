@@ -27,6 +27,20 @@ public static class SensitivePathGuard
     // 用户自定义 denylist 是否已加载（幂等）
     private static bool _userListLoaded;
 
+    // 【10-14 P3-2】8.3 短名展开的惰性状态与锁：原在静态构造里对 13 个内置根各做一次
+    // GetShortPathNameW（P/Invoke）——首次触发本类任意成员即阻塞（网络盘/异常用户目录可挂住进程）。
+    // 现改为：静态构造只登记长名（零 P/Invoke），短名在首次 IsDenied 时一次性展开（加锁幂等）。
+    private static bool _shortRootsExpanded;
+    private static readonly object _expandLock = new();
+
+    // 【10-14 P3-2】判定结果缓存：仅缓存"已判定为敏感"的正向结果（fail-safe 方向——
+    // 路径后来被换成指向敏感区的链接也仍然拒），有界 4096 条、超限整体清空。
+    // 【明确不做】负向（未命中）缓存：两次判定之间若有人把中间目录换成指向敏感区的 junction，
+    // 陈旧的 false 会放行读取——这是安全漏洞，不是性能取舍。
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _deniedVerdictCache
+        = new(StringComparer.OrdinalIgnoreCase);
+    private const int DeniedVerdictCacheCapacity = 4096;
+
     /// <summary>内置拒绝根（系统区 + 凭据区）。静态构造中按当前用户动态构建（不硬编码用户名）。</summary>
     private static readonly string[] BuiltinDeniedRoots;
 
@@ -57,6 +71,7 @@ public static class SensitivePathGuard
             Path.Combine(appDataRoaming, "Microsoft", "Credentials")
         };
 
+        // 仅登记长名（静态构造零 P/Invoke）；短名展开延后到首次 IsDenied
         foreach (var root in BuiltinDeniedRoots)
         {
             AddDeniedRoot(root);
@@ -72,7 +87,28 @@ public static class SensitivePathGuard
 
         _deniedRoots.Add(norm);
 
-        // 短名展开：仅对存在的目录有效（不存在则无短名可言）
+        // 【10-14 P3-2】展开未完成时不各自 P/Invoke——统一由 EnsureShortRootsExpanded 覆盖
+        // （含此刻之前/之后加入的全部根，避免"启动期集合"与"懒展开期集合"两套短名不一致）
+        if (_shortRootsExpanded)
+            TryAddShortForm(norm);
+    }
+
+    /// <summary>惰性展开全部拒绝根的 8.3 短名（首次 IsDenied 调用，加锁幂等）。</summary>
+    private static void EnsureShortRootsExpanded()
+    {
+        if (_shortRootsExpanded) return;
+        lock (_expandLock)
+        {
+            if (_shortRootsExpanded) return;
+            foreach (var root in _deniedRoots)
+                TryAddShortForm(root);
+            _shortRootsExpanded = true;
+        }
+    }
+
+    /// <summary>登记一个拒绝根的短名形式（仅对存在的目录有效——不存在则无短名可言）。</summary>
+    private static void TryAddShortForm(string norm)
+    {
         var shortForm = TryExpandShort(norm, longForm: false);
         if (!string.IsNullOrEmpty(shortForm) && !shortForm.Equals(norm, StringComparison.OrdinalIgnoreCase))
             _deniedShortRoots.Add(shortForm);
@@ -120,6 +156,26 @@ public static class SensitivePathGuard
         if (string.IsNullOrEmpty(norm))
             return false;
 
+        // 【10-14 P3-2】正向判定缓存（只记"敏感"；负向不缓存——理由见字段注释）
+        if (_deniedVerdictCache.TryGetValue(norm, out var cachedVerdict))
+            return cachedVerdict;
+
+        // 短名展开惰性触发（加锁幂等；必须早于任何 _deniedShortRoots 读取）
+        EnsureShortRootsExpanded();
+
+        var denied = ComputeDenied(norm);
+        if (denied)
+        {
+            if (_deniedVerdictCache.Count >= DeniedVerdictCacheCapacity)
+                _deniedVerdictCache.Clear();   // 有界：整体清空（纯函数缓存，丢弃不影响正确性）
+            _deniedVerdictCache[norm] = true;
+        }
+        return denied;
+    }
+
+    /// <summary>四条判定线的实际计算（原 IsDenied 主体，抽出以便缓存包装）。</summary>
+    private static bool ComputeDenied(string norm)
+    {
         // 判定线 1：原路径（长名）
         if (IsUnderAny(norm, _deniedRoots))
             return true;

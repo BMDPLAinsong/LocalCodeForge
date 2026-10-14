@@ -90,19 +90,13 @@ public sealed class AgentLoop : IAgentLoop
     {
         try
         {
-            var (fileCount, dirCount, totalBytes, maxMtimeTicks) =
-                Agent.Infrastructure.Project.ProjectScanner.ComputeSignature(root);
-            var cached = _projectContextStore.TryGet(root, fileCount, dirCount, totalBytes, maxMtimeTicks);
-            if (cached is not null)
-            {
-                _logger.LogInformation("[工程上下文] 缓存命中（签名一致），复用 CompactBlock。");
-                return cached.CompactBlock;
-            }
-
-            var scan = Agent.Infrastructure.Project.ProjectScanner.Scan(root);
-            _projectContextStore.Put(root, scan);
-            _logger.LogInformation("[工程上下文] 缓存未命中，重新扫描并写入缓存。");
-            return scan.CompactBlock;
+            // 【10-14 P3-1】签名计算与缓存取用内化为 GetOrCompute（调用方不再手工串
+            // ComputeSignature → TryGet → Scan → Put 四步，顺序错/漏算即退化为每任务全量重扫）
+            var result = _projectContextStore.GetOrCompute(root, out var cacheHit);
+            _logger.LogInformation(cacheHit
+                ? "[工程上下文] 缓存命中（签名一致），复用 CompactBlock。"
+                : "[工程上下文] 缓存未命中，重新扫描并写入缓存。");
+            return result.CompactBlock;
         }
         catch (Exception ex)
         {
