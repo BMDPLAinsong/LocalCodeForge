@@ -57,7 +57,7 @@ Agent.Infrastructure/Memory/AgentMemoryStore.cs       456 行   记忆存储
 Agent.Infrastructure/Quality/OutputVerifier.cs        435 行   输出判定单一来源
 Agent.Infrastructure/Project/SymbolIndexer.cs         432 行   符号索引
 Agent.Infrastructure/Project/ProjectScanner.cs        357 行   工程扫描
-Agent.Infrastructure/Project/ProjectPathDetector.cs   308 行   路径形态解析（22 方法）
+Agent.Infrastructure/Project/ProjectPathDetector*.cs   3 文件（partial）   路径形态解析（读语境/写目标/路径解析三域，10-14 P5-23 拆）
 Agent.Infrastructure/Project/SensitivePathGuard.cs   303 行   敏感区判定（长名/短名/symlink/UNC）
 Agent.Infrastructure/Routing/ModelRouter.cs           301 行   三层漏斗路由
 Agent.Infrastructure/Project/TypeConflictDetector.cs  278 行   P-D 写前类型冲突（索引优先 + 回退全扫）
@@ -643,7 +643,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 | `src/Agent.Infrastructure/Project/PathBoundary.cs` | 路径边界逐段比较 | IsInside |
 | `src/Agent.Infrastructure/Project/SensitivePathGuard.cs` | 敏感源头拒（读黑名单） | IsDenied / LoadUserDenylist / FindWriteRootOverlaps |
 | `src/Agent.Infrastructure/Project/ReadOnlyGuard.cs` | 只读工程预检 | ShouldBlock / FindExistingProjectFileRef |
-| `src/Agent.Infrastructure/Project/ProjectPathDetector.cs` | 路径自动识别 + 写目标提取 | TryExtractProjectPath / TryGetAutoUsePath / TryGetWriteTarget / TryExtractDiskRoot |
+| `src/Agent.Infrastructure/Project/ProjectPathDetector*.cs` | 路径自动识别 + 写目标提取 + 路径解析（**10-14 P5-23 拆为 3 个 partial 文件**：主文件=读语境/自动 use；`.WriteTarget.cs`=写目标；`.PathResolve.cs`=路径清洗解析） | TryExtractProjectPath / TryGetAutoUsePath / TryGetWriteTarget / TryExtractDiskRoot / TryResolveAbsolutePath / CleanPathSuffix |
 | `src/Agent.Infrastructure/Project/CompletionGate.cs` | 写任务完成门 | Evaluate(CompletionContext)（推荐）/ Evaluate(位置参数·兼容) / DetectSelfDuplicateTypes 关联 |
 | `src/Agent.Infrastructure/Project/BackupService.cs` | taskId 隔离回滚 | BackupFile / RollbackTask / DryRunRollbackTask / PruneBackups / ClearNewMarkers。**10-14 P4-22**：备份落点恒为传入的工作区根——原`GetRunRoot` 的 `task_` 前缀命名启发式已删除（15 处生产调用点无一命中，每任务隔离靠 `.backup/<taskId>/`） |
 | `src/Agent.Infrastructure/Project/TypeConflictDetector.cs` | P-D 写前类型冲突（索引优先 + 回退全扫） | DetectDuplicateTypes / GetExistingTypes / DetectSelfDuplicateTypes / BuildExistingTypesHint |

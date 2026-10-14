@@ -7,9 +7,17 @@ namespace Agent.Infrastructure.Project;
 /// 双根保护·输入路径自动识别（"给路径就干活"）：CLI 层在任务执行前检测
 /// 输入是否含"存在的绝对目录路径 + 读/分析语境（非写任务）"→ 自动只读 use。
 /// 纯确定性静态函数，无 LLM、无副作用，tests 直接断言。
+///
+/// 【10-14 P5-23 按域拆 partial】本类原为单文件 14 方法/308 行，按三个调用域拆为三个 partial 文件：
+///   ① 本文件 = 读/分析语境识别 + 自动 use 判定（共享词表与 CJK 判定也在此）；
+///   ② ProjectPathDetector.WriteTarget.cs = 写目标提取（显式写授权 + 达成门）；
+///   ③ ProjectPathDetector.PathResolve.cs = 路径清洗与绝对路径解析。
+/// 纯搬移零行为变更（public API、方法体、词表逐字不动；partial 为同一类型，跨文件私有成员互通）。
 /// </summary>
-public static class ProjectPathDetector
+public static partial class ProjectPathDetector
 {
+    // ─────────── 读/分析语境识别 + 自动 use ───────────
+
     // 读/分析语境词表（命中其一即视为"想了解这个路径"）
     private static readonly string[] ReadContextWords =
     {
@@ -117,188 +125,7 @@ public static class ProjectPathDetector
         return true;
     }
 
-    // ─────────── 写目标提取（批次1：显式写授权 + 目标达成门共用） ───────────
-
-    // 常见文本文件扩展名（自然语言文件名提取用；路径形态判定另靠 LooksLikeFile）
-    private static readonly string[] KnownFileExtensions =
-    {
-        "txt", "py", "cs", "json", "md", "log", "xml", "html", "js", "ts",
-        "java", "cpp", "c", "h", "ini", "yaml", "yml", "csv", "toml", "cfg", "sh", "bat", "ps1"
-    };
-
-    /// <summary>
-    /// 从输入提取文件名（含扩展名，如 test.txt / main.py）。
-    /// 确定性正则：已知扩展名 + ASCII 词边界（.NET \w 默认含 Unicode 中文，
-    /// 用 ASCII 类避免"新建一下test.txt"被整串吞入；CJK 天然不在 ASCII 类内即边界）。
-    /// </summary>
-    public static bool TryExtractFileName(string input, out string name)
-    {
-        name = null!;
-        if (string.IsNullOrWhiteSpace(input)) return false;
-        var ext = string.Join("|", KnownFileExtensions.Select(e => Regex.Escape(e)));
-        var m = Regex.Match(input,
-            $@"(?<![A-Za-z0-9_\\/.])[A-Za-z0-9_-]+\.(?:{ext})(?![A-Za-z0-9_\\/.])",
-            RegexOptions.IgnoreCase);
-        if (!m.Success) return false;
-        name = m.Value;
-        return true;
-    }
-
-    /// <summary>
-    /// 自然语言盘符解析："X盘根目录 / x盘 / X盘下 / X盘里" → "X:\"。
-    /// 【10-14 P1-4】实现归位 FileGrammar.TryExtractChineseDiskRoot（单源），此处保留公共 API 委托。
-    /// </summary>
-    public static bool TryExtractDiskRoot(string input, out string root)
-        => FileGrammar.TryExtractChineseDiskRoot(input, out root);
-
-    /// <summary>
-    /// 写任务显式目标提取（批次1：显式写授权 + 目标达成门共用）。
-    /// 两条通道：
-    ///   通道1 完整绝对路径（文件：File.Exists 或最后段含 '.'；目录：Directory.Exists）；
-    ///   通道2 自然语言盘符（"X盘根目录" + 可选文件名 → 文件级；无文件名 → 目录级）。
-    /// 仅写语境触发；敏感区判定由调用方负责（CLI 授权 / CompletionGate 目标检查）。
-    /// </summary>
-    public static bool TryGetWriteTarget(string input, out string target, out bool isFile)
-    {
-        target = null!;
-        isFile = false;
-        if (string.IsNullOrWhiteSpace(input) || !HasWriteContext(input)) return false;
-
-        // 通道 1：完整绝对路径（分片 + 盘符起点；目录/已存在文件/形似文件 → 文件级）
-        foreach (var segment in input.Split(SplitMarks, StringSplitOptions.RemoveEmptyEntries))
-        {
-            var m = Regex.Match(segment, @"[A-Za-z]:\\");
-            if (!m.Success) continue;
-
-            var candidate = CleanPathSuffix(segment.Substring(m.Index));   // 【10-12 X2】先清洗方位/类别词，再判存在/形态（防"盘下"脏路径）
-            for (var i = 0; i <= 3; i++)
-            {
-                string full;
-                try { full = Path.GetFullPath(candidate); }
-                catch { break; }
-
-                if (Directory.Exists(full)) { target = full; isFile = false; return true; }
-                if (File.Exists(full)) { target = full; isFile = true; return true; }
-
-                // 剥尾部 CJK 语境词（"new.log 文件"→"new.log"）后再判形似文件；
-                // 尾部非 CJK（有效路径段）或无可剥 → 直接判文件形态
-                var lastSpace = candidate.LastIndexOf(' ');
-                if (lastSpace < 0)
-                {
-                    if (LooksLikeFile(full)) { target = full; isFile = true; return true; }
-                    break;
-                }
-                var tail = candidate.Substring(lastSpace + 1);
-                if (!ContainsCjk(tail))
-                {
-                    if (LooksLikeFile(full)) { target = full; isFile = true; return true; }
-                    break;
-                }
-                candidate = candidate.Substring(0, lastSpace);
-            }
-        }
-
-        // 通道 2：自然语言盘符（"X盘根目录"）
-        if (TryExtractDiskRoot(input, out var root))
-        {
-            if (TryExtractFileName(input, out var name))
-            {
-                target = Path.GetFullPath(Path.Combine(root, name));
-                isFile = true;
-                return true;
-            }
-            target = root;
-            isFile = false;
-            return true;
-        }
-
-        return false;
-    }
-
-    /// <summary>路径最后一段含 '.' 视为文件形态（新建文件常不存在，靠形态识别）。</summary>
-    private static bool LooksLikeFile(string fullPath)
-    {
-        var fileName = fullPath.Replace('\\', '/').Split('/').LastOrDefault();
-        return !string.IsNullOrEmpty(fileName) && fileName.Contains('.') &&
-               !fileName.EndsWith(".", StringComparison.Ordinal) &&
-               !fileName.EndsWith("..", StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// 【10-12 X2】剥离路径串中的中文方位/类别词（"x:\盘下index.html文件" → "x:\index.html"）。
-    /// 自然语言里"盘下/文件"常紧贴路径（"读取x:\盘下index.html文件，并修复…"），
-    /// 不清洗会被当作路径成分 → 写目标/注入路径变脏（实测"盘下"误判进显式授权白名单）。
-    /// 三步：① 盘根方位词正则归一（"x:\ 盘下 index.html" 空格分隔形态 → "x:\index.html"——
-    ///   "盘下"直接替换会留双空格，须连同根后空白一起规整）；② 剥尾部类别词
-    ///   （"文件/目录/文件夹"，循环长词优先）；③ 剥任意位置方位词（"盘下/根目录下/目录下"）。
-    /// 词表为精确中文词：不剥独立"下"（避免误伤"X:\下载"这类真实目录名）。
-    /// </summary>
-    public static string CleanPathSuffix(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return s;
-        // ① 盘根 + 方位词 + 任意空白 → 盘根（"x:\ 盘下 index.html" → "x:\index.html"）
-        s = System.Text.RegularExpressions.Regex.Replace(
-            s, @"^([A-Za-z]:\\)\s*(根目录下|目录下|盘下)\s*", "$1");
-        // ② 剥尾部类别词
-        var tailWords = new[] { "文件目录", "文件夹", "文件", "目录" };
-        var prev = "";
-        while (prev != s)
-        {
-            prev = s;
-            foreach (var w in tailWords)
-                if (s.EndsWith(w, StringComparison.Ordinal)) { s = s[..^w.Length]; break; }
-        }
-        // ③ 剥任意位置方位词（连相邻空白一起规整："\盘下 target.html" → "\target.html"，
-        //   "x:\ 盘下 index.html" 盘根开头形态已由 ① 归一，此处兜底子目录/其他位置）
-        s = System.Text.RegularExpressions.Regex.Replace(s, @"\s*(根目录下|目录下|盘下)\s*", "");
-        return s.TrimEnd();
-    }
-
-    /// <summary>
-    /// 【10-12 X1】从输入解析"存在的文件绝对路径"（优先于文件名搜索注入）。
-    /// 输入已含盘符绝对路径（"读取x:\盘下index.html文件…"）→ 正则提取候选 → 清洗方位/类别词 →
-    /// File.Exists 校验 → 命中返回干净绝对路径。纯字符 + 文件系统事实，无模糊匹配。
-    /// </summary>
-    public static bool TryResolveAbsolutePath(string input, out string path)
-        => Resolve(input, out path, file: true);
-
-    /// <summary>
-    /// 【10-12 B2】与 TryResolveAbsolutePath 对称的目录解析：输入含"存在的目录绝对路径"→ 命中。
-    /// use 一步到位时区分文件/目录：修单文件走轻量通道（不挂工程根），分析目录才 use 该目录。
-    /// 同一候选提取 + 最长存在前缀剥段逻辑，杜绝双通道漂移。
-    /// </summary>
-    public static bool TryResolveAbsoluteDirectory(string input, out string path)
-        => Resolve(input, out path, file: false);
-
-    private static bool Resolve(string input, out string path, bool file)
-    {
-        path = null!;
-        if (string.IsNullOrWhiteSpace(input)) return false;
-        // 【10-12 A】候选含空格（原正则排除 \s → 空格分隔形态"x:\ 盘下 index.html"截断在盘根，File.Exists(目录)=false）；
-        // 截断点为中文标点/行尾。
-        var m = System.Text.RegularExpressions.Regex.Match(input, @"[A-Za-z]:\\[^\r\n，。；、！？,;!?]*");
-        if (!m.Success) return false;
-        var candidate = CleanPathSuffix(m.Value);
-        if (string.IsNullOrWhiteSpace(candidate)) return false;
-        try
-        {
-            // 最长存在前缀：候选含尾部自然语言（"readme.md 的内容"）时逐段剥尾部空格段重试；
-            // 路径内空格（"D:\My Projects"）不受影响——只剥最后一个空格段，中间空格保留。
-            var cand = candidate;
-            while (cand.Length > 3)
-            {
-                var full = Path.GetFullPath(cand);
-                var hit = file ? File.Exists(full) : Directory.Exists(full);
-                if (hit) { path = full; return true; }
-                var sp = cand.LastIndexOf(' ');
-                if (sp <= 2) break;
-                cand = cand[..sp].TrimEnd();
-            }
-        }
-        catch { }
-        return false;
-    }
-
+    /// <summary>是否含 CJK 字符（区分"中文语境词"与"有效路径段"）。读语境域与写目标域均复用。</summary>
     private static bool ContainsCjk(string s)
     {
         foreach (var ch in s)
