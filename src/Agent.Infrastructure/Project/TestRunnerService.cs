@@ -22,7 +22,8 @@ public static class TestRunnerService
     // 等非测试工程（测试门是失败判定依据，误报会错杀正常工程）。Test/Tests 须为独立词（start/分隔符
     // .-_ 空格 之后）或 PascalCase 段（小写→大写 hump，如 UnitTests/MyProjectTests）；词尾须为
     // end/分隔符/大写或数字。全大写（TESTS.csproj）不命中——罕见形态，宁漏检不误报。
-    // TestProjectDetector.HasTests 同步改调本方法（双出口防漂移，9/22 双路径教训）。
+    // 【10-14 P1-5】原 TestProjectDetector.HasTests（经检索确认生产零调用）已随 P1-5 删除，
+    // 此前"测试门双出口"的历史债就此收敛——本类 DetectTest 为测试入口唯一判定（9/22 教训落点）。
     private static readonly Regex TestWordRe = new(
         @"(?:(?<=^|[._\-\s])[Tt]ests?|(?<=[a-z0-9])Tests?)(?=$|[._\-\s]|(?=[A-Z0-9]))",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);

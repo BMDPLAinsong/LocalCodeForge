@@ -1097,26 +1097,21 @@ public sealed class Orchestrator : IOrchestrator
             .ToList();
     }
 
-    /// <summary>工程模式下列举工程代码/配置文件（供规划提示的"已有文件清单"）。</summary>
-    private static IEnumerable<string> EnumerateExistingFiles(string projectRoot)    {
-        var exts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ".cs", ".py", ".js", ".ts", ".java", ".go", ".csproj", ".sln", ".slnx", ".fsproj", ".vbproj"
-        };
+    /// <summary>工程模式下列举工程代码/配置文件（供规划提示的"已有文件清单"）。
+    /// 【10-14 P1-4 复核修正】排除规则与扩展名清单改走 FileGrammar 单源——原为第四份行级
+    /// 复制（排除 6 项 + 11 扩展名内联集合），架构审查任务5 只识别出 3 处、漏此处。</summary>
+    private static IEnumerable<string> EnumerateExistingFiles(string projectRoot)
+    {
         var list = new List<string>();
         try
         {
             foreach (var f in Directory.EnumerateFiles(projectRoot, "*.*", SearchOption.AllDirectories))
             {
                 var rel = Path.GetRelativePath(projectRoot, f).Replace('\\', '/');
-                if (rel.Contains(".git", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith("bin", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith("obj", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith("node_modules", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith("workspace", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith(".vs", StringComparison.OrdinalIgnoreCase))
+                if (FileGrammar.IsExcludedRel(rel))
                     continue;
-                if (exts.Contains(Path.GetExtension(f)))
+                var ext = Path.GetExtension(f);
+                if (FileGrammar.CodeExtensions.Contains(ext) || FileGrammar.ProjectManifestExtensions.Contains(ext))
                     list.Add(rel);
             }
         }

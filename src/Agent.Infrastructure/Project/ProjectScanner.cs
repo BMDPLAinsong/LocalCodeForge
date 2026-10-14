@@ -21,11 +21,9 @@ public static class ProjectScanner
         "program.cs", "main.py", "app.py", "readme.md", "package.json"
     };
 
-    /// <summary>依赖/工程清单扩展名（读这些能了解技术栈）。</summary>
-    private static readonly HashSet<string> DepExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".csproj", ".sln", ".slnx", ".fsproj", ".vbproj"
-    };
+    /// <summary>依赖/工程清单扩展名（读这些能了解技术栈）——【10-14 P1-4 复核】单源
+    /// FileGrammar.ProjectManifestExtensions（原与 Orchestrator.EnumerateExistingFiles 各一份）。</summary>
+    private static readonly HashSet<string> DepExtensions = FileGrammar.ProjectManifestExtensions;
     private static readonly HashSet<string> DepNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "package.json", "requirements.txt", "pyproject.toml", "cargo.toml", "go.mod", "pom.xml"

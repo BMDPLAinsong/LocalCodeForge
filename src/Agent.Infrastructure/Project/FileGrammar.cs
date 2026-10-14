@@ -2,17 +2,27 @@
 // FileGrammar.cs
 // 文件系统语法单源（10-14 P1-4，架构审查任务5-A1/A5 + 任务8-C13）：
 //   · ExcludedDirNames —— 工程扫描排除目录（段名精确匹配，任意层级）。
-//     此前三处独立维护：ProjectScanner.ExcludedDirs（最全）+ SymbolIndexer /
-//     DependencyAnalyzer 两份行级复制（仅顶层 StartsWith，且 "binary" 前缀误伤、
-//     ".git" 子串误伤同类名）。改一处漏两处的温床——收敛为唯一权威表。
-//   · CodeExtensions —— 代码文件扩展名（原 SymbolIndexer.CodeExts 键集与
-//     DependencyAnalyzer 内联集合两份归一；解析风格映射仍归 SymbolIndexer）。
+//     此前【四处】独立维护：ProjectScanner.ExcludedDirs（最全）+ SymbolIndexer /
+//     DependencyAnalyzer / Orchestrator 三份行级复制（仅顶层 StartsWith，且 "binary"
+//     前缀误伤、".git" 子串误伤同类名）。改一处漏三处的温床——收敛为唯一权威表。
+//   · CodeExtensions —— 代码文件扩展名（原 SymbolIndexer.CodeExts 键集、
+//     DependencyAnalyzer 内联集合、Orchestrator 内联集合三份归一；解析风格映射仍归 SymbolIndexer）。
+//   · ProjectManifestExtensions —— 工程清单扩展名（ProjectScanner.DepExtensions 与
+//     Orchestrator.EnumerateExistingFiles 两份归一）。
 //   · EnumerateCodeFiles —— 工程代码文件惰性枚举（排除 + 扩展过滤，IO 容忍）。
 //     文件数/字节上限策略由调用方施加（SymbolIndexer 8MB+300 清空、
 //     DependencyAnalyzer 取前 300）——语法归一，策略各留。
 //   · TryExtractChineseDiskRoot / TryExtractLiteralDiskRoot —— 盘符两种语法
 //     （"X盘根目录"自然语言 / "X:\" 字面 + 存在性校验），自 ProjectPathDetector /
 //     UseCommandParser 归位（两语义不同，各自保留——归位非合并）。
+//
+// 【故意不合并的清单（各有独立用途，勿当遗漏再"归一"）】
+//   · ProjectScanner.CoreFileLines.sourceExts（13 项含 .rs/.cpp/.vue/.razor）——上下文注入的
+//     "大源码文件"体积排序榜，范围比索引更宽（.rs/.cpp 不入符号索引）。
+//   · ProjectPathDetector.KnownFileExtensions（24 项无点前缀）——自然语言文件名提取词表
+//     （"新建一下test.txt" 的 txt 属文本文件而非代码文件）。
+//   · DashboardHost.TextExts（31 项）——产物预览"可当文本打开"的展示面清单。
+//
 // 无 LLM、纯文件系统/正则，可测。
 // ============================================================
 
@@ -33,11 +43,18 @@ public static class FileGrammar
         "$recycle.bin", "system volume information"
     };
 
-    /// <summary>代码文件扩展名（符号索引/依赖分析共用）。
+    /// <summary>代码文件扩展名（符号索引/依赖分析/规划已有文件清单共用）。
     /// 注意：解析风格映射（csharp/python）归 SymbolIndexer.CodeExts，此表只管"是否代码文件"。</summary>
     public static readonly HashSet<string> CodeExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".cs", ".py", ".js", ".ts", ".java", ".go"
+    };
+
+    /// <summary>工程清单扩展名（工程结构锚：.sln/.csproj 等，读这些能了解技术栈）。
+    /// 【10-14 P1-4 复核】原 ProjectScanner.DepExtensions 与 Orchestrator.EnumerateExistingFiles 各一份。</summary>
+    public static readonly HashSet<string> ProjectManifestExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".csproj", ".sln", ".slnx", ".fsproj", ".vbproj"
     };
 
     /// <summary>相对路径是否命中排除目录（任一路径段名 ∈ ExcludedDirNames）。</summary>
