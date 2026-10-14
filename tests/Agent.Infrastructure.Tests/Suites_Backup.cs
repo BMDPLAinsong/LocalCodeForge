@@ -239,13 +239,14 @@ public static class Suites_Backup
         }
     }
 
-    // ── 区段 2450：GetRunRoot 命名启发式哨兵（10-14 P3-5）──
-    // 契约（注释约定，代码里只有一行 StartsWith("task_")）：任务目录 task_<id> 的 .backup 落在其父
-    // （run 根）；非 task_ 前缀目录（run 目录自身）则落在自身。原为注释级约定，改名即静默错位——
-    // 本段以可观测行为（备份落点）锁定。
+    // ── 区段 2450：备份落点契约哨兵（10-14 P3-5 建 / 10-14 P4-22 改写）──
+    // 【P4-22】原断言锁定的是 GetRunRoot 的 task_ 命名启发式（task_ 前缀目录 → .backup 落父目录）。
+    // 该启发式已删除：实测 15 处调用点传入的都是 run 目录，无一命中该分支——即原断言锁的是**死行为**
+    // （它之所以能通过，只是因为断言自己构造了一个生产中不存在的目录形态）。
+    // 现锁定**现行契约**：备份落点恒等于传入的工作区根，与目录名无关（含看起来像任务目录的名字）。
     public static void Run2450()
     {
-        Console.WriteLine("== GetRunRoot 命名启发式哨兵（task_ 前缀 → 父目录为 run 根） ==");
+        Console.WriteLine("== 备份落点契约哨兵（恒为传入的工作区根，与目录名无关） ==");
         {
             var baseTmp = Path.Combine(TestTmp, "runroot");
             if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
@@ -253,31 +254,33 @@ public static class Suites_Backup
             var proj = Path.Combine(baseTmp, "proj");
             Directory.CreateDirectory(proj);
             var f = Path.Combine(proj, "A.cs");
+            bool HasBackupIn(string root, string taskId) =>
+                Directory.Exists(Path.Combine(root, ".backup", taskId))
+                && Agent.Infrastructure.Project.BackupService.ListBackups(root)
+                    .Any(b => b.TaskId == taskId);
 
-            // 形态 1：workspaceRoot 为任务目录（task_ 前缀）→ .backup 落父目录
+            // 形态 1：普通 run 目录 → .backup 落自身（原契约不变）
             var runRoot = Path.Combine(baseTmp, "run_20261014-120000");
-            var taskDir = Path.Combine(runRoot, "task_abc12345");
-            Directory.CreateDirectory(taskDir);
+            Directory.CreateDirectory(runRoot);
             File.WriteAllText(f, "v0");
-            Agent.Infrastructure.Project.BackupService.Backup(taskDir, f, proj, "taskS1");
-            bool InRoot(string root) => Agent.Infrastructure.Project.BackupService.ListBackups(root)
-                .Any(b => b.Rel.Replace('\\', '/').EndsWith("A.cs"));
-            // 断言落点用磁盘事实（.backup 建在哪一层）：ListBackups(taskDir) 按契约同样上浮到
-            // run 根（GetRunRoot 的设计），故不能拿它的空/非空当"未上浮"的证据。
-            Check("GetRunRoot：task_ 前缀目录 → .backup 落父目录（run 根），任务目录内无 .backup",
-                InRoot(runRoot)
-                && Directory.Exists(Path.Combine(runRoot, ".backup", "taskS1"))
-                && !Directory.Exists(Path.Combine(taskDir, ".backup")));
+            Agent.Infrastructure.Project.BackupService.Backup(runRoot, f, proj, "taskS1");
+            Check("备份落点：run 目录 → .backup 落自身", HasBackupIn(runRoot, "taskS1")
+                && !HasBackupIn(baseTmp, "taskS1"));
 
-            // 形态 2：workspaceRoot 非 task_ 前缀（run 目录自身）→ .backup 落自身
-            var runRoot2 = Path.Combine(baseTmp, "run_plain");
-            Directory.CreateDirectory(runRoot2);
+            // 形态 2：目录名像任务目录（task_ 前缀）也**不再上浮**——P4-22 删除命名启发式后的关键行为
+            var taskNamedDir = Path.Combine(baseTmp, "task_abc12345");
+            Directory.CreateDirectory(taskNamedDir);
             File.WriteAllText(f, "v0b");
-            Agent.Infrastructure.Project.BackupService.Backup(runRoot2, f, proj, "taskS2");
-            Check("GetRunRoot：非 task_ 前缀目录 → 备份落自身，不上浮",
-                InRoot(runRoot2)
-                && !Agent.Infrastructure.Project.BackupService.ListBackups(baseTmp)
-                    .Any(b => b.TaskId == "taskS2"));
+            Agent.Infrastructure.Project.BackupService.Backup(taskNamedDir, f, proj, "taskS2");
+            Check("备份落点：task_ 前缀目录名不再上浮（无目录名魔法）",
+                HasBackupIn(taskNamedDir, "taskS2")
+                && !HasBackupIn(baseTmp, "taskS2"));
+
+            // 形态 3：改名（模拟目录重命名）不改变既有备份的可见性——落点只由传入根决定
+            var renamed = Path.Combine(baseTmp, "run_renamed");
+            Directory.Move(runRoot, renamed);
+            Check("备份落点：目录改名后仍按传入根可见（落点与名字解耦）",
+                HasBackupIn(renamed, "taskS1"));
 
             Directory.Delete(baseTmp, true);
         }

@@ -26,7 +26,7 @@ public static class BackupService
         try
         {
             var rel = Path.GetRelativePath(projectRoot, fullPath);
-            var runRoot = GetRunRoot(workspaceRoot); // runs/<run>（任务目录→其父）
+            var runRoot = workspaceRoot; // runs/<run>（任务目录→其父）
             var stamp = DateTime.Now.ToString("HHmmssfff"); // 【P-C】毫秒防同秒覆盖
             var dest = Path.Combine(runRoot, ".backup", taskId, stamp, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
@@ -43,7 +43,7 @@ public static class BackupService
     public static List<(string TaskId, string Stamp, string Rel, string Full)> ListBackups(string workspaceRoot)
     {
         var result = new List<(string, string, string, string)>();
-        var runRoot = GetRunRoot(workspaceRoot);
+        var runRoot = workspaceRoot;
         var dir = Path.Combine(runRoot, ".backup");
         if (!Directory.Exists(dir)) return result;
 
@@ -72,7 +72,7 @@ public static class BackupService
     /// </summary>
     public static int RollbackTask(string workspaceRoot, string projectRoot, string taskId)
     {
-        var runRoot = GetRunRoot(workspaceRoot);
+        var runRoot = workspaceRoot;
         var dir = Path.Combine(runRoot, ".backup", taskId);
         if (!Directory.Exists(dir)) return 0;
 
@@ -113,7 +113,7 @@ public static class BackupService
     {
         var restored = RollbackTask(workspaceRoot, projectRoot, taskId);
         var removed = 0;
-        var runRoot = GetRunRoot(workspaceRoot);
+        var runRoot = workspaceRoot;
         var newDir = Path.Combine(runRoot, ".backup", taskId, ".new");
         if (!Directory.Exists(newDir)) return (restored, 0);
 
@@ -146,7 +146,7 @@ public static class BackupService
     {
         try
         {
-            var runRoot = GetRunRoot(workspaceRoot);
+            var runRoot = workspaceRoot;
             var taskDir = Path.Combine(runRoot, ".backup", taskId);
             if (Directory.Exists(taskDir))
                 Directory.Delete(taskDir, true);
@@ -164,7 +164,7 @@ public static class BackupService
         var removed = 0;
         try
         {
-            var runRoot = GetRunRoot(workspaceRoot);
+            var runRoot = workspaceRoot;
             var dir = Path.Combine(runRoot, ".backup");
             if (!Directory.Exists(dir)) return 0;
 
@@ -190,7 +190,7 @@ public static class BackupService
         try
         {
             var rel = Path.GetRelativePath(projectRoot, fullPath);
-            var runRoot = GetRunRoot(workspaceRoot);
+            var runRoot = workspaceRoot;
             var dest = Path.Combine(runRoot, ".backup", taskId, ".new", rel);
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             File.WriteAllText(dest, "");
@@ -206,7 +206,7 @@ public static class BackupService
         string workspaceRoot, string projectRoot, string taskId)
     {
         var restoreTargets = new List<string>();
-        var runRoot = GetRunRoot(workspaceRoot);
+        var runRoot = workspaceRoot;
         var dir = Path.Combine(runRoot, ".backup", taskId);
         if (Directory.Exists(dir))
         {
@@ -241,7 +241,7 @@ public static class BackupService
     /// </summary>
     public static string? Rollback(string workspaceRoot, string rel, string projectRoot, string taskId)
     {
-        var runRoot = GetRunRoot(workspaceRoot);
+        var runRoot = workspaceRoot;
         var dir = Path.Combine(runRoot, ".backup", taskId);
         if (!Directory.Exists(dir)) return null;
 
@@ -261,16 +261,16 @@ public static class BackupService
         return null;
     }
 
-    /// <summary>
-    /// 归一化备份根：写工具传入任务目录（runs/&lt;run&gt;/task_xxx），CLI rollback 传入 run 目录（runs/&lt;run&gt;），
-    /// 两者差一层。统一取 run 目录：workspaceRoot 名以 task_ 开头取父目录，否则视为 run 目录本身。
-    /// （§14-3w P1 端到端修复：此前备份落 runs/&lt;run&gt;/.backup，rollback 却找 runs/.backup，差一层找不到。）
-    /// </summary>
-    private static string GetRunRoot(string workspaceRoot)
-    {
-        var name = Path.GetFileName(workspaceRoot);
-        return name.StartsWith("task_", StringComparison.OrdinalIgnoreCase)
-            ? Path.GetDirectoryName(workspaceRoot)!
-            : workspaceRoot;
-    }
+    // 【10-14 P4-22 删除 task_ 命名启发式】此处原有 GetRunRoot(workspaceRoot)：
+//   目录名以 "task_" 开头 → .backup 落**父目录**，否则落自身；配套文档曾称"写工具传入任务目录
+//   （runs/<run>/task_xxx），CLI rollback 传入 run 目录，两者差一层"——**该文档已失效**：
+//   写工具现收 DI 绑定的 run 根（DependencyInjection 的 workspaceRoot = AddAgent 传入的 run 目录），
+//   每任务隔离由 `.backup/<taskId>/` 目录结构承担，不再靠目录名。
+//   **实测全库 15 处调用点无一命中该分支**：CLI 7 处传 `workspace`、Dashboard 3 处传
+//   `o.WorkspaceRoot`、Write/Edit 工具 5 处传 `_workspaceRoot`——三者是同一个 run 目录
+//   （yyyyMMdd-HHmmss-xxxx），且无任何代码创建 task_ 前缀目录。
+//   故删除：保留它等于保留一个"改目录名会静默改变备份落点"的陷阱，且其哨兵断言（区段 2450）
+//   锁定的是不可达分支。现行契约：**备份落点恒等于传入的工作区根**。
+//   （审查任务5-A10 曾建议"改显式注入 runRoot 参数"：需改 15 处调用点签名，误接风险高于收益——
+//     既然分支不可达，删除比注入化更彻底且对所有现存路径零行为变化。）
 }

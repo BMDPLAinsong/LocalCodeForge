@@ -275,14 +275,9 @@ public static class DashboardHost
             if (backup is null)
                 return Results.NotFound(new { error = $"任务 {taskId} 无文件 {rel} 的备份。" });
             var current = Path.Combine(o.ProjectRoot, backup.Value.Rel);
-            var result = FileDiffService.Compute(backup.Value.Full, current);
-            string? originalText = null, modifiedText = null;
-            if (!result.TooLarge)
-            {
-                // backup.Value.Full 是备份文件路径（ListBackups 返回 Full=完整路径）——须 ReadAllText 取全文
-                originalText = File.ReadAllText(backup.Value.Full);
-                modifiedText = File.Exists(current) ? File.ReadAllText(current) : "";
-            }
+            // 【10-14 P4-17】一次读盘同时取 diff 与两侧全文（原为 Compute 读两遍 + 再 ReadAllText
+            // 两遍 = 每文件读两次）。TooLarge 时引擎返回 null 全文，语义与原 if (!TooLarge) 分支一致。
+            var (result, originalText, modifiedText) = FileDiffService.ComputeWithText(backup.Value.Full, current);
             return Results.Json(new { original = originalText, modified = modifiedText, diff = result }, JsonOpts);
         });
     }

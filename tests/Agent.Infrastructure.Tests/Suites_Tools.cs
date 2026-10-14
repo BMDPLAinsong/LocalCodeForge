@@ -188,19 +188,22 @@ public static class Suites_Tools
             Check("工程可写路径穿越 → 越界拒绝",
                 W(wRw, "../../../../Windows/test.txt", "x").Contains("越界"));
 
-            // 8) 备份根归一化（§14-3w）：任务目录（task_*）写入备份 → run 目录（CLI rollback）能找到并恢复
-            //    模拟 CLI：run 目录 ws2，任务目录 ws2/task_xxx，EditFileTool 用任务目录，rollback 用 run 目录
+            // 8) 备份落点与生产接线一致（【10-14 P4-22】）：工具与CLI rollback 收**同一个 run 根**
+            //    （生产装配即如此：DependencyInjection 把 run 目录传给写工具；每任务隔离靠
+            //    `.backup/<taskId>/`，不靠目录名）。原断言模拟的是 10-08 之前的旧架构
+            //    （工具收 runs/<run>/task_xxx、CLI 收 runs/<run>，靠 GetRunRoot 归一），
+            //    该启发式已随 P4-22 删除（15 处生产调用点无一命中）→ 此处改为验证现行接线。
             var ws2 = Path.Combine(TestTmp, "run_" + Environment.ProcessId + "_" + Guid.NewGuid().ToString("N")[..6]);
-            var taskWs = Path.Combine(ws2, "task_smoke");
-            Directory.CreateDirectory(taskWs);
+            Directory.CreateDirectory(ws2);
             Directory.CreateDirectory(Path.Combine(proj, "src"));
             File.WriteAllText(Path.Combine(proj, "src", "B.cs"), "// v1");
-            var eTask = new Agent.Infrastructure.Tools.EditFileTool(taskWs, proj, true);
+            // 工具收 run 根（与 DependencyInjection 生产装配同参）
+            var eTask = new Agent.Infrastructure.Tools.EditFileTool(ws2, proj, true);
             E(eTask, "src/B.cs", "// v1", "// v2");
-            Check("任务目录工具改工程文件 → 内容已变",
+            Check("工具改工程文件 → 内容已变",
                 File.ReadAllText(Path.Combine(proj, "src", "B.cs")).Contains("v2"));
             var backupsRun = Agent.Infrastructure.Project.BackupService.ListBackups(ws2);
-            Check("任务目录备份 → run 目录能列出（备份根归一化）",
+            Check("工具（run 根）写入的备份 → run 目录能列出",
                 backupsRun.Any(b => b.Rel.Replace('\\', '/').EndsWith("src/B.cs")));
 
             // 9.5) 【任务4 备份生命周期】PruneBackups：构造 5 个任务备份目录 → 保留最近 2，删更早 3
@@ -311,7 +314,7 @@ public static class Suites_Tools
             Check("方案A write_file 新建 .sln → 拒绝",
                 W(wRw, "demo.sln", "x").Contains("工程模式禁止修改/新建项目文件"));
             var restoredB = Agent.Infrastructure.Project.BackupService.Rollback(ws2, "src/B.cs", proj, "default");
-            Check("run 目录 rollback → 恢复任务目录产生的备份",
+            Check("run 目录 rollback → 恢复工具产生的备份（同一run 根）",
                 restoredB is not null && File.ReadAllText(Path.Combine(proj, "src", "B.cs")).Contains("v1"));
         }
     }
@@ -890,7 +893,13 @@ public static class Suites_Tools
             var full = store.BuildAndSave(proj);
             Check("P1-1 全量构建 3 符号", full == 3);
             // 修改 A.cs（追加新类型）→ 增量应只重扫 A.cs
-            File.WriteAllText(Path.Combine(proj, "A.cs"), "class A { }\nclass A2 { }\nclass A3 { }");
+            var aPath = Path.Combine(proj, "A.cs");
+            File.WriteAllText(aPath, "class A { }\nclass A2 { }\nclass A3 { }");
+            // 【10-14 P4-17 顺带修偶发】显式抬升 mtime：写文件后若与全量构建落在同一时间粒度内
+            // （部分文件系统 mtime 分辨率低于写操作耗时），增量索引会判"未变更"→
+            // Rescanned=0 且新符号不可见，实测两次运行偶发 1次（2026-10-14 835→837 批次捕获）。
+            // 增量失效判定的正确性属被测行为，测试不应依赖文件系统时间粒度。
+            File.SetLastWriteTimeUtc(aPath, DateTime.UtcNow.AddSeconds(2));
             var inc = store.BuildAndSaveIncremental(proj);
             var allAfter = store.GetAll(proj);
             Check("P1-1 增量仅重扫 1 文件", inc.Rescanned == 1);

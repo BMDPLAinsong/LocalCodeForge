@@ -41,6 +41,45 @@ public static class FileDiffService
         return ComputeLines(before, after, options);
     }
 
+    /// <summary>
+    /// 【10-14 P4-17】一次读盘同时产出 diff 结果与两侧全文（供 Monaco DiffEditor 用）。
+    /// 原宿主做法 = Compute(读两文件为行) + 再ReadAllText 两文件 = **每文件读两遍**。
+    /// 本重载把 ReadAllLines/ReadAllText 合一：ReadAllText 一次 → 按 ReadAllLines 同一规则切行
+    /// （\r\n|\n|\r 切分、**保留中间空行**、末尾换行不产生空行、BOM 已由 ReadAllText 剥离）
+    /// → 行序列与 Compute 逐行一致（契约由 tests 断言逐条锁定）。
+    /// TooLarge 时 Original/Modified 返回 null——与宿主原语义一致（超大文件回退红绿行视图，
+    /// 不把数百 MB 文本塞进 JSON）。
+    /// </summary>
+    public static (DiffResult Result, string? Original, string? Modified) ComputeWithText(
+        string beforePath, string afterPath, DiffOptions? options = null)
+    {
+        var beforeText = ReadText(beforePath);
+        var afterText = ReadText(afterPath);
+        var result = ComputeLines(SplitLines(beforeText), SplitLines(afterText), options);
+        return result.TooLarge
+            ? (result, null, null)
+            : (result, beforeText, afterText);
+    }
+
+    /// <summary>读全文（不存在/失败 →空串，与 ReadLines 的空数组降级对称）。</summary>
+    private static string ReadText(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return "";
+        try { return File.ReadAllText(path); }
+        catch { return ""; }
+    }
+
+    /// <summary>按 File.ReadAllLines 的语义切行：\r\n|\n|\r 皆为分隔符、保留中间空行、
+    /// 末尾换行不产生额外空行（ReadAllLines 会剥BOM，ReadAllText 亦然，两侧一致）。</summary>
+    private static IReadOnlyList<string> SplitLines(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return Array.Empty<string>();
+        var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        if (lines.Length > 0 && lines[^1].Length == 0)
+            lines = lines[..^1];
+        return lines;
+    }
+
     public static DiffResult ComputeLines(IReadOnlyList<string> before, IReadOnlyList<string> after, DiffOptions? options = null)
     {
         var ctx = options?.ContextLines ?? 3;

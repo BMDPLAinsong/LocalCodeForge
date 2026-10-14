@@ -70,6 +70,36 @@ public static class Suites_DiffSpectre
             var r6 = Agent.Infrastructure.Diff.FileDiffService.ComputeLines(m, m3);
             Check("gap>6 两处改动分为 2 hunks", r6.Hunks.Count == 2);
 
+            // ── 5b. 【10-14 P4-17】ComputeWithText：一次读盘出行序列 + 全文，且与 Compute 逐行等价 ──
+            {
+                var dt = Path.Combine(TestTmp, "difftext_" + Guid.NewGuid().ToString("N")[..6]);
+                Directory.CreateDirectory(dt);
+                // 刻意包含：CRLF 混合行尾、**中间空行**、末尾换行——正是 ReadAllLines 与
+                // 朴素 Split('\n') 会产生差异的三个点，用来锁死切行语义等价。
+                File.WriteAllText(Path.Combine(dt, "a.txt"), "l1\r\nl2\n\nl4\nl5");
+                File.WriteAllText(Path.Combine(dt, "b.txt"), "l1\nl2\n\nCHANGED\nl5");
+                var oldWay = Agent.Infrastructure.Diff.FileDiffService.Compute(
+                    Path.Combine(dt, "a.txt"), Path.Combine(dt, "b.txt"));
+                var newWay = Agent.Infrastructure.Diff.FileDiffService.ComputeWithText(
+                    Path.Combine(dt, "a.txt"), Path.Combine(dt, "b.txt"));
+                Check("ComputeWithText：diff 结果与 Compute 完全一致（切行语义等价：CRLF/中间空行/末尾换行）",
+                    oldWay.TooLarge == newWay.Result.TooLarge
+                    && oldWay.Hunks.Count == newWay.Result.Hunks.Count
+                    && oldWay.Hunks.SelectMany(h => h.Lines)
+                        .SequenceEqual(newWay.Result.Hunks.SelectMany(h => h.Lines)));
+                Check("ComputeWithText：同时返回两侧全文（与 ReadAllText 一致）",
+                    newWay.Original == File.ReadAllText(Path.Combine(dt, "a.txt"))
+                    && newWay.Modified == File.ReadAllText(Path.Combine(dt, "b.txt")));
+                var bigA = string.Join("\n", Enumerable.Range(0, 3000).Select(i => "a" + i));
+                File.WriteAllText(Path.Combine(dt, "big1.txt"), bigA);
+                File.WriteAllText(Path.Combine(dt, "big2.txt"), bigA.Replace("a1\n", "CHANGED\n"));
+                var bigWay = Agent.Infrastructure.Diff.FileDiffService.ComputeWithText(
+                    Path.Combine(dt, "big1.txt"), Path.Combine(dt, "big2.txt"));
+                Check("ComputeWithText：TooLarge → 全文返 null（不把超大文本塞进 JSON，与原宿主语义一致）",
+                    !bigWay.Result.TooLarge || (bigWay.Original is null && bigWay.Modified is null));
+                Directory.Delete(dt, true);
+            }
+
             // ── 6. 无头文本渲染（PlainDiffFormatter，diff 命令 PlainText 通道） ──
             var fmt = Agent.Infrastructure.Diff.PlainDiffFormatter.Format(r);
             Check("PlainDiffFormatter 含 hunk 头与 +/- 行", fmt.Contains("@@ ") && fmt.Contains("\n- ") && fmt.Contains("\n+ "));
