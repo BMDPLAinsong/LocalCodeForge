@@ -238,4 +238,48 @@ public static class Suites_Backup
             Check("dry-run 不执行任何改动", File.ReadAllText(file).Contains("v1") && File.Exists(newFile));
         }
     }
+
+    // ── 区段 2450：GetRunRoot 命名启发式哨兵（10-14 P3-5）──
+    // 契约（注释约定，代码里只有一行 StartsWith("task_")）：任务目录 task_<id> 的 .backup 落在其父
+    // （run 根）；非 task_ 前缀目录（run 目录自身）则落在自身。原为注释级约定，改名即静默错位——
+    // 本段以可观测行为（备份落点）锁定。
+    public static void Run2450()
+    {
+        Console.WriteLine("== GetRunRoot 命名启发式哨兵（task_ 前缀 → 父目录为 run 根） ==");
+        {
+            var baseTmp = Path.Combine(TestTmp, "runroot");
+            if (Directory.Exists(baseTmp)) Directory.Delete(baseTmp, true);
+
+            var proj = Path.Combine(baseTmp, "proj");
+            Directory.CreateDirectory(proj);
+            var f = Path.Combine(proj, "A.cs");
+
+            // 形态 1：workspaceRoot 为任务目录（task_ 前缀）→ .backup 落父目录
+            var runRoot = Path.Combine(baseTmp, "run_20261014-120000");
+            var taskDir = Path.Combine(runRoot, "task_abc12345");
+            Directory.CreateDirectory(taskDir);
+            File.WriteAllText(f, "v0");
+            Agent.Infrastructure.Project.BackupService.Backup(taskDir, f, proj, "taskS1");
+            bool InRoot(string root) => Agent.Infrastructure.Project.BackupService.ListBackups(root)
+                .Any(b => b.Rel.Replace('\\', '/').EndsWith("A.cs"));
+            // 断言落点用磁盘事实（.backup 建在哪一层）：ListBackups(taskDir) 按契约同样上浮到
+            // run 根（GetRunRoot 的设计），故不能拿它的空/非空当"未上浮"的证据。
+            Check("GetRunRoot：task_ 前缀目录 → .backup 落父目录（run 根），任务目录内无 .backup",
+                InRoot(runRoot)
+                && Directory.Exists(Path.Combine(runRoot, ".backup", "taskS1"))
+                && !Directory.Exists(Path.Combine(taskDir, ".backup")));
+
+            // 形态 2：workspaceRoot 非 task_ 前缀（run 目录自身）→ .backup 落自身
+            var runRoot2 = Path.Combine(baseTmp, "run_plain");
+            Directory.CreateDirectory(runRoot2);
+            File.WriteAllText(f, "v0b");
+            Agent.Infrastructure.Project.BackupService.Backup(runRoot2, f, proj, "taskS2");
+            Check("GetRunRoot：非 task_ 前缀目录 → 备份落自身，不上浮",
+                InRoot(runRoot2)
+                && !Agent.Infrastructure.Project.BackupService.ListBackups(baseTmp)
+                    .Any(b => b.TaskId == "taskS2"));
+
+            Directory.Delete(baseTmp, true);
+        }
+    }
 }

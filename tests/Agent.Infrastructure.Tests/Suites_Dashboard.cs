@@ -32,6 +32,12 @@ public static class Suites_Dashboard
             reader2.TryRead(out first);
             Check("退订后不再接收（第二个订阅者不受影响）", first is Agent.Core.Models.AgentEvent.Thinking && (first as Agent.Core.Models.AgentEvent.Thinking)!.Text == "t2");
 
+            // 【10-14 P3-5 哨兵】CommandHub 无任务哨兵：CurrentTask = (0, null)——前端"空闲"显示依赖此契约
+            var chkHub = new Agent.Core.CommandHub();
+            var (chkSeq, chkInput) = chkHub.CurrentTask;
+            Check("哨兵：CommandHub 初始 CurrentTask seq=0 / input=null / 队列空",
+                chkSeq == 0 && chkInput is null && chkHub.Count == 0);
+
             // ── 1b. 【10-14 P2-2】wire 短名随类型声明（[WireName]）+ SSE/回放同源序列化 ──
             // ① 锁 wire 名：前端按短名分派渲染，短名漂移 = 事件渲染不出来
             var wireNames = new (Type T, string Name)[]

@@ -89,4 +89,7 @@ dotnet build LocalAiWorkbench.slnx --no-incremental
 # 确定性回归（零依赖，几秒）
 dotnet run --project tests\Agent.Infrastructure.Tests\Agent.Infrastructure.Tests.csproj
 
+# 双路径漂移自查（批次门禁用：基线 51 处/19 文件，阈值 60，超阈退出码 1；纯 ASCII 脚本，勿加中文）
+powershell -File scripts\drift-check.ps1
+
 # 运行 CLI（Ollama 未启动会自动拉起；交互终端启动即自动起 Web Dashboard 并开浏览器，无头/管道模式自动跳过；LAW_NO_AUTODASH=1 可关）

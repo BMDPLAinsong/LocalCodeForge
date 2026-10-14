@@ -54,6 +54,7 @@
 2330	P-A 回滚取最早备份（防恢复到任务中间状态）
 2353	跨任务端到端（taskId 隔离三场景）
 2432	rollback --dry-run 预览（不执行）
+2450	GetRunRoot 命名启发式哨兵（10-14 P3-5）
 2461	Diff P0 FileDiffService（Diff/）
 2530	Spectre P0 渲染器（Rendering/）
 2596	双根保护：PathBoundary 逐段比较

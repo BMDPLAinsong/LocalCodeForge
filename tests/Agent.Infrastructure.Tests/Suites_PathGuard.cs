@@ -70,6 +70,10 @@ public static class Suites_PathGuard
             Check(".. 跳脱拒绝",
                 !Agent.Infrastructure.Project.PathBoundary.IsInside(@"X:\proj", System.IO.Path.GetFullPath(@"X:\proj\..\proj2\a.cs")));
             Check("大小写归一", Agent.Infrastructure.Project.PathBoundary.IsInside(@"X:\PROJ", @"x:\proj\a.cs"));
+            // 【10-14 P3-5 哨兵】归一化契约：root 带/不带尾分隔符等价（Normalize 归一后逐段比较）
+            Check("哨兵：root 带尾分隔符等价（X:\\proj\\ == X:\\proj）",
+                Agent.Infrastructure.Project.PathBoundary.IsInside(@"X:\proj", @"X:\proj\")
+                && Agent.Infrastructure.Project.PathBoundary.IsInside(@"X:\proj\", @"X:\proj\src\a.cs"));
         }
     }
 
