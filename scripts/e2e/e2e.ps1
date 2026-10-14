@@ -85,18 +85,41 @@ function Run-Case($name, $kind, $userInput, $writeMode, $expectFile) {
         }
         $leftovers = Get-ChildItem $caseDir -Name -ErrorAction SilentlyContinue | Where-Object { $_ -match "ShippingService|OrderSystem" }
         $dirty = $leftovers.Count -gt 0
-        $ok = $touched -and (-not $dirty) -and ($hasDone -or $hasIntercept -or $hasFail)
-        if ($hasDone) { $detail = "完成" }
-        elseif ($hasIntercept) { $detail = "安全拦截" }
-        elseif ($hasFail) { $detail = "失败但受控" }
-        else { $detail = "异常" }
-        if (-not $touched) {
-            # 三态细分（10-04 校准，§12-21）：demo 基线未动 ≠ 一律"假完成"
-            if ($hasIntercept) { $detail += " [安全拦截生效-模型未接入]" }  # 安全层正常拦截，模型增量修改能力失败（非漏洞）
-            elseif ($hasDone)  { $detail += " [侧路假完成-疑似漏洞]" }      # 无拦截信号但完成且 demo 未动 = 安全漏洞形态（方案A 应已杜绝）
-            else               { $detail += " [工程未接入]" }
+
+        # 【10-14 A2 基础设施健康探针】原实现只用 demo 基线 diff（post-rollback 状态）判 touched——
+        # 干净回滚后 caseDir == 基线 → touched=false → 被误判为"工程未接入"（实为"接入+写+失败+回滚干净"）。
+        # 改用日志标记区分三态，把"基础设施回归"与"模型能力失败"分开计量：
+        $rollbackFired = $logText -match "\[回滚\]"
+        $writeFired    = $logText -match "\[写入\]|\[工具调用\] write_file|\[工具调用\] edit_file"
+        $cmdFired      = $logText -match "run_command"
+        $pdFired       = $logText -match "类型重复定义"
+
+        if ($hasDone) {
+            $detail = if ($touched -or $writeFired) { "完成" } else { "侧路假完成-疑似漏洞" }
+            $ok = ($touched -or $writeFired) -and (-not $dirty)
         }
-        if ($dirty) { $detail += " [残留:$($leftovers -join ',')]" }
+        elseif ($rollbackFired) {
+            # 模型写入了工程文件 + 失败 + 自动回滚触发 = 安全网健康；残留则回滚失效（基础设施回归）
+            $detail = "受控失败（安全网回滚）"
+            $ok = -not $dirty
+            if ($dirty) { $detail += " [⚠ 基础设施回归：回滚后仍有残留 $($leftovers -join ',')]" }
+        }
+        elseif ($hasIntercept -or $pdFired) {
+            $detail = "安全拦截（P-D 命中）"
+            $ok = -not $dirty
+        }
+        elseif ($hasFail) {
+            # 失败但既未回滚也未 P-D 拦截——若写了文件则安全网缺失（基础设施回归），否则模型未接入写路径
+            $detail = if ($writeFired) { "⚠ 基础设施回归：写后失败但未回滚" } else { "失败但未接入写路径" }
+            $ok = $false
+        }
+        else {
+            $detail = "异常（无完成/失败/拦截/回滚信号）"
+            $ok = $false
+        }
+
+        # 基础设施健康信号（始终附上，供 CI/人眼一眼区分"模型失败"与"基础设施回归"）
+        $detail += " [回滚=$rollbackFired 写入=$writeFired 命令=$cmdFired P-D=$pdFired]"
     } elseif ($kind -eq "single" -or $kind -eq "multi") {
         # 非写模式产物在 CLI 自己的工作目录（run 目录），不在 caseDir
         $fileExists = $false

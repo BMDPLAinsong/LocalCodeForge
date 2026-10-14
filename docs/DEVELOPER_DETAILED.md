@@ -618,7 +618,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 ### 13.3 E2E 脚本
 
 - `scripts/e2e/runner.py <exe> <cmd_b64> <out_log>`：cmd_b64 = `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("…`n"))`，绕开 PS5.1 -File 注入 UTF-8 BOM 的 bug。
-- `scripts/e2e/e2e.ps1`：4 用例（工程增量/单文件/多文件/读查）逐用例工程副本隔离 + 三态断言（`[安全拦截生效-模型未接入]`/`[安全拦截]`/`[工程未接入]`）+ 汇总。
+- `scripts/e2e/e2e.ps1`：4 用例（工程增量/单文件/多文件/读查）逐用例工程副本隔离 + 三态断言（`[安全拦截生效-模型未接入]`/`[安全拦截]`/`[工程未接入]`）+ 汇总。**10-14 A2**：incremental 用例改**日志标记五态**（完成/侧路假完成/受控失败-回滚干净/安全拦截/基础设施回归），结果附 `[回滚/写入/命令/P-D]` 健康信号——区分"模型能力失败"与"基础设施回归"。
 - 大模型任务 E2E 慢（large CPU 推理 5-15 分钟），用后台跑 + TaskOutput 轮询。
 
 ---

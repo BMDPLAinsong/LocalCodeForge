@@ -1076,6 +1076,8 @@ powershell -NoProfile -File scripts/e2e/e2e.ps1
 
 7f. **【已完成】P5-24 前端渲染（10-14）**：`/api/stats` 全量对齐的后端 5 小节补前端渲染——`index.html` `fetchStats` 增：可疑成功明细（`suspicious` 列表）、Executor 生成成功率（`executor`）、特征类归因（`featureBreakdown`，含 `topFailureCause`）、路由决策（`routingDecisions` 的 `byService`/`byFeature`，元组序列化为 `item1/item2`）、工具拒绝（`toolRejections` 的 `byCategory`）。空/无数据小节以 `length`/`total` 守卫自动不渲染（数据源未注入或为空时界面干净）。**验证**：构建 0 错误（警告基线 9）；tests 840/840（嵌入单页断言仍过；前端改动不触发 C# 测试——已逐行复核 JS 模板字面量配对，`esc` 函数复用既有定义）。
 
+7g. **【已完成】A 级：基础设施健康探针（A2）+ Executor 提示词强化（A1，⚠ 待拍板，10-14）**：①**A2 E2E 基础设施健康探针**（纯工程化，无原则冲突）——原 `e2e.ps1` incremental 用例用 demo 基线 diff（post-rollback 状态）判 `touched`，**干净回滚后 caseDir==基线 → touched=false → 被误判"工程未接入"**（实为"接入+写+失败+回滚干净"），这正是"无法区分基础设施回归 vs 模型失败"的根因。改用日志标记（`[回滚]`/`[写入]`/`run_command`/`类型重复定义`）区分五态：完成 / 侧路假完成 / 受控失败（回滚干净）/ 安全拦截（P-D 命中）/ **基础设施回归**（写后失败未回滚，或回滚后仍有残留）；结果行附 `[回滚=.. 写入=.. 命令=.. P-D=..]` 健康信号。②**A1 Executor 修复提示词强化**（⚠ **与 DEVELOPER 铁律#1『放弃提示词工程』冲突**，效果未实测验证，待用户拍板保留或回退）——`FixFileAsync` 修复原则下增"修改已有工程文件的两条铁律"：①增量修改禁止全量重写（不把其他文件已定义的类型重新声明进当前文件 → CS0101 被拒）②只引用真实存在的成员（不凭空引用 `Order.Items`/`OrderItem` → CS0117/CS0246）。针对 10-14 实测 ShippingService 失败的两条根因（全量重写重定义已有类 + 幻觉成员）。**验证**：构建 0 错误（警告基线 9）；tests 840/840；`e2e.ps1` PowerShell 语法校验通过（未跑全 E2E——需真实模型，慢）。
+
 4. **补 Executor prompt 禁令**：「禁止 Console.ReadLine/while (true)」，让交互式任务在规划层就规避，而不是靠超时判失败。5. **清理 RoutingRules.json 重名规则**，合并语义；**EnableOrchestration 接线或删除**。
 
 6. `git init`**&#x20;纳入版本控制**；为 TaskClassifier / RuleEngine / TryParseToolCallsFromText 补单元测试。
