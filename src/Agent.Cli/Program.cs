@@ -977,7 +977,7 @@ internal class Program
                 }
                 // 【任务4 备份生命周期】每任务结束后保留最近 8 个任务备份，清理更早的（防 .backup 增长）
                 if (options.ProjectRoot is not null)
-                    BackupService.PruneBackups(workspace, 8);
+                    BackupService.PruneBackups(workspace, options.BackupKeepLastN);
             }
             finally
             {

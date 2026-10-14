@@ -1052,6 +1052,8 @@ powershell -NoProfile -File scripts/e2e/e2e.ps1
 
 5d. **【已完成】P3 批次门禁自检（10-14）**：按约定自检 P3 子批 A/B，查出并修正**遗漏一处 + 说谎日志一处**：P3-1 只收了 `AgentLoop` 调用方，**漏了 CLI `use` 命令路径**——`Program.cs` 原为「先无条件全量 `ProjectScanner.Scan`（含目录树/上下文块构建，最贵一步）→ **之后**才 `TryGet`」，即**缓存命中也照付扫描成本**，且命中分支打印「（工程上下文命中缓存，未重新扫描）」**与事实不符**（扫都扫完了）。实施：`use` 路径同样改走 `GetOrCompute(proj, out cacheHit)`，日志按实际 `cacheHit` 分支输出（「已重新扫描并写入缓存」）。收益：重复 `use` 同一未改动工程时真正省掉全量扫描。**同批确认无遗漏**：①`SensitivePathGuard` 静态构造确无 P/Invoke（仅 `Path.Combine` + 长名登记）；②哨兵 4 项在库且全绿；③`drift-check.ps1` 双向退出码验证通过（阈值内 0 / 超阈 1）；④9 个改动文件 IDE 诊断 0 问题；⑤警告数保持基线 9。**验证**：构建 0 错误；tests 831/831。
 
+5e. **【已完成】P3-4 API 收敛：内容符合性单入口 + 备份保留份数配置化（10-14，任务5-B1/B2/A11）**：①`ContentConformance` 原两个提取方法（`ExtractRequirementTokens` 标准 / `ExtractRequirementTokensExtended` 扩展）**要求调用方懂语义才敢选**（审查任务5-B1）→ 合并为**单入口** `ExtractRequirementTokens(input, RequirementScope scope = Standard)`，范围由 `RequirementScope.Standard` / `.WithBareVerbs` 显式表达；`Extended` 方法删除，`AgentLoop` 3 处调用 + tests 3 处同步改调，`CompletionGate` 注释中的失效方法名一并更正。行为等价：扩展形态仍仅在标准提取为空时启用（已有引号/注释 token 不叠加），`WithBareVerbs` 仍由调用方按"有无显式写目标"决定。②`BackupService.PruneBackups(workspace, 8)` 的 `8` 为魔法数 → 新增 `AgentOptions.BackupKeepLastN`（默认 8），`Program.cs` 启动清理改读配置。③`GetRunRoot` 的显式注入**本轮不做**（需贯穿 8 个 public 方法签名，收益低于风险；其行为已由 P3-5 新增的区段 2450 哨兵测试锁定，改名即红）。**验证**：构建 0 错误（警告基线 9）；tests 831/831，关键断言 `内容符合性·扩展提取（内容：xxx 冒号形态与 写入一句 xxx 动词形态可提取）` 在单入口下仍 [OK]；全仓 `ExtractRequirementTokensExtended` 仅存于注释（无代码引用）。
+
 4. **补 Executor prompt 禁令**：「禁止 Console.ReadLine/while (true)」，让交互式任务在规划层就规避，而不是靠超时判失败。5. **清理 RoutingRules.json 重名规则**，合并语义；**EnableOrchestration 接线或删除**。
 
 6. `git init`**&#x20;纳入版本控制**；为 TaskClassifier / RuleEngine / TryParseToolCallsFromText 补单元测试。

@@ -19,6 +19,18 @@ using Agent.Infrastructure.Quality;
 namespace Agent.Infrastructure.Project;
 
 /// <summary>
+/// 需求 token 提取范围（【10-14 P3-4】把原两个 Extract 方法合并为单入口的显式参数）。
+/// </summary>
+public enum RequirementScope
+{
+    /// <summary>标准：引号/反引号/中文引号/注释形态。</summary>
+    Standard,
+    /// <summary>扩展：标准 + "内容：xxx" / "写入一句 xxx" 裸形态。仅显式写目标任务适用——
+    /// 普通生成任务启用会误伤功能描述（如"内容：判断奇偶"）。</summary>
+    WithBareVerbs
+}
+
+/// <summary>
 /// 内容符合性检查：从任务输入提取"必须出现在修改后文件中的需求 token"，
 /// 并对本轮写过的文件做归一化包含检查。数据驱动、无 LLM、无副作用。
 /// </summary>
@@ -52,8 +64,11 @@ public static class ContentConformance
     /// <summary>
     /// 从任务输入提取需求内容 token（引号/反引号包裹、非文件名形态、长度 ≥2）。
     /// 提取不到返回空集——调用方应跳过内容检查（不误伤普通生成任务）。
+    /// 【10-14 P3-4】scope=WithBareVerbs 时额外识别"内容：xxx"/"写入一句 xxx"裸形态
+    /// （原独立的 ExtractRequirementTokensExtended：两个入口要求调用方懂语义才敢选，
+    /// 现改为一个入口 + 一个显式范围参数；生产调用点已全部改走本方法）。
     /// </summary>
-    public static IReadOnlyList<string> ExtractRequirementTokens(string input)
+    public static IReadOnlyList<string> ExtractRequirementTokens(string input, RequirementScope scope = RequirementScope.Standard)
     {
         if (string.IsNullOrWhiteSpace(input))
             return Array.Empty<string>();
@@ -93,50 +108,40 @@ public static class ContentConformance
                 tokens.Add(norm);
         }
 
+        // 【10-14 P3-4】扩展形态：仅在标准提取为空时启用裸形态（已有引号/注释 token 则不叠加，减少噪声）。
+        // 语义（原 ExtractRequirementTokensExtended 的约定不变）：显式写目标任务才由调用方传
+        // WithBareVerbs——普通生成任务的"内容：判断奇偶"这类功能描述会误伤。
+        if (scope == RequirementScope.WithBareVerbs && tokens.Count == 0)
+        {
+            foreach (var re in BareContentRe)
+            {
+                foreach (Match m in re.Matches(input))
+                {
+                    var raw = m.Groups[1].Value.Trim();
+                    if (raw.Length < 2 || raw.Length > 120)
+                        continue;
+                    if (FileLikeRe.IsMatch(raw))
+                        continue;
+                    var norm = OutputVerifier.NormalizeForMatch(raw);
+                    if (norm.Length < 2) continue;
+                    if (seen.Add(norm))
+                        tokens.Add(norm);
+                }
+            }
+        }
+
         return tokens;
     }
 
-    // 扩展提取（10-08）：显式写目标场景允许"内容：xxx" / "写入一句 xxx" 冒号/动词形态。
-    // 只在 CompletionGate 判定有显式写目标（target != null）时启用——普通生成任务无目标不
-    // 启用，避免"内容：判断奇偶"这类功能描述误伤。正则保守：仅"内容[：:]+非标点串"与
+    // 扩展提取形态（10-08 引入，10-14 P3-4 归入单入口）：显式写目标场景允许"内容：xxx" /
+    // "写入一句 xxx" 冒号/动词形态。调用方传 RequirementScope.WithBareVerbs 才启用——普通生成
+    // 任务不启用，避免"内容：判断奇偶"这类功能描述误伤。正则保守：仅"内容[：:]+非标点串"与
     // "写入/写上/添加/加上/补上/改成/改为 + 一句/一行/以下内容/内容 + 非标点串"两种。
     private static readonly Regex[] BareContentRe =
     {
         new(@"内容[:：]\s*([^\s，。；、,.;!?！？]{2,80})", RegexOptions.Compiled),
         new(@"(?:写入|写上|添加|加上|补上|改成|改为)\s*(?:一句|一行|以下内容|内容)?[:：]?\s*([^\s，。；、,.;!?！？]{2,80})", RegexOptions.Compiled),
     };
-
-    /// <summary>
-    /// 扩展提取（10-08 内容符合性）：在 ExtractRequirementTokens 基础上，额外支持
-    /// "内容：xxx" / "写入一句 xxx" 冒号/动词形态。仅用于有显式写目标的任务
-    /// （"向 X:\test.txt 写入 内容：hello"——无引号包裹但字面量明确）。
-    /// 已有引号/注释 token 时原样返回（不叠加减少噪声）。
-    /// </summary>
-    public static IReadOnlyList<string> ExtractRequirementTokensExtended(string input)
-    {
-        var baseTokens = ExtractRequirementTokens(input);
-        if (string.IsNullOrWhiteSpace(input) || baseTokens.Count > 0)
-            return baseTokens;
-
-        var tokens = new List<string>(baseTokens);
-        var seen = new HashSet<string>(baseTokens, StringComparer.OrdinalIgnoreCase);
-        foreach (var re in BareContentRe)
-        {
-            foreach (Match m in re.Matches(input))
-            {
-                var raw = m.Groups[1].Value.Trim();
-                if (raw.Length < 2 || raw.Length > 120)
-                    continue;
-                if (FileLikeRe.IsMatch(raw))
-                    continue;
-                var norm = OutputVerifier.NormalizeForMatch(raw);
-                if (norm.Length < 2) continue;
-                if (seen.Add(norm))
-                    tokens.Add(norm);
-            }
-        }
-        return tokens;
-    }
 
     /// <summary>
     /// 检查文件内容（归一化后）是否包含需求 token（归一化后）。

@@ -609,8 +609,8 @@ public sealed class AgentLoop : IAgentLoop
                                 target: _writeTarget,
                                 targetIsFile: _writeTargetIsFile,
                                 requirementTokens: (_writeTarget is not null
-                    ? Project.ContentConformance.ExtractRequirementTokensExtended(request.Input)
-                    : Project.ContentConformance.ExtractRequirementTokens(request.Input)),
+                    ? Project.ContentConformance.ExtractRequirementTokens(request.Input, Project.RequirementScope.WithBareVerbs)
+                    : Project.ContentConformance.ExtractRequirementTokens(request.Input, Project.RequirementScope.Standard)),
                                 writtenFiles: _writtenFiles);
                             if (fuseGate is not null)
                             {
@@ -1064,8 +1064,8 @@ public sealed class AgentLoop : IAgentLoop
                 target: _writeTarget,
                 targetIsFile: _writeTargetIsFile,
                 requirementTokens: (_writeTarget is not null
-                    ? Project.ContentConformance.ExtractRequirementTokensExtended(request.Input)
-                    : Project.ContentConformance.ExtractRequirementTokens(request.Input)),
+                    ? Project.ContentConformance.ExtractRequirementTokens(request.Input, Project.RequirementScope.WithBareVerbs)
+                    : Project.ContentConformance.ExtractRequirementTokens(request.Input, Project.RequirementScope.Standard)),
                 writtenFiles: _writtenFiles);
             if (gateVerdict is not null)
             {
@@ -1091,8 +1091,8 @@ public sealed class AgentLoop : IAgentLoop
             target: _writeTarget,
             targetIsFile: _writeTargetIsFile,
             requirementTokens: (_writeTarget is not null
-                    ? Project.ContentConformance.ExtractRequirementTokensExtended(request.Input)
-                    : Project.ContentConformance.ExtractRequirementTokens(request.Input)),
+                    ? Project.ContentConformance.ExtractRequirementTokens(request.Input, Project.RequirementScope.WithBareVerbs)
+                    : Project.ContentConformance.ExtractRequirementTokens(request.Input, Project.RequirementScope.Standard)),
             writtenFiles: _writtenFiles);
         if (maxGate is not null)
         {

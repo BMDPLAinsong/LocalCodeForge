@@ -182,9 +182,9 @@ public static class Suites_Dashboard
                     && Agent.Infrastructure.Project.ProjectPathDetector.HasReferentialPronoun("刚建的文件里补一行")
                     && !Agent.Infrastructure.Project.ProjectPathDetector.HasReferentialPronoun("新建一个 notes.txt 文件"));
                 Check("内容符合性·扩展提取（10-08）：内容：xxx 冒号形态与 写入一句 xxx 动词形态可提取（token 为归一化形态）；引号形态不受影响",
-                    Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokensExtended("向这个文件写入 内容：hello-e2e-20261008").Any(t => t == "hello e2e 20261008")
-                    && Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokensExtended("写入一句 上零休七，财富自由").Any(t => t.Contains("上零休七"))
-                    && Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokensExtended("写一个函数，内容：判断两个数相加").Any(t => t.Contains("判断两个数相加")));
+                    Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokens("向这个文件写入 内容：hello-e2e-20261008", Agent.Infrastructure.Project.RequirementScope.WithBareVerbs).Any(t => t == "hello e2e 20261008")
+                    && Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokens("写入一句 上零休七，财富自由", Agent.Infrastructure.Project.RequirementScope.WithBareVerbs).Any(t => t.Contains("上零休七"))
+                    && Agent.Infrastructure.Project.ContentConformance.ExtractRequirementTokens("写一个函数，内容：判断两个数相加", Agent.Infrastructure.Project.RequirementScope.WithBareVerbs).Any(t => t.Contains("判断两个数相加")));
                 Check("完成门 B·本轮写入语义（10-08）：目标历史存在但本轮未写 → 失败（防假完成）；本轮写了目标 → 放行",
                     Agent.Infrastructure.Project.CompletionGate.Evaluate(
                         isWriteTask: true, wroteAny: true, writeRejected: false,

@@ -407,7 +407,8 @@ CompletionGate.Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFi
 | ---- | ---- | ---- |
 | 只读扫描 | ProjectScanner.cs | 文件树/入口/依赖识别；产出工程上下文数据块（CompactBlock 注入瘦身版） |
 | 工程缓存 | ProjectContextStore.cs | project_context.db + 4 元签名（FileCount/DirCount/TotalBytes/MaxMtimeTicks）——签名一致命中缓存复用，变更自动重扫；**GetOrCompute**（10-14 P3-1：签名计算内化，调用方不再手工串「算签名→TryGet→Scan→Put」四步，防顺序错/漏算退化为每任务全量重扫）；内存缓存 8 条上限 + FIFO 淘汰（原为无界 Dictionary） |
-| 可写回滚 | BackupService.cs | **taskId 隔离**：备份 `.backup/<taskId>/<stamp>/<rel>` + 新建标记 `.new/<rel>`；RollbackTask 取**最早**备份；PruneBackups keepLastN=8；DryRunRollbackTask |
+| 完成门 D · 内容符合性 | CompletionGate.cs + ContentConformance.cs | 收尾判定"写到了显式目标"（B 门）+ "修改内容符合要求"（D 门，2026-10-08 补洞：BigService 加注释任务模型写错数值却编译通过=假成功）。需求 token 提取为**单入口** `ExtractRequirementTokens(input, RequirementScope)`——【10-14 P3-4】原 `ExtractRequirementTokens` / `ExtractRequirementTokensExtended` 双方法合并（两入口要求调用方懂语义才敢选）；`WithBareVerbs`（"内容：xxx"/"写入一句 xxx"裸形态）**仅显式写目标任务启用**，防普通生成任务的功能描述误伤。**提取不到即跳过**，绝不误伤（防打地鼠原则） |
+| 可写回滚 | BackupService.cs | **taskId 隔离**：备份 `.backup/<taskId>/<stamp>/<rel>` + 新建标记 `.new/<rel>`；RollbackTask 取**最早**备份；PruneBackups keepLastN=**AgentOptions.BackupKeepLastN**（默认 8；【10-14 P3-4】原为 Program.cs 启动清理处硬编码 8）；DryRunRollbackTask |
 | 符号索引 | SymbolIndexer.cs | 正则提取类型/方法/属性；SQLite 持久化；增量刷新（mtime 对比）；文件枚举走 **FileGrammar** 单源；**批量插入**（10-14 P2-5：multi-VALUES 分批，每批 ≤100 行 = 600 参数，全量/增量共用 `InsertBatch`） |
 | 依赖分析 | DependencyAnalyzer.cs | 类型级符号 + 引用扫描 → 文件依赖边；枚举走 **FileGrammar** 单源（原私有 26 行内联复制已删） |
 | 类型冲突 P-D | TypeConflictDetector.cs | 写前检测新内容含工程已有类型 → 拒绝（class/interface/enum/struct/record，剥离注释/字符串防误报）；目标文件自身已有类型=partial 语义放行。**10-14 P1-6**：已有类型查询优先走符号索引（增量刷新+单查+仅 .cs 口径），无索引/异常回退全扫；冲突命中回读定义文件精确复核（防索引字符串幻影误拦） |

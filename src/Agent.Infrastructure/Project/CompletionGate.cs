@@ -83,8 +83,8 @@ public static class CompletionGate
         // 修改后的文件必须包含该内容——否则"编译通过"也会假成功（BigService 实证：
         // 模型把 x + 1500 改成 x + 15000 且漏加 // 已审查，dotnet run 通过被放行）。
         // 无需求 token / 未写文件 → 跳过（不误伤普通生成任务）。
-        // 【10-08 扩展】有显式写目标时调用方已传 ExtractRequirementTokensExtended（含
-        // "内容：hello"冒号形态）——E2E 实证：模型写任务目录同名文件+旧内容，引号形态
+        // 【10-08 扩展 / 10-14 P3-4 单入口】有显式写目标时调用方传 RequirementScope.WithBareVerbs
+        // （含"内容：hello"冒号形态，原独立的 ExtractRequirementTokensExtended 已并入本方法）——E2E 实证：模型写任务目录同名文件+旧内容，引号形态
         // 提取不到放行；扩展形态提取到"hello"即拦截。
         if (requirementTokens is { Count: > 0 } && writtenFiles is { Count: > 0 })
         {

@@ -196,6 +196,10 @@ public sealed class AgentOptions
     /// （10-04 BigService 890s 任务实证）；默认 20 分钟，让任务至少能跑到熔断诚实失败而非超时误杀。</summary>
     public int OllamaHttpTimeoutMinutes { get; set; } = 20;
 
+    /// <summary>【10-14 P3-4】备份保留份数（BackupService.PruneBackups 的 keepLastN）。
+    /// 原为调用点硬编码 8（Program.cs 启动清理），改配置需改代码——此处显式化。</summary>
+    public int BackupKeepLastN { get; set; } = 8;
+
     /// <summary>【10-13 上下文预算】任务目标文件 X1 全文注入上限（字节）。
     /// ≤ 阈值：全文注入 + read_file 短路（单份，消双份——X1 40KB + read_file 40KB = 90KB
     /// 在 CPU 30B 上 prefill >20min 超时实证）；&gt; 阈值：骨架注入（路径+行数+前 50 行），
