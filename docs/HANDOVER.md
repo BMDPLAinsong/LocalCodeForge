@@ -1082,6 +1082,8 @@ powershell -NoProfile -File scripts/e2e/e2e.ps1
 
 7i. **【已完成】A1 模型 A/B 使能器（10-14，工程化配置非提示词）**：根因判定（30B 模型跨文件引用已有类型的能力天花板，Orchestrator 已注入定义仍幻觉成员）→ 工程化杠杆选「模型 A/B」。实施：`AgentOptions.ExecutorModel`（string?，默认 null=沿用 Small）+ 环境变量 `LAW_EXECUTOR_MODEL` 覆盖 + `ExecutorService` 构造注入 `AgentOptions`、生成/修复两处 `settings.ModelId` 请求级覆盖（Ollama /v1 接受任意已拉取 tag，不改路由/生成逻辑）。**验证**：构建 0 错误（警告基线 9）；tests 840/840（默认 null 行为不变）。A/B 实测结果见下条。
 
+7j. **【已完成】A1 模型 A/B 实测结果（10-14）**：用同一 ShippingService 工程增量任务对比 Executor 模型（环境变量 `LAW_EXECUTOR_MODEL` 切换；任务文本/工程副本/参数全同）。**基线 `law-unified`**（30B，默认）：198s，受控失败——Program.cs 幻觉 `Order.Items`/`OrderItem`（Orchestrator 已注入 Order.cs 完整定义仍幻觉）→ 修复 2 轮 → 第 2 轮全量重写被 P-D 拦截 → 回滚干净。**候选 `qwen3-coder-local`**（5.2GB coder）：336s，受控失败——P-D 拦截 **2 次**（同款全量重写）、一度编译通过（`run_command 退出码：0`）但验证仍失败、修复退化到 `模型输出与原文相同` → 回滚干净。**结论**：两款模型失败**同类**（跨文件复用已有类型能力不足 + 全量重写旧习），换 coder 模型**无改善且慢 70%**；安全网（P-D/备份/回滚）两轮均按预期兜住，与模型无关。**工程含义**：这是 30B 级模型的能力墙，非配置可解——单换 Executor 模型不是有效杠杆；剩余杠杆为 (a) 真正更强的模型（本地现无更大可用候选）或 (b) 任务分解（但 A/B 显示根因是"类型复用"而非"任务规模"，预期收益有限）。**A/B 使能器（`ExecutorModel` + `LAW_EXECUTOR_MODEL`）保留**，后续可随时复测其他模型。**验证**：两轮均 `[回滚]` 干净、无残留；A2 探针（e2e.ps1）会把两轮都判为「受控失败（安全网回滚）」= 基础设施健康、模型未达成。
+
 4. **补 Executor prompt 禁令**：「禁止 Console.ReadLine/while (true)」，让交互式任务在规划层就规避，而不是靠超时判失败。5. **清理 RoutingRules.json 重名规则**，合并语义；**EnableOrchestration 接线或删除**。
 
 6. `git init`**&#x20;纳入版本控制**；为 TaskClassifier / RuleEngine / TryParseToolCallsFromText 补单元测试。
