@@ -58,9 +58,9 @@
 | 目标框架 | net10.0（**勿降级**）                                                                                                                                                    |
 | 核心依赖 | Microsoft.SemanticKernel 1.80.1 + SK OpenAI Connector（走 Ollama `/v1` 兼容端点，全本地）+ Microsoft.Data.Sqlite                                                               |
 | 模型   | Ollama：classifier=`qwen2.5:1.5b`；small/large/agent\_pro 三角色全部 = `law-unified`（30B Qwen3-Coder-A3B，同 tag 单驻，请求级 temperature 区分：small 0.3 /agent\_pro 0.5 /large 0.7） |
-| 版本控制 | 本机 git 仓库（main，91+ commits，无远端）                                                                                                                                     |
-| 测试   | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，625/625，`dotnet run --project` 一键回归）                                                                           |
-| 数据落盘 | `workspace/`：sessions.db、runs/、project\_context.db、agent\_memory.db、symbol\_index.db、test-tmp/、e2e/                                                                 |
+| 版本控制 | 本机 git 仓库（main，100+ commits）；远端 `origin` = GitHub（BMDPLAinsong/LocalAiWorkbench，**推送按用户要求暂缓进行中**）                                              |
+| 测试   | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，**831/831**，`dotnet run --project` 一键回归）                                                                           |
+| 数据落盘 | `workspace/`：sessions.db、runs/、project\_context.db、agent\_memory.db、symbol\_index.db、test-tmp/、e2e/。**边界（10-14 F1）**：`SqliteConnection` 默认连接池在方法返回后仍持有 db 文件句柄——进程持有 store 期间**不要删除 workspace 目录**（测试夹具已因此改为"库文件放在待删目录之外"） |
 
 ### 1.1 三层项目结构
 

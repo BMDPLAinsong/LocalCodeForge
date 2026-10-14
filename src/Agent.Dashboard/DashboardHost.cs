@@ -26,20 +26,17 @@ namespace Agent.Dashboard;
 public sealed record DashboardOptions(
     string WorkspaceRoot,
     string? ProjectRoot,
-    string SymbolDbPath,               // ← 10-07 UI 层 #3：工程依赖图谱（symbol_index.db 路径；【10-14 P2-3】SymbolStore 未注入时的回退建实例路径）
     DateTimeOffset? LawUnifiedEpoch,
     IMetricsCollector Metrics,
     TaskEventHub Hub,
     TaskEventStore EventStore,         // ← 10-07 UI 层 #1：任务事件持久化（详情回放数据源）
     AgentOptions Options,              // ← 10-07 UI 层：调权阈值配置（/api/tuning）
-    string MemoryDbPath,               // ← 10-07 UI 层：agent_memory.db 路径（【10-14 P2-3】MemoryStore 未注入时的回退建实例路径）
     CommandHub CommandHub,             // ← 10-07 webUI 交互：web 提交汇入 CLI 主循环命令通道
-    string? AuthToken = null,          // ← 10-08 ③ 安全 token：非空时所有端点校验 query token / X-Dashboard-Token（401 拒绝）
-    // 【10-14 P2-3】store 实例注入（可选）：非空直接复用（CLI 传 DI 单例——消除"每请求 new + 建表"，
-    // 原实现每次 /api/memory、/api/deps 请求都跑一遍 CREATE TABLE + PRAGMA 列迁移）；
-    // 为 null 时 StartAsync 按上述路径建一次实例并全程复用（tests 直构路径的默认行为）。
-    Agent.Infrastructure.Memory.AgentMemoryStore? MemoryStore = null,
-    Agent.Infrastructure.Project.SymbolIndexStore? SymbolStore = null);
+    // 【10-14 F5】store 一律**实例注入**（原 10-07 的 SymbolDbPath / MemoryDbPath 两个路径字段已删）：
+    // 消除"路径 + 实例"两个来源的二义性——宿主不再保留"未注入就按路径建实例"的回退分支。
+    Agent.Infrastructure.Memory.AgentMemoryStore MemoryStore,
+    Agent.Infrastructure.Project.SymbolIndexStore SymbolStore,
+    string? AuthToken = null);         // ← 10-08 ③ 安全 token：非空时所有端点校验 query token / X-Dashboard-Token（401 拒绝）
 
 /// <summary>POST /api/commands 请求体（最小输入 DTO，非业务模型）。</summary>
 public sealed record CommandRequest(string? Input);
@@ -98,13 +95,9 @@ public static class DashboardHost
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
         var app = builder.Build();
         _running = app;
-        // 【10-14 P2-3】store 解析一次全程复用：注入优先（CLI 传 DI 单例）；未注入则按路径建实例
-        // （tests 直构路径的默认）——原实现每请求 new store + 建表 + PRAGMA 列迁移，是同源债根源。
-        var memoryStore = options.MemoryStore
-            ?? new Agent.Infrastructure.Memory.AgentMemoryStore(options.MemoryDbPath);
-        var symbolStore = options.SymbolStore
-            ?? new Agent.Infrastructure.Project.SymbolIndexStore(options.SymbolDbPath);
-        MapEndpoints(app, options, memoryStore, symbolStore);
+        // 【10-14 F5】store 一律实例注入（路径字段已删）——StartAsync 不再有"按路径建实例"的回退分支；
+        // 调用方负责给出进程内共享的实例（CLI 传 DI 单例；tests 传自建实例）。
+        MapEndpoints(app, options, options.MemoryStore, options.SymbolStore);
         await app.StartAsync(ct);
         var addr = app.Urls.FirstOrDefault() ?? "http://127.0.0.1:0";
         return (addr, () => app.StopAsync());
@@ -315,17 +308,35 @@ public static class DashboardHost
                 ? full.Substring(root.Length).TrimStart('\\') : Path.GetFileName(full));
             if (Directory.Exists(full))
             {
-                var children = Directory.EnumerateFileSystemEntries(full)
-                    .Select(p => new
+                // 【10-14 F6】一次枚举复用同一 FileSystemInfo 读长度/时间（原先每条目 3 次 stat：
+                // Directory.Exists + File.Exists + 两次 new FileInfo）；条目级 try/catch——枚举后条目
+                // 被删（并发任务/用户操作）时跳过该条，不再让整个端点 500。
+                var entries = new List<(bool IsDir, string Name, long? Size, DateTimeOffset? ModifiedAt)>();
+                try
+                {
+                    foreach (var info in new DirectoryInfo(full).EnumerateFileSystemInfos())
                     {
-                        name = Path.GetFileName(p),
-                        isDir = Directory.Exists(p),
-                        size = File.Exists(p) ? new FileInfo(p).Length : (long?)null,
-                        modifiedAt = File.Exists(p)
-                            ? (DateTimeOffset?)new FileInfo(p).LastWriteTimeUtc : null,
-                    })
-                    .OrderByDescending(c => c.isDir)
-                    .ThenBy(c => c.name, StringComparer.OrdinalIgnoreCase)
+                        try
+                        {
+                            var isDir = info is DirectoryInfo;
+                            entries.Add((isDir, info.Name,
+                                isDir ? (long?)null : ((FileInfo)info).Length,
+                                (DateTimeOffset?)info.LastWriteTimeUtc));
+                        }
+                        catch
+                        {
+                            // 条目在枚举后消失（竞态）→ 跳过，不影响整目录响应
+                        }
+                    }
+                }
+                catch
+                {
+                    // 目录不可枚举（权限/已被删除）→ 返回空列表，不抛
+                }
+                var children = entries
+                    .OrderByDescending(c => c.IsDir)
+                    .ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                    .Select(c => new { name = c.Name, isDir = c.IsDir, size = c.Size, modifiedAt = c.ModifiedAt })
                     .ToList();
                 return Results.Json(new { path = rel, isDir = true, children }, JsonOpts);
             }

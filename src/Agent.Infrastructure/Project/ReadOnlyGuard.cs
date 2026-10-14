@@ -49,6 +49,8 @@ public static class ReadOnlyGuard
     /// <summary>
     /// 任务输入引用的文件名中，第一个在工程根内实际存在的（OrdinalIgnoreCase，Windows 大小写不敏感）。
     /// 无引用 / 引用的都不在工程内 → null（不拦截）。
+    /// 枚举口径与全层统一（【10-14 F3】FileGrammar 排除 bin/obj/.git/node_modules 等——原为裸全量枚举，
+    /// 构建产物里的同名文件会被误判为"工程内已存在"→ 错拦只读工程任务）。
     /// 文件枚举失败（权限/路径不存在）→ null（交给下游工具层正常拒绝，不误拦）。
     /// </summary>
     public static string? FindExistingProjectFileRef(string input, string projectRoot)
@@ -62,9 +64,9 @@ public static class ReadOnlyGuard
 
         try
         {
-            var existing = Directory.EnumerateFiles(projectRoot, "*", SearchOption.AllDirectories)
+            var existing = FileGrammar.EnumerateAllFiles(projectRoot)
                 .Select(Path.GetFileName)
-                .Where(n => n is not null)
+                .Where(n => !string.IsNullOrEmpty(n))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             return refs.FirstOrDefault(existing.Contains);
         }

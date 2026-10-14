@@ -25,6 +25,14 @@ public static class TypeConflictDetector
         "class", "interface", "enum", "struct", "record"
     };
 
+    // 【10-14 F2】已知"建不出索引"的工程（>300 文件 / >8MB 上限命中者）：符号索引对其恒为空，
+    // 每次写文件都会白跑一次全工程枚举 + 一条无意义的 DELETE（DeleteProject），再回退全扫。
+    // 记住这些工程根 → 后续写直接跳过注定失败的索引路径（回退路径结果正确，只是不那么快）。
+    // 代价：工程缩小到上限以下后需进程重启才会重新尝试建索引——保守可接受（宁慢不错）。
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _unindexableProjects
+        = new(StringComparer.OrdinalIgnoreCase);
+    private const int UnindexableProjectCap = 32;
+
     // 剥离注释与字符串字面量，避免注释/字符串里的 "class X" 误报为类型定义。
     // 轻量词法（非完整 C# 解析）：块注释（跨行）→ 行注释 → 双引号字符串（含转义）。
     private static readonly Regex BlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled | RegexOptions.Singleline);
@@ -135,11 +143,19 @@ public static class TypeConflictDetector
     private static Dictionary<string, string>? QueryExistingTypesFromIndex(SymbolIndexStore store,
         string projectRoot, string targetFile)
     {
+        var key = Path.GetFullPath(projectRoot);
+        if (_unindexableProjects.ContainsKey(key))
+            return null;   // 【F2】已知超大工程：跳过注定失败的索引路径（不再白跑枚举 + DELETE）
+
         try
         {
             store.BuildAndSaveIncremental(projectRoot);
             var entries = store.GetAll(projectRoot);
-            if (entries.Count == 0) return null;
+            if (entries.Count == 0)
+            {
+                MarkUnindexable(key);
+                return null;
+            }
 
             string targetRel = "";
             try { targetRel = Path.GetRelativePath(projectRoot, Path.GetFullPath(targetFile)).Replace('\\', '/'); }
@@ -160,6 +176,14 @@ public static class TypeConflictDetector
         {
             return null;
         }
+    }
+
+    /// <summary>【F2】登记"建不出索引"的工程根（有界；超限整体清空）。</summary>
+    private static void MarkUnindexable(string key)
+    {
+        if (_unindexableProjects.Count >= UnindexableProjectCap)
+            _unindexableProjects.Clear();
+        _unindexableProjects[key] = true;
     }
 
     /// <summary>【P1-6】冲突命中回读定义文件精确复核（剥注释/字符串的提取口径）：

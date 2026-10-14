@@ -311,17 +311,14 @@ internal class Program
             var dashToken = Guid.NewGuid().ToString("N");
             var (url, _) = await Agent.Dashboard.DashboardHost.StartAsync(
                 new Agent.Dashboard.DashboardOptions(workspace, options.ProjectRoot,
-                    Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db"),
                     options.LawUnifiedEpoch,
                     provider.GetRequiredService<IMetricsCollector>(), eventHub, eventStore,
                     options,
-                    Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "agent_memory.db"),
                     commandHub,
-                    dashToken,
-                    // 【10-14 P2-3】注入 DI 单例：/api/memory 与 /api/deps 复用同一 store 实例
-                    // （原实现每请求 new + 建表 + PRAGMA 迁移——同源债根源）
+                    // 【10-14 P2-3/F5】store 一律实例注入（进程内单例；路径字段已删，F5）
                     provider.GetRequiredService<Agent.Infrastructure.Memory.AgentMemoryStore>(),
-                    provider.GetRequiredService<Agent.Infrastructure.Project.SymbolIndexStore>()),
+                    provider.GetRequiredService<Agent.Infrastructure.Project.SymbolIndexStore>(),
+                    dashToken),
                 CancellationToken.None);
             url = url + "?token=" + dashToken;
             dashboardUrl = url;

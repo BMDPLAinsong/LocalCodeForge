@@ -414,14 +414,14 @@ CompletionGate.Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFi
 | 依赖分析 | DependencyAnalyzer.cs | 类型级符号 + 引用扫描 → 文件依赖边；枚举走 **FileGrammar** 单源（原私有 26 行内联复制已删） |
 | 类型冲突 P-D | TypeConflictDetector.cs | 写前检测新内容含工程已有类型 → 拒绝（class/interface/enum/struct/record，剥离注释/字符串防误报）；目标文件自身已有类型=partial 语义放行。**10-14 P1-6**：已有类型查询优先走符号索引（增量刷新+单查+仅 .cs 口径），无索引/异常回退全扫；冲突命中回读定义文件精确复核（防索引字符串幻影误拦） |
 | 测试门 | TestRunnerService.IsTestProjectName（单源） | 检测测试入口（测试工程名**词边界**判定：Test/Tests 独立词或 PascalCase 段，10-14 P0 防 Contestant/MyTester 误报；pytest/package.json test）；工程模式改代码后自动跑测试。**10-14 P1-5**：`TestProjectDetector`（生产零调用死代码）已删，语义唯一由 `DetectTest` 承接 |
-| **文件系统语法** | FileGrammar.cs | **单源（10-14 P1-4 + 交付后自检补齐）**：ExcludedDirNames（段级排除，任意层级；原 4 份行级复制归一，含 Orchestrator）/ CodeExtensions / ProjectManifestExtensions（.sln/.csproj 等，原 2 份归一）/ EnumerateCodeFiles（惰性+IO 容忍）/ 盘符两语法（中文"X盘" + 字面"X:\"含存在性校验）。头注释登记 3 处**故意不合并**的异用途清单（CoreFileLines.sourceExts / KnownFileExtensions / DashboardHost.TextExts），勿当遗漏再归一 |
+| **文件系统语法** | FileGrammar.cs | **单源（10-14 P1-4 + 交付后自检补齐）**：ExcludedDirNames（段级排除，任意层级；原 4 份行级复制归一，含 Orchestrator）/ CodeExtensions / ProjectManifestExtensions（.sln/.csproj 等，原 2 份归一）/ EnumerateCodeFiles（惰性+IO 容忍；【10-14 F4】枚举模式 `*` 而非 `*.*`——原模式漏无扩展名文件）/ EnumerateAllFiles（【10-14 F3】全量文件，仅排除目录——供"文件名是否存在于工程内"判定）/ 盘符两语法（中文"X盘" + 字面"X:\"含存在性校验）。头注释登记 3 处**故意不合并**的异用途清单（CoreFileLines.sourceExts / KnownFileExtensions / DashboardHost.TextExts），勿当遗漏再归一 |
 | 计划校验 | Orchestrator.CheckIncrementalPlanConflicts | 工程增量任务 Plan「已有文件≥2」→ Planner 阶段拒绝（防整体重写）；合法形态（新增1+接入1）放行 |
 | **路径边界** | PathBoundary.cs | **逐路径分段比较**（OrdinalIgnoreCase + 分隔符归一）：root 自身/子目录=true；`X:\proj2` 对 `X:\proj`=false（StartsWith 前缀假阳性根治）；`..` 跳脱经 GetFullPath 归一必越界 |
 | **敏感源头拒** | SensitivePathGuard.cs | **读=黑名单排除**：系统区 4（C:\Windows/Program Files/(x86)/ProgramData）+ 凭据区 9（.ssh/.aws/.kube/.docker/.config\gcloud/.git-credentials/.npmrc/两处 Credentials）+ 用户 denylist（workspace\sensitive_denylist.txt，# 注释/空行跳过/幂等）。四条判定线：①长名逐段匹配 ②8.3 短名双向展开（GetLongPathNameW/GetShortPathNameW P/Invoke）③符号链接/junction 逐段 ResolveLinkTarget ④UNC `\\?\` 前缀剥除。模式分档：工程模式读放开+黑名单硬拒；沙箱模式读仍限 workspaceRoot。FindWriteRootOverlaps 启动自检。已知边界：脚本内敏感读不做；**10-14 P3-2**：静态构造零 P/Invoke（8.3 短名改首次 `IsDenied` 惰性展开 + 加锁，含启动后追加根）；判定结果**只缓存正向（敏感）**，**负向不缓存**——两次判定之间中间目录被换成指向敏感区的 junction 时，陈旧 false 会放行读取（安全漏洞，非性能取舍，勿"优化"掉） |
 | **输入路径自动识别** | ProjectPathDetector.cs | TryExtractProjectPath（分片正则不含 ':'——盘符冒号是路径组成部分；Directory.Exists 校验；尾部 CJK 语境词剥离 ≤3 次）；HasReadContext/HasWriteContext；TryGetAutoUsePath（非写 + 读语境 + 非敏感） |
 | **写目标提取** | ProjectPathDetector.cs | TryGetWriteTarget：通道1 完整绝对路径（盘符起点分片 + Exists + LooksLikeFile）；通道2 自然语言盘符（"X盘根目录"+文件名 → 文件级；无文件名 → 目录级）；文件名正则用 **ASCII 类**（.NET \w 默认含 Unicode 中文会吞掉"新建一下test.txt"） |
 | **完成门** | CompletionGate.cs | Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFile) → CompletionVerdict?（§4.5） |
-| **只读工程预检** | ReadOnlyGuard.cs | ShouldBlock(input, projectRoot, projectWriteEnabled, out hitFile)：4 条件全满足才拦（工程模式 && !可写 && IsWriteTask && FindExistingProjectFileRef 命中）；豁免=显式写目标在工程外；FindExistingProjectFileRef 用 TaskClassifier.FileReferencePattern（公共正则）+ 工程根文件名 HashSet（OrdinalIgnoreCase） |
+| **只读工程预检** | ReadOnlyGuard.cs | ShouldBlock(input, projectRoot, projectWriteEnabled, out hitFile)：4 条件全满足才拦（工程模式 && !可写 && IsWriteTask && FindExistingProjectFileRef 命中）；豁免=显式写目标在工程外；FindExistingProjectFileRef 用 TaskClassifier.FileReferencePattern（公共正则）+ 工程根文件名 HashSet（OrdinalIgnoreCase）；【10-14 F3】枚举走 `FileGrammar.EnumerateAllFiles`（排除 bin/obj/.git 等——原裸全量枚举会把构建产物里的同名文件误判为"工程内已存在"→ 错拦只读任务） |
 | **显式写授权** | AgentRequest.cs + 写三工具 + Program.cs | CLI 解析写目标 → 非敏感注入 ExplicitWriteTarget + explicitWriteRoots；敏感区兜底（白名单通过也拒） |
 
 ### 8.2 防假完成防线（AgentLoop + Orchestrator）
@@ -635,7 +635,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 | `src/Agent.Infrastructure/Project/CompletionGate.cs` | 写任务完成门 | Evaluate |
 | `src/Agent.Infrastructure/Project/BackupService.cs` | taskId 隔离回滚 | BackupFile / RollbackTask / DryRunRollbackTask / PruneBackups / ClearNewMarkers |
 | `src/Agent.Infrastructure/Project/TypeConflictDetector.cs` | P-D 写前类型冲突（索引优先 + 回退全扫） | DetectDuplicateTypes / GetExistingTypes / DetectSelfDuplicateTypes / BuildExistingTypesHint |
-| `src/Agent.Infrastructure/Project/FileGrammar.cs` | **文件系统语法单源（10-14 P1-4）** | IsExcludedRel / EnumerateCodeFiles / TryExtractChineseDiskRoot / TryExtractLiteralDiskRoot |
+| `src/Agent.Infrastructure/Project/FileGrammar.cs` | **文件系统语法单源（10-14 P1-4）** | IsExcludedRel / EnumerateCodeFiles / EnumerateAllFiles（F3 新增）/ TryExtractChineseDiskRoot / TryExtractLiteralDiskRoot |
 | `src/Agent.Infrastructure/Project/SymbolIndexer.cs` | 符号索引（增量） | BuildAndSaveIncremental / Find / GetAll |
 | `src/Agent.Infrastructure/Project/ProjectScanner.cs` | 工程扫描 | Scan |
 | `src/Agent.Infrastructure/Project/ProjectContextStore.cs` | 工程上下文缓存 | TryGet / Save |

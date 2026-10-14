@@ -223,10 +223,11 @@ public static class Suites_Dashboard
                 try
                 {
                     var (url2, stop2) = await Agent.Dashboard.DashboardHost.StartAsync(
-                        new Agent.Dashboard.DashboardOptions(ws, null, Path.Combine(ws, "symbol_index.db"), null, metrics, dashHub, store,
+                        new Agent.Dashboard.DashboardOptions(ws, null, null, metrics, dashHub, store,
                             new Agent.Core.Models.AgentOptions(),
-                            Path.Combine(ws, "agent_memory.db"),
-                            new Agent.Core.CommandHub()), CancellationToken.None);
+                            new Agent.Core.CommandHub(),
+                            new Agent.Infrastructure.Memory.AgentMemoryStore(Path.Combine(ws, "agent_memory.db")),
+                            new Agent.Infrastructure.Project.SymbolIndexStore(Path.Combine(ws, "symbol_index.db"))), CancellationToken.None);
                     using var probe = new HttpClient { BaseAddress = new Uri(url2 + "/") };
                     _ = await probe.GetStringAsync("");   // 触发一次请求，覆盖请求期日志窗口
                     await stop2();
@@ -238,10 +239,11 @@ public static class Suites_Dashboard
                     && !captured.Contains("Application started") && !captured.Contains("Hosting environment"));
 
                 var (url, stop) = await Agent.Dashboard.DashboardHost.StartAsync(
-                    new Agent.Dashboard.DashboardOptions(ws, null, Path.Combine(ws, "symbol_index.db"), null, metrics, dashHub, store,
+                    new Agent.Dashboard.DashboardOptions(ws, null, null, metrics, dashHub, store,
                         new Agent.Core.Models.AgentOptions(),
-                        Path.Combine(ws, "agent_memory.db"),
-                        new Agent.Core.CommandHub()), CancellationToken.None);
+                        new Agent.Core.CommandHub(),
+                        new Agent.Infrastructure.Memory.AgentMemoryStore(Path.Combine(ws, "agent_memory.db")),
+                        new Agent.Infrastructure.Project.SymbolIndexStore(Path.Combine(ws, "symbol_index.db"))), CancellationToken.None);
                 using var http = new HttpClient { BaseAddress = new Uri(url + "/") };
                 var page = await http.GetStringAsync("");
                 Check("GET / 返回嵌入单页（含标题 + 回放 API + 过滤/滚动开关）",
@@ -305,10 +307,11 @@ public static class Suites_Dashboard
                 Agent.Infrastructure.Project.BackupService.Backup(ws, projFile, projDir, "diff1");
                 System.IO.File.WriteAllText(projFile, "class A { int x; int y; }\n");
                 var (url3, stop3) = await Agent.Dashboard.DashboardHost.StartAsync(
-                    new Agent.Dashboard.DashboardOptions(ws, projDir, Path.Combine(ws, "symbol_index.db"), null, metrics, dashHub, store,
+                    new Agent.Dashboard.DashboardOptions(ws, projDir, null, metrics, dashHub, store,
                         new Agent.Core.Models.AgentOptions(),
-                        Path.Combine(ws, "agent_memory.db"),
-                        new Agent.Core.CommandHub()), CancellationToken.None);
+                        new Agent.Core.CommandHub(),
+                        new Agent.Infrastructure.Memory.AgentMemoryStore(Path.Combine(ws, "agent_memory.db")),
+                        new Agent.Infrastructure.Project.SymbolIndexStore(Path.Combine(ws, "symbol_index.db"))), CancellationToken.None);
                 using var http3 = new HttpClient { BaseAddress = new Uri(url3 + "/") };
                 var diffResp = await http3.GetStringAsync("api/diff?taskId=diff1&rel=app.cs");
                 Check("GET /api/diff 附 original 全文（10-08 Monaco DiffEditor：备份全文）",
@@ -368,9 +371,12 @@ public static class Suites_Dashboard
                 var authMetrics = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(Path.Combine(authWs, "metrics.db"));
                 var authStore = new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(authWs, "metrics.db"));
                 var (authUrl, authStop) = await Agent.Dashboard.DashboardHost.StartAsync(
-                    new Agent.Dashboard.DashboardOptions(authWs, null, Path.Combine(authWs, "symbol_index.db"), null, authMetrics,
+                    new Agent.Dashboard.DashboardOptions(authWs, null, null, authMetrics,
                         new Agent.Infrastructure.Events.TaskEventHub(), authStore, new Agent.Core.Models.AgentOptions(),
-                        Path.Combine(authWs, "agent_memory.db"), new Agent.Core.CommandHub(), "secret-token-123"),
+                        new Agent.Core.CommandHub(),
+                        new Agent.Infrastructure.Memory.AgentMemoryStore(Path.Combine(authWs, "agent_memory.db")),
+                        new Agent.Infrastructure.Project.SymbolIndexStore(Path.Combine(authWs, "symbol_index.db")),
+                        "secret-token-123"),
                     CancellationToken.None);
                 try
                 {
@@ -405,13 +411,14 @@ public static class Suites_Dashboard
                     var depStore = new Agent.Infrastructure.Project.SymbolIndexStore(Path.Combine(depWs, "symbol_index.db"));
                     Check("deps 冒烟：符号索引可建（3 个类型级符号）", depStore.BuildAndSave(depProj) >= 3);
                     var (depUrl, depStop) = await Agent.Dashboard.DashboardHost.StartAsync(
-                        new Agent.Dashboard.DashboardOptions(depWs, depProj, Path.Combine(depWs, "symbol_index.db"), null,
+                        new Agent.Dashboard.DashboardOptions(depWs, depProj, null,
                             new Agent.Infrastructure.Metrics.SqliteMetricsCollector(Path.Combine(depWs, "metrics.db")),
                             new Agent.Infrastructure.Events.TaskEventHub(),
                             new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(depWs, "metrics.db")),
                             new Agent.Core.Models.AgentOptions(),
-                            Path.Combine(depWs, "agent_memory.db"),
-                            new Agent.Core.CommandHub()),
+                            new Agent.Core.CommandHub(),
+                            new Agent.Infrastructure.Memory.AgentMemoryStore(Path.Combine(depWs, "agent_memory.db")),
+                            new Agent.Infrastructure.Project.SymbolIndexStore(Path.Combine(depWs, "symbol_index.db"))),
                         CancellationToken.None);
                     using var depHttp = new HttpClient { BaseAddress = new Uri(depUrl + "/") };
                     var overview = await depHttp.GetStringAsync("api/deps");
@@ -462,13 +469,14 @@ public static class Suites_Dashboard
                 Agent.Infrastructure.Project.BackupService.MarkNewFile(rbWs, rbNew, rbProj, "rbT1");
 
                 var (rbUrl, rbStop) = await Agent.Dashboard.DashboardHost.StartAsync(
-                    new Agent.Dashboard.DashboardOptions(rbWs, rbProj, Path.Combine(rbWs, "symbol_index.db"), null,
+                    new Agent.Dashboard.DashboardOptions(rbWs, rbProj, null,
                         new Agent.Infrastructure.Metrics.SqliteMetricsCollector(Path.Combine(rbWs, "metrics.db")),
                         new Agent.Infrastructure.Events.TaskEventHub(),
                         new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(rbWs, "metrics.db")),
                         new Agent.Core.Models.AgentOptions(),
-                        Path.Combine(rbWs, "agent_memory.db"),
-                        new Agent.Core.CommandHub()),
+                        new Agent.Core.CommandHub(),
+                        new Agent.Infrastructure.Memory.AgentMemoryStore(Path.Combine(rbWs, "agent_memory.db")),
+                        new Agent.Infrastructure.Project.SymbolIndexStore(Path.Combine(rbWs, "symbol_index.db"))),
                     CancellationToken.None);
                 using var rbHttp = new HttpClient { BaseAddress = new Uri(rbUrl + "/") };
 

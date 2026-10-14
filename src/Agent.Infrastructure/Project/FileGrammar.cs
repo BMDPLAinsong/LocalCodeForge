@@ -71,6 +71,8 @@ public static class FileGrammar
     /// 惰性枚举工程代码文件（排除目录 + CodeExtensions），返回 (全路径, 相对路径, 小写扩展名)。
     /// IO 异常容忍：枚举中途失败即截断（与原 SymbolIndexer / DependencyAnalyzer 行为一致）。
     /// 上限策略（文件数/总字节）由调用方施加——本方法只负责语法过滤。
+    /// 【10-14 F4】枚举模式由 "*.*" 改 "*"：原模式**漏掉无扩展名文件**（Makefile/Dockerfile/LICENSE
+    /// 等），与"枚举全量再按扩展名过滤"的自述语义不符；扩展名过滤在下方按 CodeExtensions 进行。
     /// </summary>
     public static IEnumerable<(string Full, string Rel, string Ext)> EnumerateCodeFiles(string projectRoot)
     {
@@ -80,7 +82,7 @@ public static class FileGrammar
         IEnumerator<string> it;
         try
         {
-            it = Directory.EnumerateFiles(projectRoot, "*.*", SearchOption.AllDirectories).GetEnumerator();
+            it = Directory.EnumerateFiles(projectRoot, "*", SearchOption.AllDirectories).GetEnumerator();
         }
         catch
         {
@@ -112,6 +114,53 @@ public static class FileGrammar
                 if (!CodeExtensions.Contains(ext)) continue;
 
                 yield return (f, rel, ext);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 惰性枚举工程全部文件（仅排除目录，无扩展名过滤），返回全路径序列。
+    /// 供"某文件名是否存在于工程内"类判定使用（如 ReadOnlyGuard 查任务引用的文件名）。
+    /// 【10-14 F3】新增：原先 ReadOnlyGuard 直接 `EnumerateFiles(root, "*", AllDirectories)`
+    /// 全量枚举——①不排除 bin/obj（构建产物里的同名文件会被误判为"工程内已存在"→ 错拦只读任务）；
+    /// ②每任务重扫全工程且不走任何缓存。
+    /// </summary>
+    public static IEnumerable<string> EnumerateAllFiles(string projectRoot)
+    {
+        if (string.IsNullOrWhiteSpace(projectRoot) || !Directory.Exists(projectRoot))
+            yield break;
+
+        IEnumerator<string> it;
+        try
+        {
+            it = Directory.EnumerateFiles(projectRoot, "*", SearchOption.AllDirectories).GetEnumerator();
+        }
+        catch
+        {
+            yield break;
+        }
+
+        using (it)
+        {
+            while (true)
+            {
+                string f;
+                try
+                {
+                    if (!it.MoveNext()) break;
+                    f = it.Current;
+                }
+                catch
+                {
+                    break;   // 枚举中途 IO 异常：容忍截断
+                }
+
+                string rel;
+                try { rel = Path.GetRelativePath(projectRoot, f); }
+                catch { continue; }
+
+                if (IsExcludedRel(rel)) continue;
+                yield return f;
             }
         }
     }
