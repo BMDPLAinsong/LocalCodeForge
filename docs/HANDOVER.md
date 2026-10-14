@@ -1050,6 +1050,8 @@ powershell -NoProfile -File scripts/e2e/e2e.ps1
 
 5c. **【已完成】P3-5 防复发：哨兵契约单测 + help 补 dashboard + 漂移自查脚本（10-14）**：①**哨兵单测**（把注释级契约钉成可执行断言）：新增 3 项——`GetRunRoot` 命名启发式（新建区段 2450：`task_` 前缀目录的 `.backup` 落**父目录**而非任务目录内，改名即静默错位）、`CommandHub` 无任务哨兵（`CurrentTask = (0,null)`，前端"空闲"显示依赖此契约）、`PathBoundary` root 带/不带尾分隔符等价（区段 2596）。**另纠正一处审查误判**：`..` 跳脱越界断言区段 2596 **本就存在**（任务5-B12 称缺失，实际已覆盖）——不重复添加，改为补一条尾分隔符等价断言。②**help 补 `dashboard`**（`Program.cs` help 命令行此前只列 8 个命令，dashboard 不可发现——web UI 已自动起却无人知道能手动开）。③**漂移自查脚本** `scripts\drift-check.ps1`（仓库无 CI，先落本地门禁工具）：扫描 src 注释中的三类漂移标记并输出按文件分布，超阈告警 + 退出码 1（可后接 CI）；基线 **51 处/19 文件**，阈值 60。**过程教训两条（已写入脚本头注释）**：PS 5.1 把无 BOM 的 UTF-8 脚本按 ANSI 读 → 中文注释乱码**破坏引号配对导致解析失败**（脚本改纯 ASCII，中文关键词用码点拼装）；关键词若用单字（漂/双/单）会把"单独/双重"全命中（291/63 假阳性）→ 必须整词。**验证**：构建 0 错误（警告基线 9）；tests 827→**831/831**（新增 4 项哨兵）；脚本双向验证（阈值内退出 0、超阈退出 1）。
 
+5d. **【已完成】P3 批次门禁自检（10-14）**：按约定自检 P3 子批 A/B，查出并修正**遗漏一处 + 说谎日志一处**：P3-1 只收了 `AgentLoop` 调用方，**漏了 CLI `use` 命令路径**——`Program.cs` 原为「先无条件全量 `ProjectScanner.Scan`（含目录树/上下文块构建，最贵一步）→ **之后**才 `TryGet`」，即**缓存命中也照付扫描成本**，且命中分支打印「（工程上下文命中缓存，未重新扫描）」**与事实不符**（扫都扫完了）。实施：`use` 路径同样改走 `GetOrCompute(proj, out cacheHit)`，日志按实际 `cacheHit` 分支输出（「已重新扫描并写入缓存」）。收益：重复 `use` 同一未改动工程时真正省掉全量扫描。**同批确认无遗漏**：①`SensitivePathGuard` 静态构造确无 P/Invoke（仅 `Path.Combine` + 长名登记）；②哨兵 4 项在库且全绿；③`drift-check.ps1` 双向退出码验证通过（阈值内 0 / 超阈 1）；④9 个改动文件 IDE 诊断 0 问题；⑤警告数保持基线 9。**验证**：构建 0 错误；tests 831/831。
+
 4. **补 Executor prompt 禁令**：「禁止 Console.ReadLine/while (true)」，让交互式任务在规划层就规避，而不是靠超时判失败。5. **清理 RoutingRules.json 重名规则**，合并语义；**EnableOrchestration 接线或删除**。
 
 6. `git init`**&#x20;纳入版本控制**；为 TaskClassifier / RuleEngine / TryParseToolCallsFromText 补单元测试。

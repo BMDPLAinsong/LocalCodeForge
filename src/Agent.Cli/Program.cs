@@ -1021,20 +1021,14 @@ internal class Program
             Console.WriteLine($"[自动识别] 检测到工程路径 {proj}（只读），已设置工程根。");
         options.ProjectRoot = proj;
         options.ProjectWriteEnabled = writeFlag;
-        var scan = ProjectScanner.Scan(proj);
-        // 工程感知 P2：工程上下文缓存——工程未变化时命中缓存（跨 CLI 重启持久化）
-        var cached = provider.GetRequiredService<ProjectContextStore>()
-            .TryGet(proj, scan.FileCount, scan.DirCount, scan.TotalBytes, scan.MaxMtimeTicks);
-        if (cached is not null)
-        {
-            Console.WriteLine(cached.Overview);
-            Console.WriteLine("（工程上下文命中缓存，未重新扫描）");
-        }
-        else
-        {
-            provider.GetRequiredService<ProjectContextStore>().Put(proj, scan);
-            Console.WriteLine(scan.Overview);
-        }
+        // 【10-14 P3-1 门禁修正】use 路径改走 GetOrCompute：原实现先无条件全量 Scan（含目录树/上下文块
+        // 构建，最贵的一步）**之后**才查缓存——缓存命中也照付扫描成本，且日志"未重新扫描"与事实不符。
+        // 现由签名校验决定是否真扫；日志按实际 cacheHit 输出。
+        var scan = provider.GetRequiredService<ProjectContextStore>().GetOrCompute(proj, out var ctxCacheHit);
+        Console.WriteLine(scan.Overview);
+        Console.WriteLine(ctxCacheHit
+            ? "（工程上下文命中缓存，未重新扫描）"
+            : "（工程上下文已重新扫描并写入缓存）");
         if (writeFlag)
             Console.WriteLine("工程可写模式已开启（改动前自动备份，可用 rollback 恢复）。");
 
