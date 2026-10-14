@@ -5,6 +5,19 @@ using System.Linq;
 namespace Agent.Infrastructure.Project;
 
 /// <summary>
+/// 完成门判定入参（【10-14 审查任务5-B2 落地】：原 7 个位置参数（含 5 个必填 + 2 个可选）→ 具名 record。
+/// 调用点自解释、后续增字段不必改签名；三种必填判据在构造处即可见。
+/// </summary>
+public sealed record CompletionContext(
+    bool IsWriteTask,
+    bool WroteAny,
+    bool WriteRejected,
+    string? Target,
+    bool TargetIsFile,
+    IReadOnlyList<string>? WrittenFiles = null,
+    IReadOnlyList<string>? RequirementTokens = null);
+
+/// <summary>
 /// 批次1·验证层总盘点：写任务完成门（确定性纯函数，无 LLM、无副作用）。
 /// 让"写了文件"升级为"写到了用户要求的目标"：
 ///   - C. 写被拒未重试 → 失败（write/edit 被拒 ≥1 且本轮无任何写成功）
@@ -13,6 +26,15 @@ namespace Agent.Infrastructure.Project;
 /// </summary>
 public static class CompletionGate
 {
+    /// <summary>
+    /// 完成门判定（<see cref="CompletionContext"/> 入参版——**推荐入口**，生产调用点均用此版）。
+    /// 位置参数版（下一方法）保留给 tests 既有调用与外部兼容，内部一行委托到本方法——两者判定逻辑
+    /// 只有一份实现，不构成双路径。
+    /// </summary>
+    public static CompletionVerdict? Evaluate(CompletionContext ctx)
+        => Evaluate(ctx.IsWriteTask, ctx.WroteAny, ctx.WriteRejected, ctx.Target, ctx.TargetIsFile,
+            ctx.RequirementTokens, ctx.WrittenFiles);
+
     /// <summary>
     /// 完成门判定结果。
     /// </summary>

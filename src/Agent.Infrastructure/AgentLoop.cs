@@ -602,16 +602,18 @@ public sealed class AgentLoop : IAgentLoop
                             // write_file X:/notes.txt 成功但 type X:/notes.txt cmd 正斜杠失败，
                             // 目标已达成，H2 却判失败）；
                             // 目标缺失 / 写被拒未重试 → 判失败（诚实失败）。
-                            var fuseGate = Project.CompletionGate.Evaluate(
-                                isWriteTask: IntentOverride.IsWriteTask(request.Input),
-                                wroteAny: _everWroteFile,
-                                writeRejected: _writeRejected,
-                                target: _writeTarget,
-                                targetIsFile: _writeTargetIsFile,
-                                requirementTokens: (_writeTarget is not null
-                    ? Project.ContentConformance.ExtractRequirementTokens(request.Input, Project.RequirementScope.WithBareVerbs)
-                    : Project.ContentConformance.ExtractRequirementTokens(request.Input, Project.RequirementScope.Standard)),
-                                writtenFiles: _writtenFiles);
+                            var fuseGate = Project.CompletionGate.Evaluate(new Project.CompletionContext(
+                                IntentOverride.IsWriteTask(request.Input),
+                                _everWroteFile,
+                                _writeRejected,
+                                _writeTarget,
+                                _writeTargetIsFile,
+                                _writtenFiles,
+                                Project.ContentConformance.ExtractRequirementTokens(
+                                    request.Input,
+                                    _writeTarget is not null
+                                        ? Project.RequirementScope.WithBareVerbs
+                                        : Project.RequirementScope.Standard)));
                             if (fuseGate is not null)
                             {
                                 _logger.LogWarning("[完成门·熔断] {Message}", fuseGate.message);
@@ -1057,16 +1059,18 @@ public sealed class AgentLoop : IAgentLoop
 
             // 【批次1·验证层总盘点】完成门：写任务收尾前查"写被拒未重试"+"目标达成"。
             // 让"写了文件"升级为"写到了用户要求的目标"（X盘根目录 test.txt 实证：写了别处 ≠ 达成）。
-            var gateVerdict = Project.CompletionGate.Evaluate(
-                isWriteTask: IntentOverride.IsWriteTask(request.Input),
-                wroteAny: _everWroteFile,
-                writeRejected: _writeRejected,
-                target: _writeTarget,
-                targetIsFile: _writeTargetIsFile,
-                requirementTokens: (_writeTarget is not null
-                    ? Project.ContentConformance.ExtractRequirementTokens(request.Input, Project.RequirementScope.WithBareVerbs)
-                    : Project.ContentConformance.ExtractRequirementTokens(request.Input, Project.RequirementScope.Standard)),
-                writtenFiles: _writtenFiles);
+            var gateVerdict = Project.CompletionGate.Evaluate(new Project.CompletionContext(
+                IntentOverride.IsWriteTask(request.Input),
+                _everWroteFile,
+                _writeRejected,
+                _writeTarget,
+                _writeTargetIsFile,
+                _writtenFiles,
+                Project.ContentConformance.ExtractRequirementTokens(
+                    request.Input,
+                    _writeTarget is not null
+                        ? Project.RequirementScope.WithBareVerbs
+                        : Project.RequirementScope.Standard)));
             if (gateVerdict is not null)
             {
                 await _store.AppendTurnAsync(request.SessionId, new ChatTurn("assistant", text), ct);
@@ -1084,16 +1088,18 @@ public sealed class AgentLoop : IAgentLoop
         // 【批次1·验证层总盘点】最大步数收尾也过完成门：
         // 显式写目标已落地 → 放行收尾（模型反复验证命令失败循环达上限，但目标已达成——t2 复测实证）；
         // 目标缺失 / 写被拒未重试 → 判失败（诚实失败，与收尾/熔断三处一致）。
-        var maxGate = Project.CompletionGate.Evaluate(
-            isWriteTask: IntentOverride.IsWriteTask(request.Input),
-            wroteAny: _everWroteFile,
-            writeRejected: _writeRejected,
-            target: _writeTarget,
-            targetIsFile: _writeTargetIsFile,
-            requirementTokens: (_writeTarget is not null
-                    ? Project.ContentConformance.ExtractRequirementTokens(request.Input, Project.RequirementScope.WithBareVerbs)
-                    : Project.ContentConformance.ExtractRequirementTokens(request.Input, Project.RequirementScope.Standard)),
-            writtenFiles: _writtenFiles);
+        var maxGate = Project.CompletionGate.Evaluate(new Project.CompletionContext(
+            IntentOverride.IsWriteTask(request.Input),
+            _everWroteFile,
+            _writeRejected,
+            _writeTarget,
+            _writeTargetIsFile,
+            _writtenFiles,
+            Project.ContentConformance.ExtractRequirementTokens(
+                request.Input,
+                _writeTarget is not null
+                    ? Project.RequirementScope.WithBareVerbs
+                    : Project.RequirementScope.Standard)));
         if (maxGate is not null)
         {
             _logger.LogWarning("[完成门·最大步数] {Message}", maxGate.message);
