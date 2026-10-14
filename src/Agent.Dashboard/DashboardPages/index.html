@@ -787,6 +787,39 @@ async function fetchStats() {
       html += `<div class="statrow"><span>${esc(f.category)}</span><span>${f.count}</span></div>
                <div class="bar"><i class="b-red" style="width:${(f.count / max * 100).toFixed(0)}%"></i></div>`;
   }
+  // ── 10-14 P5-24 全量对齐：可疑明细 / Executor 生成成功率 / 特征类归因 / 路由决策 / 工具拒绝 ──
+  if (d.suspicious && d.suspicious.length) {
+    html += `<div style="margin-top:8px"><span class="tag" style="color:var(--dim)">可疑成功明细</span></div>`;
+    for (const m of d.suspicious)
+      html += `<div class="statrow"><span>${esc(m.mode)}</span><span class="warn">${esc(m.input)}</span></div>`;
+  }
+  if (d.executor) {
+    const r = d.executor.totalCount ? `${(d.executor.successCount / d.executor.totalCount * 100).toFixed(0)}%` : "无样本";
+    html += `<div class="statrow" style="margin-top:6px"><span>Executor 生成成功率</span><span>${r}（${d.executor.successCount}/${d.executor.totalCount}）</span></div>`;
+  }
+  if (d.featureBreakdown && d.featureBreakdown.length) {
+    html += `<div style="margin-top:8px"><span class="tag" style="color:var(--dim)">特征类归因</span></div>`;
+    for (const f of d.featureBreakdown) {
+      const p = f.totalCount ? `${(f.successCount / f.totalCount * 100).toFixed(0)}%` : "无样本";
+      html += `<div class="statrow"><span>${esc(f.feature)}</span><span>${p}（${f.successCount}/${f.totalCount}）${f.topFailureCause ? " · " + esc(f.topFailureCause) : ""}</span></div>`;
+    }
+  }
+  if (d.routingDecisions && d.routingDecisions.total > 0) {
+    const rd = d.routingDecisions;
+    const svc = (rd.byService || []).map(x => `${esc(x.item1)}:${x.item2}`).join("  ");
+    const feat = (rd.byFeature || []).slice(0, 5).map(x => `${esc(x.item1)}:${x.item2}`).join("  ");
+    html += `<div style="margin-top:8px"><span class="tag" style="color:var(--dim)">路由决策</span></div>`;
+    html += `<div class="statrow"><span>决策总数</span><span>${rd.total}</span></div>`;
+    if (svc) html += `<div class="statrow"><span>按服务</span><span>${svc}</span></div>`;
+    if (feat) html += `<div class="statrow"><span>按特征类</span><span>${feat}</span></div>`;
+  }
+  if (d.toolRejections && d.toolRejections.total > 0) {
+    const tr = d.toolRejections;
+    const cats = (tr.byCategory || []).map(x => `${esc(x.item1)}:${x.item2}`).join("  ");
+    html += `<div style="margin-top:8px"><span class="tag" style="color:var(--dim)">工具拒绝</span></div>`;
+    html += `<div class="statrow"><span>拒绝总数</span><span>${tr.total}</span></div>`;
+    if (cats) html += `<div class="statrow"><span>按类别</span><span>${cats}</span></div>`;
+  }
   $("stats").innerHTML = html;
   badge("badgeStats", `${s.totalCount} · ${(s.successRate * 100).toFixed(0)}%`, s.successRate >= 0.8);
 }
