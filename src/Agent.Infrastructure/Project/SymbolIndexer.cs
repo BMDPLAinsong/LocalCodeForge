@@ -83,54 +83,63 @@ public static class SymbolIndexer
     /// <summary>扫描单个代码文件（供增量重建复用）。rel 为相对工程根路径（/ 分隔）。</summary>
     public static List<SymbolEntry> BuildFile(string fullPath, string rel)
     {
-        var result = new List<SymbolEntry>();
-        var style = CodeExts.GetValueOrDefault(Path.GetExtension(fullPath).ToLowerInvariant());
-        if (style is null) return result;
         try
         {
-            var lines = File.ReadAllText(fullPath).Split('\n');
-            for (var i = 0; i < lines.Length; i++)
+            var style = CodeExts.GetValueOrDefault(Path.GetExtension(fullPath).ToLowerInvariant());
+            return style is null ? new List<SymbolEntry>() : BuildContent(File.ReadAllText(fullPath), rel, style);
+        }
+        catch { return new List<SymbolEntry>(); }
+    }
+
+    /// <summary>【10-14 C3】从内存内容提取符号——与 BuildFile **同一实现**（单一提取源，避免第二份正则）。
+    /// style 为 null 时按 rel 扩展名推断。供"已有类型清单"等内存态内容复用。</summary>
+    public static List<SymbolEntry> BuildContent(string content, string rel, string? style = null)
+    {
+        style ??= CodeExts.GetValueOrDefault(Path.GetExtension(rel).ToLowerInvariant());
+        var result = new List<SymbolEntry>();
+        if (style is null || string.IsNullOrEmpty(content)) return result;
+
+        var lines = content.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i].TrimEnd('\r');
+            if (style == "python")
             {
-                var line = lines[i].TrimEnd('\r');
-                if (style == "python")
+                var m = PyClassRe.Match(line);
+                if (m.Success)
                 {
-                    var m = PyClassRe.Match(line);
-                    if (m.Success)
-                    {
-                        result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "class"));
-                        continue;
-                    }
-                    m = PyDefRe.Match(line);
-                    if (m.Success)
-                    {
-                        var indent = line.Length - line.TrimStart().Length;
-                        result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1,
-                            indent > 0 ? "method" : "function"));
-                    }
+                    result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "class"));
+                    continue;
                 }
-                else
+                m = PyDefRe.Match(line);
+                if (m.Success)
                 {
-                    var m = CSharpTypeRe.Match(line);
-                    if (m.Success)
-                    {
-                        result.Add(new SymbolEntry(m.Groups[2].Value, rel, i + 1, m.Groups[1].Value));
-                        continue;
-                    }
-                    m = CSharpPropRe.Match(line);
-                    if (m.Success)
-                    {
-                        result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "property"));
-                        continue;
-                    }
-                    m = CSharpMethodRe.Match(line);
-                    if (m.Success && !NonMethodKeywords.Contains(m.Groups[1].Value))
-                    {
-                        result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "method"));
-                    }
+                    var indent = line.Length - line.TrimStart().Length;
+                    result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1,
+                        indent > 0 ? "method" : "function"));
+                }
+            }
+            else
+            {
+                var m = CSharpTypeRe.Match(line);
+                if (m.Success)
+                {
+                    result.Add(new SymbolEntry(m.Groups[2].Value, rel, i + 1, m.Groups[1].Value));
+                    continue;
+                }
+                m = CSharpPropRe.Match(line);
+                if (m.Success)
+                {
+                    result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "property"));
+                    continue;
+                }
+                m = CSharpMethodRe.Match(line);
+                if (m.Success && !NonMethodKeywords.Contains(m.Groups[1].Value))
+                {
+                    result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "method"));
                 }
             }
         }
-        catch { }
         return result;
     }
 

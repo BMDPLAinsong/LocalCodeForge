@@ -634,7 +634,8 @@ external_credential → compile_error → runtime_error → timeout → validato
 | `src/Agent.Infrastructure/AgentLoop.cs` | ReAct 主循环 + 防线全家桶 | RunAsync / BuildCycleSignature / 完成门三处接线 |
 | `src/Agent.Infrastructure/Orchestration/Orchestrator.cs` | 三阶段编排 | RunAsync / CheckIncrementalPlanConflicts / BuildEngineeringGraphBlock / RecordSubMetricAsync |
 | `src/Agent.Infrastructure/Orchestration/PlannerService.cs` | Plan JSON 生成 | GeneratePlanAsync / TryParsePlan / SimplifyRunCommand |
-| `src/Agent.Infrastructure/Orchestration/ExecutorService.cs` | 逐文件生成/修复 | GenerateAsync / RepairAsync / IsSameOutput / 升级链 |
+| `src/Agent.Infrastructure/Orchestration/ExecutorService.cs` | 逐文件生成/修复 | GenerateAsync / RepairAsync / IsSameOutput / 升级链 / **BuildProjectTypeInventory（10-14 C3：事前注入"已有类型+成员"强约束数据，防幻觉成员/类型）** / ExecutorModel 请求级覆盖（A1 模型 A/B） |
+| `src/Agent.Infrastructure/Project/ExistingTypeInventory.cs` | **已有类型+成员清单（10-14 C3 新增）** | Build（复用 SymbolIndexer 提取 + 按行序归组到所属类型；产出紧凑强约束清单供 Executor 注入） |
 | `src/Agent.Infrastructure/Routing/ModelRouter.cs` | 三层漏斗路由 | RouteAsync |
 | `src/Agent.Infrastructure/Routing/RuleEngine.cs` | L1 规则引擎 | Evaluate |
 | `src/Agent.Infrastructure/Routing/IntentOverride.cs` | 写/读动词词表（唯一权威） | IsWriteTask / IsReadTask / Apply |

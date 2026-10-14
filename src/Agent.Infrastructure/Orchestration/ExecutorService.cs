@@ -30,6 +30,28 @@ public sealed class ExecutorService : IExecutorService
         _options = options;
     }
 
+    /// <summary>
+    /// 【10-14 C3 工程增量类型清单】从工程根构建"已有类型 + 成员"强约束数据。
+    /// 数据驱动（复用 SymbolIndexer 提取，零新增正则），非提示词规则；沙箱模式（无工程根）→ null。
+    /// excludeRel：正在生成/修复的文件（不算"已有"，其内容已在上下文里）。
+    /// </summary>
+    private string? BuildProjectTypeInventory(string? excludeRel)
+    {
+        var root = _options.ProjectRoot;
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return null;
+        try
+        {
+            var files = new List<(string Rel, string Content)>();
+            foreach (var (full, rel, _) in Agent.Infrastructure.Project.FileGrammar.EnumerateCodeFiles(root))
+            {
+                try { files.Add((rel.Replace('\\', '/'), File.ReadAllText(full))); } catch { /* 读失败跳过 */ }
+            }
+            return Agent.Infrastructure.Project.ExistingTypeInventory.Build(
+                files, excludeRel?.Replace('\\', '/'));
+        }
+        catch { return null; }
+    }
+
     // ============================================================
     // 生成文件
     // ============================================================
@@ -294,6 +316,14 @@ class Program
         contextLines.Add("");
         contextLines.Add($"现在输出 {spec.Path} 的完整内容：");
 
+        // 【10-14 C3】工程增量：事前注入"已有类型 + 成员"强约束数据（防幻觉成员/类型，数据非规则）
+        var inventory = BuildProjectTypeInventory(spec.Path);
+        if (inventory is not null)
+        {
+            contextLines.Add("");
+            contextLines.Add(inventory);
+        }
+
         history.AddUserMessage(string.Join("\n", contextLines));
 
         // ═══════════ 调用 LLM ═══════════
@@ -510,6 +540,14 @@ class Program
         contextLines.Add("## 任务");
         contextLines.Add($"请修复 {spec.Path}，只输出修复后的完整文件内容。");
         contextLines.Add("不要解释，不要 markdown 包裹，不要输出与原文相同的内容。");
+
+        // 【10-14 C3】修复同样注入"已有类型 + 成员"强约束数据（针对幻觉成员/类型这一实测根因）
+        var inventory = BuildProjectTypeInventory(spec.Path);
+        if (inventory is not null)
+        {
+            contextLines.Add("");
+            contextLines.Add(inventory);
+        }
 
         history.AddUserMessage(string.Join("\n", contextLines));
 

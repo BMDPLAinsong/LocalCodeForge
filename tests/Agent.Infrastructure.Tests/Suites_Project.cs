@@ -136,6 +136,26 @@ public static class Suites_Project
             Check("P-D 回退全扫（无 store）：行为不变 → 拦截",
                 pdFallback.Count == 1 && pdFallback[0].Contains("Order"));
 
+            // ── 【10-14 C3】ExistingTypeInventory：已有类型+成员强约束清单（复用 SymbolIndexer 提取）──
+            var inv = Agent.Infrastructure.Project.ExistingTypeInventory.Build(new[]
+            {
+                ("Order.cs", "public class Order\n{\n    public int Id { get; set; }\n    public string Status { get; set; }\n}\n"),
+                ("TaxService.cs", "public class TaxService\n{\n    public double ComputeTax(double amount) { return amount * 0.1; }\n}\n"),
+                ("Program.cs", "class Program { static void Main() { } }"),
+            }, excludeRel: "Program.cs");
+            Check("C3 类型清单：含已有类型与成员（Order 的 Id/Status、TaxService 的 ComputeTax）",
+                inv is not null && inv.Contains("Order") && inv.Contains("Id") && inv.Contains("Status")
+                && inv.Contains("TaxService") && inv.Contains("ComputeTax"));
+            Check("C3 类型清单：excludeRel 排除目标文件（Program 不在清单）",
+                inv is not null && !inv.Contains("- Program"));
+            Check("C3 类型清单：无类型 → null（调用方不注入）",
+                Agent.Infrastructure.Project.ExistingTypeInventory.Build(
+                    new[] { ("a.txt", "no types here") }) is null);
+            Check("C3 类型清单：成员按行序归组到所属类型（跨文件不误挂）",
+                inv is not null
+                && inv.Contains("Order (class, Order.cs): Id, Status")
+                && inv.Contains("TaxService (class, TaxService.cs): ComputeTax"));
+
             Directory.Delete(fgDir, true);
             Directory.Delete(pdIdx, true);
         }
