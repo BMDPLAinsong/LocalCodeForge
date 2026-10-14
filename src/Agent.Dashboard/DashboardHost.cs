@@ -111,6 +111,20 @@ public static class DashboardHost
         Agent.Infrastructure.Memory.AgentMemoryStore memoryStore,
         Agent.Infrastructure.Project.SymbolIndexStore symbolStore)
     {
+        // ── 【10-14 B2】全局异常处理：未处理端点异常 → 结构化 JSON + 日志（此前为裸 500，无结构无日志）──
+        // 置于管线最前：覆盖其后全部中间件与端点的下游异常；响应形状与端点既有 {error:...} 一致（前端可统一消费）。
+        app.UseExceptionHandler(errApp => errApp.Run(async ctx =>
+        {
+            var err = ctx.Features
+                .Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+            app.Logger.LogError(err, "Dashboard 端点未处理异常：{Method} {Path}",
+                ctx.Request.Method, ctx.Request.Path);
+            ctx.Response.StatusCode = 500;
+            ctx.Response.ContentType = "application/json; charset=utf-8";
+            await ctx.Response.WriteAsync(JsonSerializer.Serialize(
+                new { error = $"服务内部错误：{err?.Message ?? "未知"}" }, JsonOpts));
+        }));
+
         // ── 10-08 Monaco vendor 静态文件：/vendor → bin\vendor（csproj Content 构建复制，自包含）。
         // 置于鉴权中间件之前：Monaco loader 内部按相对路径 fetch worker/language 资源，无法带 query token；
         // vendor 是公开编辑器代码（本地回环 + 无用户数据），鉴权保护无意义。
@@ -141,6 +155,12 @@ public static class DashboardHost
                 await next();
             });
         }
+
+        // ── 【10-14 B2 测试缝】仅当 LAW_DASH_TEST_THROW=1 时注册的抛错路由 ──
+        // 用途：集成测试确定性验证全局异常处理中间件（端点抛未处理异常 → 500 结构化 JSON）。
+        // 生产与正常测试运行均不设置该变量 → 该路由不存在（零生产影响）。
+        if (Environment.GetEnvironmentVariable("LAW_DASH_TEST_THROW") == "1")
+            app.MapGet("/api/__test_throw", () => { throw new InvalidOperationException("B2 测试抛错"); });
 
         // ── 单页 ──
         app.MapGet("/", () => Results.Text(ReadEmbeddedPage(), "text/html; charset=utf-8"));

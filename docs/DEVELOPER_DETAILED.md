@@ -619,6 +619,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 
 - `scripts/e2e/runner.py <exe> <cmd_b64> <out_log>`：cmd_b64 = `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("…`n"))`，绕开 PS5.1 -File 注入 UTF-8 BOM 的 bug。
 - `scripts/e2e/e2e.ps1`：4 用例（工程增量/单文件/多文件/读查）逐用例工程副本隔离 + 三态断言（`[安全拦截生效-模型未接入]`/`[安全拦截]`/`[工程未接入]`）+ 汇总。**10-14 A2**：incremental 用例改**日志标记五态**（完成/侧路假完成/受控失败-回滚干净/安全拦截/基础设施回归），结果附 `[回滚/写入/命令/P-D]` 健康信号——区分"模型能力失败"与"基础设施回归"。
+- `scripts/verify.ps1`（**10-14 D1**）：**一键门禁**——构建(0 错误) → tests(0 失败) → drift-check(阈值内)，全绿 `exit 0`。以**退出码为准**（不解析中文输出）；纯 ASCII 规避 PS 5.1 无 BOM 编码陷阱；中文 token 由码点拼装。配套 `scripts/git-hooks/pre-commit`（安装：`cp scripts/git-hooks/pre-commit .git/hooks/pre-commit`）——提交前自动跑门禁，失败阻断（`--no-verify` 绕过）。复用：手动 `powershell -NoProfile -File scripts\verify.ps1`，或接入 CI。
 - 大模型任务 E2E 慢（large CPU 推理 5-15 分钟），用后台跑 + TaskOutput 轮询。
 
 ---

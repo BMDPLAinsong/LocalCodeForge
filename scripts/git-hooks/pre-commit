@@ -1,0 +1,20 @@
+#!/bin/sh
+# ============================================================
+# LocalAiWorkbench pre-commit gate (10-14 D1)
+#   Runs scripts/verify.ps1 = build(0 errors) + tests(0 fail) + drift-check.
+#   Blocks the commit when the gate fails; bypass with: git commit --no-verify
+#
+# Install:
+#   cp scripts/git-hooks/pre-commit .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+# ============================================================
+ROOT="$(git rev-parse --show-toplevel)"
+echo "[pre-commit] gate: build + tests + drift-check (bypass: --no-verify)"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$ROOT/scripts/verify.ps1"
+STATUS=$?
+if [ $STATUS -ne 0 ]; then
+  echo "[pre-commit] GATE FAILED (exit $STATUS) -- commit blocked."
+  exit 1
+fi
+echo "[pre-commit] gate passed."
+exit 0

@@ -238,6 +238,8 @@ public static class Suites_Dashboard
                     !captured.Contains("Now listening") && !captured.Contains("Microsoft.Hosting.Lifetime")
                     && !captured.Contains("Application started") && !captured.Contains("Hosting environment"));
 
+                // 【10-14 B2】注册抛错测试路由（仅测试期；StartAsync 前设置，断言后还原）
+                Environment.SetEnvironmentVariable("LAW_DASH_TEST_THROW", "1");
                 var (url, stop) = await Agent.Dashboard.DashboardHost.StartAsync(
                     new Agent.Dashboard.DashboardOptions(ws, null, null, metrics, dashHub, store,
                         new Agent.Core.Models.AgentOptions(),
@@ -360,6 +362,13 @@ public static class Suites_Dashboard
                     new StringContent($"{{\"input\":\"{longInput}\"}}", System.Text.Encoding.UTF8, "application/json"));
                 Check("POST /api/commands 超 8000 字符 → 400（10-14 P5-27 双端统一上限）",
                     cmdLong.StatusCode == System.Net.HttpStatusCode.BadRequest);
+                // 【10-14 B2】全局异常处理中间件：抛错路由 → 中间件转 500 结构化 JSON（原为裸 500、无结构无日志）。
+                var thrown = await http.GetAsync("api/__test_throw");
+                var thrownBody = await thrown.Content.ReadAsStringAsync();
+                Check("GET 抛错端点 → 500 结构化 JSON（10-14 B2 全局异常处理中间件）",
+                    thrown.StatusCode == System.Net.HttpStatusCode.InternalServerError
+                    && thrownBody.Contains("\"error\""));
+                Environment.SetEnvironmentVariable("LAW_DASH_TEST_THROW", null);   // 还原（不泄漏到其他区段）
                 var cmdOk = await http.PostAsync("api/commands",
                     new StringContent("{\"input\":\"stats\"}", System.Text.Encoding.UTF8, "application/json"));
                 var cmdBody = await cmdOk.Content.ReadAsStringAsync();
