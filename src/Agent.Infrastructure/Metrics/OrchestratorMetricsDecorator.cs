@@ -125,8 +125,8 @@ public sealed class OrchestratorMetricsDecorator : IOrchestrator
             Success = success,
             IsSuspicious = isSuspicious,
             // 【10-08 metrics 数据治理】E2E 冒烟用例由环境变量 LAW_E2E=1 标记（stats 剔除）
-            IsE2E = string.Equals(
-                Environment.GetEnvironmentVariable("LAW_E2E"), "1", StringComparison.Ordinal),
+            // 【10-14 P3-6 归位】判定收走 ModelRouter.IsE2ERun 单一来源（原先三处同义判定之一）。
+            IsE2E = Agent.Infrastructure.Routing.ModelRouter.IsE2ERun,
             RetryCount = retryCount,
             TotalMs = sw.ElapsedMilliseconds,
             StartedAt = startedAt,

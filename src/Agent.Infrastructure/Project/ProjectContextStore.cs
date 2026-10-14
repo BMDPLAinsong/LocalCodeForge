@@ -17,7 +17,11 @@ namespace Agent.Infrastructure.Project;
 /// </summary>
 public sealed class ProjectContextStore
 {
-    /// <summary>扫描器版本。ProjectScanner 逻辑变更时递增，缓存自动失效。</summary>
+    /// <summary>扫描器版本。ProjectScanner 逻辑变更时递增，缓存自动失效。
+    /// 【10-14 P3-6 文档化边界·经侦察确认】内容哈希式失效**不可行**：签名已含 TotalBytes/MaxMtimeTicks，
+    /// 文件内容任何改动都会改变签名 → 缓存陈旧只可能来自"扫描逻辑变更但未递增本常量"（人工纪律）。
+    /// 无廉价自动检测手段（无法自省扫描器版本），故按F1 先例文档化为纪律项：
+    /// 改动 ProjectScanner 的提取/统计逻辑时，**必须**递增本常量。</summary>
     public const string ScanVersion = "v1";
 
     private readonly string _connectionString;

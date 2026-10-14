@@ -1,7 +1,7 @@
 // ============================================================
 // Events / TaskEventStore.cs
 // 任务事件持久化（10-07，Dashboard 详情回放地基）。
-//   · 旁路追加：事件循环在 eventHub.Publish 之后 RecordAsync——渲染/hub 行为不变，
+//   · 旁路追加：事件循环在 eventHub.Publish 之后 Record——渲染/hub 行为不变，
 //     tests 零冲击；fail-safe（写失败静默，绝不影响任务执行）。
 //   · 表：task_events(task_id, seq, type, payload, created_at)，主键 (task_id, seq)。
 //   · payload 序列化与 Dashboard 回放共用同一 JsonOpts（camelCase + 枚举转字符串）——
@@ -84,8 +84,11 @@ public sealed class TaskEventStore
         }
     }
 
-    /// <summary>追加一条事件（fail-safe：异常静默吞掉，绝不影响任务执行/渲染）。</summary>
-    public void RecordAsync(string taskId, int seq, AgentEvent evt)
+    /// <summary>追加一条事件（fail-safe：异常静默吞掉，绝不影响任务执行/渲染）。
+    /// 【10-14 P3-6 命名约定】原名 RecordAsync 但实现为纯同步（SqliteConnection + ExecuteNonQuery）——
+    /// 本库约定「Async 后缀 = 真异步」（IMetricsCollector.RecordAsync 是 await using + OpenAsync），
+    /// 故去掉后缀恢复约定，避免调用方误以为可 await/可并行。同理 GetEvents。</summary>
+    public void Record(string taskId, int seq, AgentEvent evt)
     {
         try
         {
@@ -114,8 +117,8 @@ public sealed class TaskEventStore
         }
     }
 
-    /// <summary>按任务读取全部事件（seq 升序）。</summary>
-    public IReadOnlyList<StoredEvent> GetEventsAsync(string taskId)
+    /// <summary>按任务读取全部事件（seq 升序）。【10-14 P3-6】原名 GetEventsAsync，同 Record 去后缀（同步实现）。</summary>
+    public IReadOnlyList<StoredEvent> GetEvents(string taskId)
     {
         var list = new List<StoredEvent>();
         try

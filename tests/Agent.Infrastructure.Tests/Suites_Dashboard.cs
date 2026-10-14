@@ -80,10 +80,10 @@ public static class Suites_Dashboard
                 var store = new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(ws2, "metrics.db"));
                 var ev1 = new Agent.Core.Models.AgentEvent.ToolCall("write_file", System.Text.Json.JsonDocument.Parse("{\"path\":\"a.cs\"}").RootElement);
                 var ev2 = new Agent.Core.Models.AgentEvent.FinalAnswer("done");
-                store.RecordAsync("taskX", 0, ev1);
-                store.RecordAsync("taskX", 1, ev2);
-                store.RecordAsync("other", 0, ev1);
-                var all = store.GetEventsAsync("taskX");
+                store.Record("taskX", 0, ev1);
+                store.Record("taskX", 1, ev2);
+                store.Record("other", 0, ev1);
+                var all = store.GetEvents("taskX");
                 Check("store 记录 + 读取（seq 升序、跨任务隔离）",
                     all.Count == 2 && all[0].Seq == 0 && all[1].Seq == 1
                     && all[0].Type == nameof(Agent.Core.Models.AgentEvent.ToolCall)
@@ -94,7 +94,7 @@ public static class Suites_Dashboard
                     parsed is not null && parsed.Name == "write_file");
                 var pruned = store.PruneOlderThan(1);
                 Check("PruneOlderThan(1) 清理 1 秒前事件（刚写入的保留）", pruned == 0);
-                var eventsApi = store.GetEventsAsync("nope");
+                var eventsApi = store.GetEvents("nope");
                 Check("store 未写入任务 → 空列表", eventsApi.Count == 0);
             }
             finally
@@ -211,8 +211,8 @@ public static class Suites_Dashboard
                 var dashHub = new Agent.Infrastructure.Events.TaskEventHub();
                 var metrics = new Agent.Infrastructure.Metrics.SqliteMetricsCollector(Path.Combine(ws, "metrics.db"));
                 var store = new Agent.Infrastructure.Events.TaskEventStore(Path.Combine(ws, "metrics.db"));
-                store.RecordAsync("hist1", 0, new Agent.Core.Models.AgentEvent.Thinking("t"));
-                store.RecordAsync("hist1", 1, new Agent.Core.Models.AgentEvent.Error("boom"));
+                store.Record("hist1", 0, new Agent.Core.Models.AgentEvent.Thinking("t"));
+                store.Record("hist1", 1, new Agent.Core.Models.AgentEvent.Error("boom"));
                 // 【10-08 ① 任务产物浏览】工作区预置产物文件——/api/files 断言数据源
                 System.IO.File.WriteAllText(Path.Combine(ws, "sample.cs"), "public class Sample { }");
                 // 【10-10 日志治理】内嵌服务显式日志级别（Warning）→ 启动 stdout 无 Kestrel 污染。
@@ -340,6 +340,14 @@ public static class Suites_Dashboard
                     evts.StartsWith("[") && evts.Contains("\"type\":\"thinking\"") && evts.Contains("boom"));
                 var noEvts = await http.GetStringAsync("api/tasks/none/events");
                 Check("GET /api/tasks/{id}/events 无事件 → 空数组", noEvts == "[]");
+                // 【10-14 P3-6】SSE 建连首帧必须是 joined（非AgentEvent）——中途接入者据此知道
+                // "实时流从此刻开始、此前历史走回放"。首帧写死在Subscribe 之后、事件循环之前。
+                string joinedFrame;
+                using (var sse = await http.GetStreamAsync("events"))
+                using (var sseReader = new System.IO.StreamReader(sse))
+                    joinedFrame = await sseReader.ReadLineAsync() ?? "";
+                Check("GET /events 建连首帧 = joined 标记（中途接入提示，10-14 P3-6）",
+                    joinedFrame.StartsWith("data: ") && joinedFrame.Contains("\"type\":\"joined\""));
                 var noDeps = await http.GetAsync("api/deps");
                 Check("无工程根 /api/deps → 400 BadRequest", noDeps.StatusCode == System.Net.HttpStatusCode.BadRequest);
                 var cmdBad = await http.PostAsync("api/commands",
@@ -517,8 +525,8 @@ public static class Suites_Dashboard
         // 1. 新库：建表默认带 schema_version=1，写入/读取往返携带版本
         var db1 = Path.Combine(ws, "new.db");
         var store1 = new Agent.Infrastructure.Events.TaskEventStore(db1);
-        store1.RecordAsync("t1", 0, new Agent.Core.Models.AgentEvent.Thinking("x"));
-        var evs1 = store1.GetEventsAsync("t1");
+        store1.Record("t1", 0, new Agent.Core.Models.AgentEvent.Thinking("x"));
+        var evs1 = store1.GetEvents("t1");
         Check("事件 schema：常量版本=1", Agent.Infrastructure.Events.TaskEventStore.CurrentSchemaVersion == 1);
         Check("事件 schema：新库写入记录版本=1",
             evs1.Count == 1 && evs1[0].SchemaVersion == Agent.Infrastructure.Events.TaskEventStore.CurrentSchemaVersion);
@@ -545,11 +553,11 @@ public static class Suites_Dashboard
             cmd.ExecuteNonQuery();
         }
         var store2 = new Agent.Infrastructure.Events.TaskEventStore(db2);   // Initialize 触发迁移
-        var legacy = store2.GetEventsAsync("legacy");
+        var legacy = store2.GetEvents("legacy");
         Check("事件 schema：老库迁移后历史数据版本默认 1",
             legacy.Count == 1 && legacy[0].SchemaVersion == 1);
-        store2.RecordAsync("t2", 0, new Agent.Core.Models.AgentEvent.Thinking("new"));
-        var newEvs = store2.GetEventsAsync("t2");
+        store2.Record("t2", 0, new Agent.Core.Models.AgentEvent.Thinking("new"));
+        var newEvs = store2.GetEvents("t2");
         Check("事件 schema：迁移后新写入记录版本=1",
             newEvs.Count == 1 && newEvs[0].SchemaVersion == Agent.Infrastructure.Events.TaskEventStore.CurrentSchemaVersion);
     }

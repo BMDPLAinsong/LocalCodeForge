@@ -420,7 +420,7 @@ public static class DashboardHost
         // 返回平铺事件数组 [{type:"thinking"|"toolCall"|…, ...payload}]；无事件 → 空数组。
         app.MapGet("/api/tasks/{taskId}/events", (string taskId) =>
         {
-            var list = o.EventStore.GetEventsAsync(taskId);
+            var list = o.EventStore.GetEvents(taskId);
             var arr = new System.Text.Json.Nodes.JsonArray();
             foreach (var s in list)
             {
@@ -443,6 +443,13 @@ public static class DashboardHost
             var (reader, handle) = o.Hub.Subscribe();
             using (handle)
             {
+                // 【10-14 P3-6 中途接入标记】订阅即建连——此刻之前的事件不会出现在实时流里
+                // （任务进行中打开/刷新页面的用户会以为"事件丢了"）。先发一条 joined 帧告知前端：
+                // 完整历史需拉 /api/tasks/{id}/events 回放。非AgentEvent，不入事件流与存储。
+                await ctx.Response.WriteAsync(
+                    $"data: {{\"type\":\"joined\",\"at\":{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}}}\n\n", ct);
+                await ctx.Response.Body.FlushAsync(ct);
+
                 await foreach (var evt in reader.ReadAllAsync(ct))
                 {
                     // 【10-14 P2-2 同源】与回放/存储完全相同的序列化路径：Serialize(evt, GetType(), JsonOpts)

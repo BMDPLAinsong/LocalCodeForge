@@ -130,8 +130,9 @@ public sealed class AgentLoopMetricsDecorator : IAgentLoop
             Success = success,
             IsSuspicious = isSuspicious,
             // 【10-08 metrics 数据治理】E2E 冒烟用例由环境变量 LAW_E2E=1 标记（stats 剔除）
-            IsE2E = string.Equals(
-                Environment.GetEnvironmentVariable("LAW_E2E"), "1", StringComparison.Ordinal),
+            // 【10-14 P3-6 归位】判定收走 ModelRouter.IsE2ERun 单一来源（原在此处复刻env 读取，
+            // 与 ModelRouter/OrchestratorMetricsDecorator 三处同义判定→改一处漏两处的漂移向量）。
+            IsE2E = Agent.Infrastructure.Routing.ModelRouter.IsE2ERun,
             RetryCount = routingChangeCount,
             TotalMs = sw.ElapsedMilliseconds,
             StartedAt = startedAt,

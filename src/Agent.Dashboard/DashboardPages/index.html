@@ -716,6 +716,12 @@ function openStream() {
   const es = new EventSource("/events" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : ""));
   es.onmessage = (e) => {
     let evt; try { evt = JSON.parse(e.data); } catch { return; }
+    // 【10-14 P3-6】joined = 建连即来的首帧（非 AgentEvent）：提示"实时流从中途接入"，
+    // 完整历史走任务详情回放。不入事件缓存、不渲染成事件行。
+    if (evt.type === "joined") {
+      $("sub").textContent = "运行目录：实时流为中途接入（此前事件请看任务详情回放）";
+      return;
+    }
     eventsCache.push(evt);
     while (eventsCache.length > 300) eventsCache.shift();
     renderEvents();

@@ -266,7 +266,7 @@ internal class Program
                     // （SSE 订阅者浏览器后台/JS 卡住时 DropOldest 丢最旧，绝不阻塞任务）
                     eventHub.Publish(evt);
                     // 【10-07 UI 层 #1】事件持久化（第三消费者，fail-safe）：Dashboard 任务详情回放
-                    eventStore.RecordAsync(taskId, seq++, evt);
+                    eventStore.Record(taskId, seq++, evt);
                 }
             }
             catch (OperationCanceledException)
