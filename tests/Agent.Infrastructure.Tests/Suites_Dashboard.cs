@@ -280,7 +280,9 @@ public static class Suites_Dashboard
                 Check("GET /vendor Monaco loader 200（10-08 本地静态服务：UseStaticFiles 挂 bin\\vendor，Monaco 懒加载数据源）",
                     vendor.StatusCode == System.Net.HttpStatusCode.OK);
                 var stats = await http.GetStringAsync("api/stats");
-                Check("GET /api/stats 200 + JSON 结构", stats.Contains("\"summary\"") && stats.Contains("totalCount"));
+                Check("GET /api/stats 200 + JSON 结构（含全量对齐的 suspicious/featureBreakdown 两数组，10-14 P5-24；executor/routingDecisions/toolRejections 为 null 时按 JsonOpts 省略）",
+                    stats.Contains("\"summary\"") && stats.Contains("totalCount")
+                    && stats.Contains("\"suspicious\"") && stats.Contains("\"featureBreakdown\""));
                 var tasks = await http.GetStringAsync("api/tasks?take=3");
                 Check("GET /api/tasks 200 + 数组", tasks.StartsWith("["));
                 var backups = await http.GetStringAsync("api/backups");
@@ -353,6 +355,11 @@ public static class Suites_Dashboard
                 var cmdBad = await http.PostAsync("api/commands",
                     new StringContent("{\"input\":\"   \"}", System.Text.Encoding.UTF8, "application/json"));
                 Check("POST /api/commands 空输入 → 400", cmdBad.StatusCode == System.Net.HttpStatusCode.BadRequest);
+                var longInput = new string('x', 8001);
+                var cmdLong = await http.PostAsync("api/commands",
+                    new StringContent($"{{\"input\":\"{longInput}\"}}", System.Text.Encoding.UTF8, "application/json"));
+                Check("POST /api/commands 超 8000 字符 → 400（10-14 P5-27 双端统一上限）",
+                    cmdLong.StatusCode == System.Net.HttpStatusCode.BadRequest);
                 var cmdOk = await http.PostAsync("api/commands",
                     new StringContent("{\"input\":\"stats\"}", System.Text.Encoding.UTF8, "application/json"));
                 var cmdBody = await cmdOk.Content.ReadAsStringAsync();

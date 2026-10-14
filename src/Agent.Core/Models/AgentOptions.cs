@@ -229,6 +229,11 @@ public sealed class AgentOptions
     /// 调权仅用近 10 条聚合；默认 90 天（此前硬编码 90，现配置化）。</summary>
     public int RoutingDecisionRetentionDays { get; set; } = 90;
 
+    /// <summary>【10-14 P5-27 双端统一】单条命令/任务输入长度上限（字符）。
+    /// web /api/commands 与终端任务输入**同源同限**——原 web 硬编码 2000、终端无限制（同一产品两个入口行为不同）。
+    /// 超限：web 返回 400；终端打印提示跳过。默认 8000（覆盖长需求粘贴，仍防上下文预算被单条输入打穿）。</summary>
+    public int MaxCommandInputLength { get; set; } = 8000;
+
     /// <summary>
     /// 【时代隔离】模型时代切换点（law-unified 30B 落地时刻，本地时间）。
     /// stats 面板按此拆分 agent_pro 等服务的成功率（当前时代 vs 历史时代）。

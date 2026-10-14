@@ -36,7 +36,11 @@ public sealed record DashboardOptions(
     // 消除"路径 + 实例"两个来源的二义性——宿主不再保留"未注入就按路径建实例"的回退分支。
     Agent.Infrastructure.Memory.AgentMemoryStore MemoryStore,
     Agent.Infrastructure.Project.SymbolIndexStore SymbolStore,
-    string? AuthToken = null);         // ← 10-08 ③ 安全 token：非空时所有端点校验 query token / X-Dashboard-Token（401 拒绝）
+    string? AuthToken = null,          // ← 10-08 ③ 安全 token：非空时所有端点校验 query token / X-Dashboard-Token（401 拒绝）
+    // 【10-14 P5-24】stats 全量对齐的额外数据源（可选；未注入则 /api/stats 省略对应小节，tests 直构不传 → 字段省略）：
+    Agent.Infrastructure.Routing.TaskMetricsAggregator? FeatureAggregator = null,
+    Agent.Infrastructure.Routing.RoutingDecisionStore? DecisionStore = null,
+    Agent.Infrastructure.Metrics.ToolRejectionStore? RejectionStore = null);
 
 /// <summary>POST /api/commands 请求体（最小输入 DTO，非业务模型）。</summary>
 public sealed record CommandRequest(string? Input);
@@ -166,7 +170,58 @@ public static class DashboardHost
                 var (cur, legacy) = await o.Metrics.GetEpochBreakdownAsync("agent_pro", e, ct);
                 epoch = new EpochBreakdown(cur, legacy);
             }
-            return Results.Json(new { summary, failures, epoch }, JsonOpts);
+
+            // 【10-14 P5-24 全量对齐】与 CLI stats 同口径——补 5 个小节：可疑明细 / Executor 生成成功率 /
+            // 特征类归因 / 路由决策 / 工具拒绝。数据源未注入（tests 直构不传）时对应小节为 null/空数组。
+            var suspicious = new List<object>();
+            try
+            {
+                var recent = await o.Metrics.GetRecentAsync(50, ct);
+                foreach (var m in recent.Where(x => x.IsSuspicious && x.Success)
+                             .OrderByDescending(x => x.StartedAt).Take(5))
+                    suspicious.Add(new { m.StartedAt, m.Mode, Input = m.UserInput.Length > 40 ? m.UserInput[..40] + "..." : m.UserInput });
+            }
+            catch { }
+
+            object? executor = null;
+            try
+            {
+                var es = await o.Metrics.GetServiceStatsAsync("small", "OrchestratorExecutor", 50, ct);
+                if (es is not null)
+                    executor = new { es.SuccessCount, es.TotalCount };
+            }
+            catch { }
+
+            var featureBreakdown = new List<object>();
+            if (o.FeatureAggregator is not null)
+            {
+                foreach (var f in new[]
+                {
+                    Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ProjectIncremental,
+                    Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ExternalCredential,
+                    Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.MultiFile,
+                    Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.SingleFile,
+                    Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.ReadQuery,
+                    Agent.Infrastructure.Routing.TaskFeatureClassifier.Feature.Other,
+                })
+                {
+                    var s = o.FeatureAggregator.Get(f);
+                    if (s is null || s.TotalCount == 0) continue;
+                    featureBreakdown.Add(new
+                    {
+                        Feature = Agent.Infrastructure.Routing.TaskFeatureClassifier.FeatureName(f),
+                        s.SuccessCount,
+                        s.TotalCount,
+                        AvgTotalSeconds = s.AvgTotalMs / 1000,
+                        s.TopFailureCause,
+                    });
+                }
+            }
+
+            var routingDecisions = o.DecisionStore is null ? null : await o.DecisionStore.GetSummaryAsync(ct);
+            var toolRejections = o.RejectionStore is null ? null : await o.RejectionStore.GetSummaryAsync(ct);
+
+            return Results.Json(new { summary, failures, epoch, suspicious, executor, featureBreakdown, routingDecisions, toolRejections }, JsonOpts);
         });
 
         // ── 历史任务（轮询；SSE 只推当前任务）──
@@ -472,8 +527,10 @@ public static class DashboardHost
             var input = req?.Input?.TrimStart('\uFEFF')?.Trim();
             if (string.IsNullOrWhiteSpace(input))
                 return Results.BadRequest(new { error = "input 为空。" });
-            if (input.Length > 2000)
-                return Results.BadRequest(new { error = "input 超过 2000 字符上限。" });
+            // 【10-14 P5-27 双端统一】上限与终端同源（AgentOptions.MaxCommandInputLength，默认 8000）——
+            // 原 web 硬编码 2000、终端无限制。超限报错文案明示上限值。
+            if (input.Length > o.Options.MaxCommandInputLength)
+                return Results.BadRequest(new { error = $"input 超过 {o.Options.MaxCommandInputLength} 字符上限。" });
             if (o.CommandHub.Count >= 100)
                 return Results.Json(new { error = "命令通道已满（排队过多），稍后重试。" }, JsonOpts, statusCode: 429);
             var seq = o.CommandHub.TrySubmit(input, "web");

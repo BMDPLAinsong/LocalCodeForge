@@ -318,7 +318,11 @@ internal class Program
                     // 【10-14 P2-3/F5】store 一律实例注入（进程内单例；路径字段已删，F5）
                     provider.GetRequiredService<Agent.Infrastructure.Memory.AgentMemoryStore>(),
                     provider.GetRequiredService<Agent.Infrastructure.Project.SymbolIndexStore>(),
-                    dashToken),
+                    dashToken,
+                    // 【10-14 P5-24】stats 全量对齐：特征类归因 / 路由决策 / 工具拒绝三数据源注入（可选字段）
+                    provider.GetRequiredService<Agent.Infrastructure.Routing.TaskMetricsAggregator>(),
+                    provider.GetRequiredService<Agent.Infrastructure.Routing.RoutingDecisionStore>(),
+                    provider.GetRequiredService<Agent.Infrastructure.Metrics.ToolRejectionStore>()),
                 CancellationToken.None);
             url = url + "?token=" + dashToken;
             dashboardUrl = url;
@@ -558,6 +562,14 @@ internal class Program
             }
 
             // ═══════════ 【自动分发】 ═══════════
+            // 【10-14 P5-27 双端统一】输入长度上限与 web /api/commands 同源（AgentOptions.MaxCommandInputLength）——
+            // 原终端无限制、web 硬编码 2000（同一产品两个入口行为不同）。超限打印提示跳过，不进任务流。
+            if (input.Length > options.MaxCommandInputLength)
+            {
+                renderer.Warn($"[输入超限] 任务输入 {input.Length} 字符，超过上限 {options.MaxCommandInputLength} 字符。请缩短后重试。");
+                continue;
+            }
+
             // 【只读工程组合边界】工程模式 + 未授权写（use 不带 --write）+ 写任务引用工程内文件
             // → 必然失败。在 Orchestrator/AgentLoop 启动前阻断（不建 DI 容器、不跑任务），
             // 避免空跑 10-15 分钟后才被写白名单拒绝。
