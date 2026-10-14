@@ -67,6 +67,12 @@ public sealed class AgentOptions
         Temperature = 0.5
     };
 
+    /// <summary>【10-14 A1 模型 A/B】Executor（逐文件生成/修复）的模型覆盖标签。
+    /// null（默认）= 沿用 Small（law-unified）；非空 = 请求级覆盖 ModelId（Ollama /v1 接受任意已拉取的 tag）。
+    /// 用于 A/B 对比更强的 coder 模型（如 qwen3-coder-local / task-expert / code-forge 7b），
+    /// 不改动路由与生成逻辑——纯模型替换实验开关。</summary>
+    public string? ExecutorModel { get; set; }
+
     // ─────────── 路由配置 ───────────
 
     /// <summary>

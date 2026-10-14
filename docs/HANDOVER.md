@@ -1080,6 +1080,8 @@ powershell -NoProfile -File scripts/e2e/e2e.ps1
 
 7h. **【已完成】回退 A1 提示词强化（10-14，用户拍板"执行2"）**：7g 中 A1（`FixFileAsync` 增两条铁律）与 DEVELOPER 铁律#1「放弃提示词工程」冲突，用户选择回退。已删除该 9 行，`ExecutorService.cs` 恢复原样。A2（基础设施健康探针）保留。**工程化路线待续**：根因实为 30B 模型跨文件引用已有类型的**能力问题**（实测：Orchestrator 已注入 Order.cs 完整定义，模型仍幻觉 `Order.Items`/`OrderItem`），非结构缺陷；工程化杠杆为「模型 A/B」（Executor 换更强 coder 模型，库里 `qwen3-coder-local`/`task-expert`/`code-forge 7b` 未接线）或「任务分解」。**验证**：构建 0 错误（警告基线 9）；tests 840/840。
 
+7i. **【已完成】A1 模型 A/B 使能器（10-14，工程化配置非提示词）**：根因判定（30B 模型跨文件引用已有类型的能力天花板，Orchestrator 已注入定义仍幻觉成员）→ 工程化杠杆选「模型 A/B」。实施：`AgentOptions.ExecutorModel`（string?，默认 null=沿用 Small）+ 环境变量 `LAW_EXECUTOR_MODEL` 覆盖 + `ExecutorService` 构造注入 `AgentOptions`、生成/修复两处 `settings.ModelId` 请求级覆盖（Ollama /v1 接受任意已拉取 tag，不改路由/生成逻辑）。**验证**：构建 0 错误（警告基线 9）；tests 840/840（默认 null 行为不变）。A/B 实测结果见下条。
+
 4. **补 Executor prompt 禁令**：「禁止 Console.ReadLine/while (true)」，让交互式任务在规划层就规避，而不是靠超时判失败。5. **清理 RoutingRules.json 重名规则**，合并语义；**EnableOrchestration 接线或删除**。
 
 6. `git init`**&#x20;纳入版本控制**；为 TaskClassifier / RuleEngine / TryParseToolCallsFromText 补单元测试。

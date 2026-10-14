@@ -21,11 +21,13 @@ public sealed class ExecutorService : IExecutorService
 {
     private readonly Kernel _kernel;
     private readonly ILogger<ExecutorService> _logger;
+    private readonly AgentOptions _options;
 
-    public ExecutorService(Kernel kernel, ILogger<ExecutorService> logger)
+    public ExecutorService(Kernel kernel, ILogger<ExecutorService> logger, AgentOptions options)
     {
         _kernel = kernel;
         _logger = logger;
+        _options = options;
     }
 
     // ============================================================
@@ -303,6 +305,9 @@ class Program
                 ["think"] = false
             }
         };
+        // 【10-14 A1 模型 A/B】ExecutorModel 非空时请求级覆盖模型（Ollama /v1 接受任意已拉取 tag）
+        if (!string.IsNullOrWhiteSpace(_options.ExecutorModel))
+            settings.ModelId = _options.ExecutorModel;
 
         var raw = await CallAsync(chat, history, settings, ct);
         var cleaned = CleanOutput(raw);
@@ -517,6 +522,9 @@ class Program
                 ["think"] = false
             }
         };
+        // 【10-14 A1 模型 A/B】ExecutorModel 非空时请求级覆盖模型（Ollama /v1 接受任意已拉取 tag）
+        if (!string.IsNullOrWhiteSpace(_options.ExecutorModel))
+            settings.ModelId = _options.ExecutorModel;
 
             var raw = await CallAsync(chat, history, settings, ct);
             var cleaned = CleanOutput(raw);

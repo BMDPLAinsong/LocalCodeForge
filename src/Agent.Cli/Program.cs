@@ -50,6 +50,9 @@ internal class Program
 
         var options = new AgentOptions
         {
+            // 【10-14 A1 模型 A/B】Executor 模型覆盖（环境变量 LAW_EXECUTOR_MODEL；null=沿用 Small）。
+            // A/B 实验用：设 LAW_EXECUTOR_MODEL=<已拉取 tag> 即让逐文件生成/修复改用该模型，不改代码、不改路由。
+            ExecutorModel = Environment.GetEnvironmentVariable("LAW_EXECUTOR_MODEL"),
             // 意图分类器
             Classifier = new ModelEndpoint
             {
