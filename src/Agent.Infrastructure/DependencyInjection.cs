@@ -109,8 +109,10 @@ public static class DependencyInjection
         });
         services.AddSingleton<IAgentTool>(sp => new ListDirTool(workspaceRoot, projectRoot));
         services.AddSingleton<IAgentTool>(sp => new ReadFileTool(workspaceRoot, projectRoot));
-        services.AddSingleton<IAgentTool>(sp => new WriteFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots, sp.GetRequiredService<AgentMemoryStore>()));
-        services.AddSingleton<IAgentTool>(sp => new EditFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots));    // ← 新增
+        services.AddSingleton<IAgentTool>(sp => new WriteFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots, sp.GetRequiredService<AgentMemoryStore>(),
+            Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db")));   // ← 10-14 P1-6：P-D 写前类型冲突查符号索引
+        services.AddSingleton<IAgentTool>(sp => new EditFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots,
+            Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db")));   // ← 10-14 P1-6：P-D 写前类型冲突查符号索引
         services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot, projectRoot, projectWriteEnabled, explicitWriteRoots));   // ← 新增
         services.AddSingleton<IAgentTool>(_ => new RunCommandTool(workspaceRoot, projectRoot, projectWriteEnabled));
         services.AddSingleton<IAgentTool>(_ => new RememberTool(_.GetRequiredService<AgentMemoryStore>()));   // ← P3：模型级记忆

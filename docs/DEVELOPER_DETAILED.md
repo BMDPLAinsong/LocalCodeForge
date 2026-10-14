@@ -382,7 +382,7 @@ CompletionGate.Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFi
 | ---- | ---- | ---- |
 | `list_dir` | path | 列目录；读策略分档（沙箱限工作区根/工程模式放开）；敏感区源头拒；500 条目上限（超出提示缩小范围） |
 | `read_file` | path, offset(可选), limit(默认500上限1000) | **行级分页**：大文件（>200KB）默认返回前 500 行 + 分页头（共 N 行/已返回 X-Y/续读 offset 提示）；小文件默认全文无头（向后兼容）。**大文件首读重定向**：工程模式 + >100KB + 未带 offset → 拒绝 + 引导 find_symbol/analyze_code（仅 limit 不算分页意图，防绕过）。**敏感区源头拒**（内容物理不进上下文）：返回「路径涉及敏感区」。模式分档：工程模式读放开 / 沙箱限工作区根 |
-| `write_file` | path, content | **写白名单**（WriteRoots=workspaceRoot ∪ projectRoot(工程可写)）；**P-D 类型冲突拦截**（新内容含工程已有类型名 → 拒绝 + 类型清单 + 动作指引）；P-D 熔断（同路径被拒≥2 次 → 强制 edit_file 指令）；工程可写自动备份 + MarkNewFile；.py 强制 HTTP timeout=8；项目名幻觉校验；tool_rejections 落库；explicitWriteRoots 临时授权并集 |
+| `write_file` | path, content | **写白名单**（WriteRoots=workspaceRoot ∪ projectRoot(工程可写)）；**P-D 类型冲突拦截**（新内容含工程已有类型名 → 拒绝 + 类型清单 + 动作指引；已有类型查询走符号索引——增量刷新+单查，无索引回退全扫，10-14 P1-6）；P-D 熔断（同路径被拒≥2 次 → 强制 edit_file 指令）；工程可写自动备份 + MarkNewFile；.py 强制 HTTP timeout=8；项目名幻觉校验；tool_rejections 落库；explicitWriteRoots 临时授权并集 |
 | `edit_file` | path, old_string, new_string | 精确替换；old_string 未命中 → 查备份漂移诊断；P-D 拦截；备份；写白名单同 write_file |
 | `create_dir` | path | 建目录；写白名单同 write_file |
 | `run_command` | command | **白名单**：python/pip/dotnet/node/npm/git/dir/ls/type/cat/find/findstr/where/grep/Select-String（首 token 匹配，含正则检索；10-07 补 grep）；**敏感路径源头拒**（命令串先展开环境变量 → 正则提取路径 token → IsDenied）；工程模式路径边界（..\ / 盘符绝对路径越界拒绝）；cwd=工程根（工程模式）；**超时双轨**（沙箱 30s / 工程 90s，工程模式自动放宽）；交互拦截（PyCodeGuard）；项目名幻觉校验（.csproj 名必须存在于工程根） |
@@ -408,10 +408,11 @@ CompletionGate.Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFi
 | 只读扫描 | ProjectScanner.cs | 文件树/入口/依赖识别；产出工程上下文数据块（CompactBlock 注入瘦身版） |
 | 工程缓存 | ProjectContextStore.cs | project_context.db + 4 元签名（FileCount/DirCount/TotalBytes/MaxMtimeTicks）——签名一致命中缓存复用，变更自动重扫 |
 | 可写回滚 | BackupService.cs | **taskId 隔离**：备份 `.backup/<taskId>/<stamp>/<rel>` + 新建标记 `.new/<rel>`；RollbackTask 取**最早**备份；PruneBackups keepLastN=8；DryRunRollbackTask |
-| 符号索引 | SymbolIndexer.cs | 正则提取类型/方法/属性；SQLite 持久化；增量刷新（mtime 对比） |
-| 依赖分析 | DependencyAnalyzer.cs | 类型级符号 + 引用扫描 → 文件依赖边 |
-| 类型冲突 P-D | TypeConflictDetector.cs | 写前检测新内容含工程已有类型 → 拒绝（class/interface/enum/struct/record，剥离注释/字符串防误报）；目标文件自身已有类型=partial 语义放行 |
-| 测试门 | TestRunnerService.IsTestProjectName（单源）+ TestProjectDetector.cs | 检测测试入口（测试工程名**词边界**判定：Test/Tests 独立词或 PascalCase 段，10-14 P0 防 Contestant/MyTester 误报；pytest/package.json test）；工程模式改代码后自动跑测试 |
+| 符号索引 | SymbolIndexer.cs | 正则提取类型/方法/属性；SQLite 持久化；增量刷新（mtime 对比）；文件枚举走 **FileGrammar** 单源 |
+| 依赖分析 | DependencyAnalyzer.cs | 类型级符号 + 引用扫描 → 文件依赖边；枚举走 **FileGrammar** 单源（原私有 26 行内联复制已删） |
+| 类型冲突 P-D | TypeConflictDetector.cs | 写前检测新内容含工程已有类型 → 拒绝（class/interface/enum/struct/record，剥离注释/字符串防误报）；目标文件自身已有类型=partial 语义放行。**10-14 P1-6**：已有类型查询优先走符号索引（增量刷新+单查+仅 .cs 口径），无索引/异常回退全扫；冲突命中回读定义文件精确复核（防索引字符串幻影误拦） |
+| 测试门 | TestRunnerService.IsTestProjectName（单源） | 检测测试入口（测试工程名**词边界**判定：Test/Tests 独立词或 PascalCase 段，10-14 P0 防 Contestant/MyTester 误报；pytest/package.json test）；工程模式改代码后自动跑测试。**10-14 P1-5**：`TestProjectDetector`（生产零调用死代码）已删，语义唯一由 `DetectTest` 承接 |
+| **文件系统语法** | FileGrammar.cs | **单源（10-14 P1-4）**：ExcludedDirNames（段级排除，任意层级）/ CodeExtensions / EnumerateCodeFiles（惰性+IO 容忍）/ 盘符两语法（中文"X盘" + 字面"X:\"含存在性校验） |
 | 计划校验 | Orchestrator.CheckIncrementalPlanConflicts | 工程增量任务 Plan「已有文件≥2」→ Planner 阶段拒绝（防整体重写）；合法形态（新增1+接入1）放行 |
 | **路径边界** | PathBoundary.cs | **逐路径分段比较**（OrdinalIgnoreCase + 分隔符归一）：root 自身/子目录=true；`X:\proj2` 对 `X:\proj`=false（StartsWith 前缀假阳性根治）；`..` 跳脱经 GetFullPath 归一必越界 |
 | **敏感源头拒** | SensitivePathGuard.cs | **读=黑名单排除**：系统区 4（C:\Windows/Program Files/(x86)/ProgramData）+ 凭据区 9（.ssh/.aws/.kube/.docker/.config\gcloud/.git-credentials/.npmrc/两处 Credentials）+ 用户 denylist（workspace\sensitive_denylist.txt，# 注释/空行跳过/幂等）。四条判定线：①长名逐段匹配 ②8.3 短名双向展开（GetLongPathNameW/GetShortPathNameW P/Invoke）③符号链接/junction 逐段 ResolveLinkTarget ④UNC `\\?\` 前缀剥除。模式分档：工程模式读放开+黑名单硬拒；沙箱模式读仍限 workspaceRoot。FindWriteRootOverlaps 启动自检。已知边界：脚本内敏感读不做 |
@@ -630,11 +631,12 @@ external_credential → compile_error → runtime_error → timeout → validato
 | `src/Agent.Infrastructure/Project/ProjectPathDetector.cs` | 路径自动识别 + 写目标提取 | TryExtractProjectPath / TryGetAutoUsePath / TryGetWriteTarget / TryExtractDiskRoot |
 | `src/Agent.Infrastructure/Project/CompletionGate.cs` | 写任务完成门 | Evaluate |
 | `src/Agent.Infrastructure/Project/BackupService.cs` | taskId 隔离回滚 | BackupFile / RollbackTask / DryRunRollbackTask / PruneBackups / ClearNewMarkers |
-| `src/Agent.Infrastructure/Project/TypeConflictDetector.cs` | P-D 写前类型冲突 | DetectConflicts / BuildExistingTypesHint |
-| `src/Agent.Infrastructure/Project/SymbolIndexer.cs` | 符号索引（增量） | BuildAndSaveIncremental / Find |
+| `src/Agent.Infrastructure/Project/TypeConflictDetector.cs` | P-D 写前类型冲突（索引优先 + 回退全扫） | DetectDuplicateTypes / GetExistingTypes / DetectSelfDuplicateTypes / BuildExistingTypesHint |
+| `src/Agent.Infrastructure/Project/FileGrammar.cs` | **文件系统语法单源（10-14 P1-4）** | IsExcludedRel / EnumerateCodeFiles / TryExtractChineseDiskRoot / TryExtractLiteralDiskRoot |
+| `src/Agent.Infrastructure/Project/SymbolIndexer.cs` | 符号索引（增量） | BuildAndSaveIncremental / Find / GetAll |
 | `src/Agent.Infrastructure/Project/ProjectScanner.cs` | 工程扫描 | Scan |
 | `src/Agent.Infrastructure/Project/ProjectContextStore.cs` | 工程上下文缓存 | TryGet / Save |
-| `src/Agent.Infrastructure/Project/DependencyAnalyzer.cs` | 依赖边 | Analyze |
+| `src/Agent.Infrastructure/Project/DependencyAnalyzer.cs` | 依赖边 | Build / GetDirectDependencies / GetReverseDependencies |
 | `src/Agent.Infrastructure/Quality/OutputVerifier.cs` | 输出判定单一来源 | HasCredentialFailure / StripHarmlessWarnings / HasStructuralError / HasGenericFailure / IsPlaceholderOutput / IsTemplateOutput |
 | `src/Agent.Infrastructure/Metrics/SqliteMetricsCollector.cs` | 指标三表 | RecordAsync / GetServiceStatsAsync / GetFailureBreakdownAsync / BackfillFailedSubMetricsAsync |
 | `src/Agent.Infrastructure/Metrics/FailureCategorizer.cs` | 失败类别词表 | Categorize |

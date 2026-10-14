@@ -52,52 +52,92 @@ public static class Suites_Project
         }
     }
 
-    // ── 区段 1449：TestProjectDetector（完成门） ──
+    // ── 区段 1449：FileGrammar（语法单源）+ P-D 索引查询路径 ──
+    // 【10-14 P1-5】原 TestProjectDetector 区段：其 HasTests 经全 src 检索确认生产零调用（死代码），
+    // 类已删除；原"测试门"语义由 TestRunnerService.DetectTest 唯一承接（见区段 1551）。
+    // 【10-14 P1-4/P1-6】本区段改写为 FileGrammar 单源断言 + P-D 索引查询路径断言。
     public static void Run1449()
     {
-        Console.WriteLine("== TestProjectDetector（完成门） ==");
+        Console.WriteLine("== FileGrammar（语法单源）+ P-D 索引查询路径 ==");
         {
-            var gateDir = Path.Combine(TestTmp, "gate_" + Guid.NewGuid().ToString("N")[..6]);
-            Directory.CreateDirectory(Path.Combine(gateDir, "src"));
+            // ── IsExcludedRel：段级精确匹配（任意层级）──
+            Check("FileGrammar：顶层 obj/bin/.git 命中排除",
+                Agent.Infrastructure.Project.FileGrammar.IsExcludedRel("obj\\Debug\\net10.0\\x.cs")
+                && Agent.Infrastructure.Project.FileGrammar.IsExcludedRel("bin\\x.dll")
+                && Agent.Infrastructure.Project.FileGrammar.IsExcludedRel("src\\.git\\hooks\\pre-commit"));
+            Check("FileGrammar：嵌套 obj/node_modules 命中（原顶层 StartsWith 复制的盲区）",
+                Agent.Infrastructure.Project.FileGrammar.IsExcludedRel("src\\obj\\Generated.cs")
+                && Agent.Infrastructure.Project.FileGrammar.IsExcludedRel("web\\node_modules\\a.js"));
+            Check("FileGrammar：'binary' 前缀不误伤 + 非排除路径放行",
+                !Agent.Infrastructure.Project.FileGrammar.IsExcludedRel("binary\\z.cs")
+                && !Agent.Infrastructure.Project.FileGrammar.IsExcludedRel("src\\App.cs")
+                && !Agent.Infrastructure.Project.FileGrammar.IsExcludedRel(""));
 
-            // 无测试 → false
-            Check("无测试工程 → false",
-                !Agent.Infrastructure.Project.TestProjectDetector.HasTests(gateDir));
+            // ── EnumerateCodeFiles：排除 + 扩展过滤（惰性枚举；IO 异常容忍）──
+            var fgDir = Path.Combine(TestTmp, "fg_" + Guid.NewGuid().ToString("N")[..6]);
+            Directory.CreateDirectory(Path.Combine(fgDir, "src"));
+            Directory.CreateDirectory(Path.Combine(fgDir, "obj"));
+            Directory.CreateDirectory(Path.Combine(fgDir, "node_modules"));
+            File.WriteAllText(Path.Combine(fgDir, "src", "A.cs"), "class A {}");
+            File.WriteAllText(Path.Combine(fgDir, "src", "B.py"), "class B: pass");
+            File.WriteAllText(Path.Combine(fgDir, "obj", "Skip.cs"), "class Skip {}");
+            File.WriteAllText(Path.Combine(fgDir, "node_modules", "C.js"), "var x = 1;");
+            File.WriteAllText(Path.Combine(fgDir, "readme.md"), "# x");
+            var fgFiles = Agent.Infrastructure.Project.FileGrammar.EnumerateCodeFiles(fgDir)
+                .Select(f => f.Rel.Replace('\\', '/'))
+                .OrderBy(f => f, StringComparer.Ordinal)
+                .ToList();
+            Check("FileGrammar：枚举仅含未排除代码文件（obj/node_modules/readme 排除）",
+                fgFiles.Count == 2 && fgFiles.Contains("src/A.cs") && fgFiles.Contains("src/B.py"));
+            Check("FileGrammar：空根/不存在根 → 空枚举",
+                !Agent.Infrastructure.Project.FileGrammar.EnumerateCodeFiles("").Any()
+                && !Agent.Infrastructure.Project.FileGrammar.EnumerateCodeFiles(Path.Combine(fgDir, "nope")).Any());
 
-            // tests 目录 → true
-            Directory.CreateDirectory(Path.Combine(gateDir, "tests"));
-            Check("tests 目录 → true",
-                Agent.Infrastructure.Project.TestProjectDetector.HasTests(gateDir));
+            // ── 盘符两语法归位（语义不混：中文盘 vs 字面盘）──
+            Check("FileGrammar：TryExtractChineseDiskRoot（'保存到D盘根目录' / '放到x盘'）",
+                Agent.Infrastructure.Project.FileGrammar.TryExtractChineseDiskRoot("保存到D盘根目录", out var dRoot) && dRoot == "D:\\"
+                && Agent.Infrastructure.Project.FileGrammar.TryExtractChineseDiskRoot("放到x盘", out var xRoot) && xRoot == "X:\\");
+            Check("FileGrammar：TryExtractLiteralDiskRoot（字面 C:\\ + 存在性校验；中文盘形态不命中）",
+                Agent.Infrastructure.Project.FileGrammar.TryExtractLiteralDiskRoot("use --write C:\\logs", out var cRoot) && cRoot == "C:\\"
+                && !Agent.Infrastructure.Project.FileGrammar.TryExtractLiteralDiskRoot("放到D盘根目录", out _));
 
-            // 测试 csproj → true（换一个空目录）
-            var gateDir2 = Path.Combine(TestTmp, "gate2_" + Guid.NewGuid().ToString("N")[..6]);
-            Directory.CreateDirectory(gateDir2);
-            File.WriteAllText(Path.Combine(gateDir2, "MyApp.Tests.csproj"), "<Project Sdk='Microsoft.NET.Sdk' />");
-            Check("*.Tests.csproj → true",
-                Agent.Infrastructure.Project.TestProjectDetector.HasTests(gateDir2));
+            // ── P-D 索引查询路径（10-14 P1-6）：查符号索引 + 精确复核 + 回退全扫 ──
+            var pdIdx = Path.Combine(TestTmp, "pdi_" + Guid.NewGuid().ToString("N")[..6]);
+            Directory.CreateDirectory(pdIdx);
+            File.WriteAllText(Path.Combine(pdIdx, "Order.cs"), "public class Order { }\n");
+            File.WriteAllText(Path.Combine(pdIdx, "OrderService.cs"), "public class OrderService { }\n");
+            // 字符串型幻影：多行字符串里独立成行的 "class X" 会被符号索引收录（其正则不剥字符串），
+            // 精确提取（剥注释/字符串）判定其不存在 → 复核须放行，不得误拦写入。
+            File.WriteAllText(Path.Combine(pdIdx, "Docs.cs"),
+                "var sample = @\"\nclass ExampleSpec\n\";\npublic class Docs { }\n");
+            File.WriteAllText(Path.Combine(pdIdx, "Types.ts"), "class TsOnly { }\n");
+            // 库文件放 pdIdx 之外：SqliteConnection 默认开启连接池，方法返回后连接回池但文件句柄
+            // 仍被持有，放目录内会导致末尾 Directory.Delete(pdIdx) 抛"文件被另一进程占用"。
+            var pdDb = Path.Combine(TestTmp, "pdi_" + Guid.NewGuid().ToString("N")[..6] + ".db");
+            var pdStore = new Agent.Infrastructure.Project.SymbolIndexStore(pdDb);
+            pdStore.BuildAndSave(pdIdx);
 
-            // pytest.ini → true
-            var gateDir3 = Path.Combine(TestTmp, "gate3_" + Guid.NewGuid().ToString("N")[..6]);
-            Directory.CreateDirectory(gateDir3);
-            File.WriteAllText(Path.Combine(gateDir3, "pytest.ini"), "[pytest]");
-            Check("pytest.ini → true",
-                Agent.Infrastructure.Project.TestProjectDetector.HasTests(gateDir3));
+            var pdTarget = Path.Combine(pdIdx, "New.cs");
+            var pdMap = Agent.Infrastructure.Project.TypeConflictDetector.GetExistingTypes(pdIdx, pdTarget, pdStore);
+            Check("P-D 索引路径：命中 .cs 已有类型（Order/OrderService/Docs）",
+                pdMap.ContainsKey("Order") && pdMap.ContainsKey("OrderService") && pdMap.ContainsKey("Docs"));
+            Check("P-D 索引路径：非 .cs 文件符号不计入（.ts 与全扫口径一致）",
+                !pdMap.ContainsKey("TsOnly"));
+            var pdDup = Agent.Infrastructure.Project.TypeConflictDetector.DetectDuplicateTypes(
+                pdIdx, pdTarget, "public class Order { }\n", pdStore);
+            Check("P-D 索引路径：真重复类型 → 拦截（含定义文件）",
+                pdDup.Count == 1 && pdDup[0].Contains("Order") && pdDup[0].Contains("Order.cs"));
+            var pdPhantom = Agent.Infrastructure.Project.TypeConflictDetector.DetectDuplicateTypes(
+                pdIdx, pdTarget, "public class ExampleSpec { }\n", pdStore);
+            Check("P-D 索引路径：字符串型幻影经精确复核 → 不拦截",
+                pdPhantom.Count == 0);
+            var pdFallback = Agent.Infrastructure.Project.TypeConflictDetector.DetectDuplicateTypes(
+                pdIdx, pdTarget, "public class Order { }\n");
+            Check("P-D 回退全扫（无 store）：行为不变 → 拦截",
+                pdFallback.Count == 1 && pdFallback[0].Contains("Order"));
 
-            // 【10-14 P0】词边界：子串含 test 的非测试工程不误报
-            var gateDir4 = Path.Combine(TestTmp, "gate4_" + Guid.NewGuid().ToString("N")[..6]);
-            Directory.CreateDirectory(gateDir4);
-            File.WriteAllText(Path.Combine(gateDir4, "Contestant.csproj"), "<Project Sdk='Microsoft.NET.Sdk' />");
-            Check("Contestant.csproj（子串含 test）→ false（词边界）",
-                !Agent.Infrastructure.Project.TestProjectDetector.HasTests(gateDir4));
-            Directory.Delete(gateDir4, true);
-
-            // 空根/越界 → false
-            Check("空根 → false",
-                !Agent.Infrastructure.Project.TestProjectDetector.HasTests(""));
-
-            Directory.Delete(gateDir, true);
-            Directory.Delete(gateDir2, true);
-            Directory.Delete(gateDir3, true);
+            Directory.Delete(fgDir, true);
+            Directory.Delete(pdIdx, true);
         }
     }
 
@@ -218,6 +258,15 @@ public static class Suites_Project
             Directory.CreateDirectory(trDir4);
             File.WriteAllText(Path.Combine(trDir4, "app.py"), "x = 1");
             Check("无测试入口 → null", Agent.Infrastructure.Project.TestRunnerService.DetectTest(trDir4) is null);
+
+            // 【10-14 P1-5】词边界负例迁入（原 TestProjectDetector 区段随类删除）：
+            // 仅含 Contestant.csproj（子串含 test）的工程不识别为测试工程
+            var trDir5 = Path.Combine(TestTmp, "tr5_" + Guid.NewGuid().ToString("N")[..6]);
+            Directory.CreateDirectory(trDir5);
+            File.WriteAllText(Path.Combine(trDir5, "Contestant.csproj"), "<Project Sdk='Microsoft.NET.Sdk' />");
+            Check("Contestant.csproj（子串含 test）→ DetectTest null（词边界）",
+                Agent.Infrastructure.Project.TestRunnerService.DetectTest(trDir5) is null);
+            Directory.Delete(trDir5, true);
 
             Directory.Delete(trDir, true);
             Directory.Delete(trDir2, true);

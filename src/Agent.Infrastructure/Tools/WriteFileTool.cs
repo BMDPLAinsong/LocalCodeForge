@@ -34,8 +34,11 @@ public sealed class WriteFileTool : AgentToolBase
     /// <summary>【10-13 阶段3】文件状态记忆（可空：null 跳过——沙箱/无记忆库时零开销）。</summary>
     private readonly AgentMemoryStore? _memoryStore;
 
+    /// <summary>【10-14 P1-6】符号索引库（可空：tests 直构不传 → P-D 走全扫回退；DI 传 symbol_index.db 路径）。</summary>
+    private readonly SymbolIndexStore? _symbolStore;
+
     /// <summary>构造函数。</summary>
-    public WriteFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null, IEnumerable<string>? explicitWriteRoots = null, AgentMemoryStore? memoryStore = null)
+    public WriteFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null, IEnumerable<string>? explicitWriteRoots = null, AgentMemoryStore? memoryStore = null, string? symbolDbPath = null)
     {
         // 规范化
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
@@ -48,6 +51,7 @@ public sealed class WriteFileTool : AgentToolBase
             .Select(Path.GetFullPath)
             .ToList() ?? new List<string>();
         _memoryStore = memoryStore;
+        _symbolStore = string.IsNullOrWhiteSpace(symbolDbPath) ? null : new SymbolIndexStore(symbolDbPath);
     }
 
     /// <summary>记录一次拒绝事件（fail-safe：记录失败不影响工具主流程）。</summary>
@@ -212,7 +216,7 @@ public sealed class WriteFileTool : AgentToolBase
                 return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.ProjectFile, err);
             }
 
-            var conflicts = TypeConflictDetector.DetectDuplicateTypes(_projectRoot, fullPath, content);
+            var conflicts = TypeConflictDetector.DetectDuplicateTypes(_projectRoot, fullPath, content, _symbolStore);
             if (conflicts.Count > 0)
             {
                 // 【B】P-D 熔断语义化：同路径被拒次数累计，第 2 次起返回确定性指令
@@ -220,7 +224,7 @@ public sealed class WriteFileTool : AgentToolBase
                 _pdRejectionCounts[fullPath] = count;
 
                 var hint = TypeConflictDetector.BuildExistingTypesHint(
-                    TypeConflictDetector.GetExistingTypes(_projectRoot, fullPath),
+                    TypeConflictDetector.GetExistingTypes(_projectRoot, fullPath, _symbolStore),
                     relative, File.Exists(fullPath));
 
                 if (count >= 2)

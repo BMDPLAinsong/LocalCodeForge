@@ -27,8 +27,11 @@ public sealed class EditFileTool : AgentToolBase
     // 【批次1·E】显式写目标授权（CLI 层注入；敏感区源头兜底）
     private readonly List<string> _explicitWriteRoots;
 
+    /// <summary>【10-14 P1-6】符号索引库（可空：tests 直构不传 → P-D 走全扫回退；DI 传 symbol_index.db 路径）。</summary>
+    private readonly SymbolIndexStore? _symbolStore;
+
     /// <summary>构造函数。</summary>
-    public EditFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null, IEnumerable<string>? explicitWriteRoots = null)
+    public EditFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null, IEnumerable<string>? explicitWriteRoots = null, string? symbolDbPath = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
@@ -39,6 +42,7 @@ public sealed class EditFileTool : AgentToolBase
             .Where(r => !string.IsNullOrWhiteSpace(r))
             .Select(Path.GetFullPath)
             .ToList() ?? new List<string>();
+        _symbolStore = string.IsNullOrWhiteSpace(symbolDbPath) ? null : new SymbolIndexStore(symbolDbPath);
     }
 
     /// <summary>记录一次拒绝事件（fail-safe：记录失败不影响工具主流程）。</summary>
@@ -160,11 +164,11 @@ public sealed class EditFileTool : AgentToolBase
                 return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.ProjectFile, err);
             }
 
-            var conflicts = TypeConflictDetector.DetectDuplicateTypes(_projectRoot, fullPath, newStr);
+            var conflicts = TypeConflictDetector.DetectDuplicateTypes(_projectRoot, fullPath, newStr, _symbolStore);
             if (conflicts.Count > 0)
             {
                 var hint = TypeConflictDetector.BuildExistingTypesHint(
-                    TypeConflictDetector.GetExistingTypes(_projectRoot, fullPath),
+                    TypeConflictDetector.GetExistingTypes(_projectRoot, fullPath, _symbolStore),
                     relative, true);
                 var err = $"错误：编辑内容检测到类型重复定义：{string.Join("；", conflicts)}。\n" +
                        $"{hint}\n" +

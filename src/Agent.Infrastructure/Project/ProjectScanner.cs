@@ -11,13 +11,9 @@ namespace Agent.Infrastructure.Project;
 /// </summary>
 public static class ProjectScanner
 {
-    /// <summary>排除目录（构建产物/版本库/依赖）。</summary>
-    private static readonly HashSet<string> ExcludedDirs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "obj", "bin", ".git", ".vs", ".vscode", ".idea",
-        "node_modules", "dist", "build", "packages", "__pycache__", ".venv", "venv", "workspace",
-        "$recycle.bin", "system volume information"   // 盘根扫描：系统隐藏目录（无权限/无意义）
-    };
+    /// <summary>排除目录（构建产物/版本库/依赖）——【10-14 P1-4】单源 FileGrammar.ExcludedDirNames
+    /// （本表原最全实现提升为全层共享；SymbolIndexer/DependencyAnalyzer 原两份顶层 StartsWith 复制同源改调）。</summary>
+    private static readonly HashSet<string> ExcludedDirs = FileGrammar.ExcludedDirNames;
 
     /// <summary>入口/说明文件（精确名匹配）。</summary>
     private static readonly HashSet<string> EntryNames = new(StringComparer.OrdinalIgnoreCase)

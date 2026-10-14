@@ -29,7 +29,7 @@
 1167	1 ReadFileTool 分页续读
 1227	3 FailureCategorizer 失败类别归类
 1411	工程增量计划校验（CheckIncrementalPlanConflicts）
-1449	TestProjectDetector（完成门）
+1449	FileGrammar（语法单源）+ P-D 索引查询路径
 1486	编辑冲突诊断（EditFileTool 找不到 old_string 且备份漂移）
 1516	工程只读模式（写工程文件被拒绝并提示）
 1551	TestRunnerService（测试命令检测）

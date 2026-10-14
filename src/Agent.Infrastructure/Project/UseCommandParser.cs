@@ -99,17 +99,8 @@ public static class UseCommandParser
     /// 【10-12 B】use 一步到位：从文本提取第一个盘根（"x:\" / "X:"），用于 use 参数非路径开头时
     /// （如 "use --write 读取 x:\ 盘下 index.html 文件…"）自动 use 盘根 + 整段作任务。
     /// 仅当盘根真实存在时返回 true。
+    /// 【10-14 P1-4】实现归位 FileGrammar.TryExtractLiteralDiskRoot（单源），此处保留公共 API 委托。
     /// </summary>
     public static bool TryExtractDiskRoot(string input, out string root)
-    {
-        root = "";
-        if (string.IsNullOrWhiteSpace(input)) return false;
-        var m = System.Text.RegularExpressions.Regex.Match(input, @"[A-Za-z]:\\?");
-        if (!m.Success) return false;
-        var r = m.Value;
-        if (r.Length == 2) r += "\\";          // "X:" → "X:\"（盘符相对语义防御）
-        if (!Directory.Exists(r)) return false;
-        root = r;
-        return true;
-    }
+        => FileGrammar.TryExtractLiteralDiskRoot(input, out root);
 }

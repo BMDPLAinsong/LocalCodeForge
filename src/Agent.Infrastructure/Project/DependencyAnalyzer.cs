@@ -48,7 +48,9 @@ public static class DependencyAnalyzer
             return result;
 
         // 扫描代码文件，词边界匹配类型符号
-        foreach (var file in EnumerateCodeFiles(projectRoot))
+        // 【10-14 P1-4/P1-7】枚举单源：FileGrammar.EnumerateCodeFiles（排除/扩展过滤归一），
+        // 取前 300 个代码文件（同原策略——原私有 EnumerateCodeFiles 的内联复制已删）。
+        foreach (var file in FileGrammar.EnumerateCodeFiles(projectRoot).Select(e => e.Full).Take(300))
         {
             string content;
             try
@@ -84,33 +86,6 @@ public static class DependencyAnalyzer
     /// <summary>规范化相对路径（统一斜杠 + 小写比较用）。</summary>
     private static string Normalize(string path)
         => path.Replace('\\', '/');
-
-    private static IEnumerable<string> EnumerateCodeFiles(string projectRoot)
-    {
-        var exts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ".cs", ".py", ".js", ".ts", ".java", ".go"
-        };
-        var list = new List<string>();
-        try
-        {
-            foreach (var f in Directory.EnumerateFiles(projectRoot, "*.*", SearchOption.AllDirectories))
-            {
-                var rel = Path.GetRelativePath(projectRoot, f);
-                if (rel.Contains(".git", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith("bin", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith("obj", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith("node_modules", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith("workspace", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith(".vs", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (exts.Contains(Path.GetExtension(f)) && list.Count < 300)
-                    list.Add(f);
-            }
-        }
-        catch { }
-        return list;
-    }
 
     /// <summary>某文件直接依赖的文件（它引用了谁）。</summary>
     public static List<string> GetDirectDependencies(string file, List<DependencyEdge> edges)

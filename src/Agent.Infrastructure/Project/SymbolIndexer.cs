@@ -41,7 +41,8 @@ public static class SymbolIndexer
     private static readonly Regex PyClassRe = new(@"^\s*class\s+([A-Za-z_]\w*)", RegexOptions.Compiled);
     private static readonly Regex PyDefRe = new(@"^\s*def\s+([A-Za-z_]\w*)\s*\(", RegexOptions.Compiled);
 
-    /// <summary>可索引的代码扩展名 → 解析风格。</summary>
+    /// <summary>可索引的代码扩展名 → 解析风格（键集与 FileGrammar.CodeExtensions 同源；
+    /// 枚举过滤走 FileGrammar，此处仅保留"扩展名→解析风格"映射）。</summary>
     private static readonly Dictionary<string, string> CodeExts = new()
     {
         [".cs"] = "csharp", [".java"] = "csharp", [".go"] = "csharp",
@@ -49,11 +50,10 @@ public static class SymbolIndexer
     };
 
     /// <summary>
-    /// 扫描工程根，返回符号条目列表。
-    /// </summary>
-    /// <summary>
-    /// 【P1-1】枚举工程代码文件（与 Build 同过滤规则：排除 .git/bin/obj/node_modules/workspace/.vs，
-    /// 8MB 总量上限 + 300 文件上限）。返回全路径 + 相对路径 + mtime（增量索引对比用）。
+    /// 【P1-1】枚举工程代码文件。返回全路径 + 相对路径 + mtime（增量索引对比用）。
+    /// 【10-14 P1-4】过滤单源化：排除目录/扩展名走 FileGrammar（段级精确匹配，任意层级——
+    /// 原顶层 StartsWith 复制有 "binary" 前缀误伤与 ".git" 子串误伤）；本方法只保留
+    /// SymbolIndexer 特有上限策略：8MB 总量上限（超出截断）+ 300 文件上限（超出清空）。
     /// </summary>
     public static List<(string Full, string Rel, string Ext, long LastWriteTicks)> EnumerateFiles(string projectRoot)
     {
@@ -62,35 +62,18 @@ public static class SymbolIndexer
             return files;
 
         long totalBytes = 0;
-        try
+        foreach (var (full, rel, ext) in FileGrammar.EnumerateCodeFiles(projectRoot))
         {
-            foreach (var f in Directory.EnumerateFiles(projectRoot, "*.*", SearchOption.AllDirectories))
+            try
             {
-                var rel = Path.GetRelativePath(projectRoot, f);
-                if (rel.Contains(".git", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith("bin", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith("obj", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith("node_modules", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith("workspace", StringComparison.OrdinalIgnoreCase)
-                    || rel.StartsWith(".vs", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                var ext = Path.GetExtension(f).ToLowerInvariant();
-                if (!CodeExts.ContainsKey(ext))
-                    continue;
-
-                try
-                {
-                    var fi = new FileInfo(f);
-                    totalBytes += fi.Length;
-                    if (totalBytes > 8 * 1024 * 1024)
-                        return files;
-                    files.Add((f, rel, ext, fi.LastWriteTimeUtc.Ticks));
-                }
-                catch { }
+                var fi = new FileInfo(full);
+                totalBytes += fi.Length;
+                if (totalBytes > 8 * 1024 * 1024)
+                    return files;
+                files.Add((full, rel, ext, fi.LastWriteTimeUtc.Ticks));
             }
+            catch { }
         }
-        catch { }
 
         if (files.Count > 300)
             return new List<(string, string, string, long)>();

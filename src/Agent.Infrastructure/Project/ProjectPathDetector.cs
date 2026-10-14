@@ -146,17 +146,10 @@ public static class ProjectPathDetector
 
     /// <summary>
     /// 自然语言盘符解析："X盘根目录 / x盘 / X盘下 / X盘里" → "X:\"。
-    /// 确定性正则，返回盘符根目录。
+    /// 【10-14 P1-4】实现归位 FileGrammar.TryExtractChineseDiskRoot（单源），此处保留公共 API 委托。
     /// </summary>
     public static bool TryExtractDiskRoot(string input, out string root)
-    {
-        root = null!;
-        if (string.IsNullOrWhiteSpace(input)) return false;
-        var m = Regex.Match(input, @"([A-Za-z])\s*盘\s*(根目录|根|下|上|里|中)?");
-        if (!m.Success) return false;
-        root = $"{m.Groups[1].Value.ToUpperInvariant()}:\\";
-        return true;
-    }
+        => FileGrammar.TryExtractChineseDiskRoot(input, out root);
 
     /// <summary>
     /// 写任务显式目标提取（批次1：显式写授权 + 目标达成门共用）。
