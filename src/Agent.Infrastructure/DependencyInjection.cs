@@ -107,12 +107,16 @@ public static class DependencyInjection
                 "metrics.db");
             return new Metrics.ToolRejectionStore(rejectDbPath);
         });
+        // 【10-14 P2-3】符号索引单例（与 find_symbol/analyze_deps/dashboard/P-D 写前检测同库同实例）：
+        // 原先四处各自 new（构造即 CREATE TABLE + 列迁移检查），现进程内一份。
+        services.AddSingleton<Project.SymbolIndexStore>(_ =>
+            new Project.SymbolIndexStore(Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db")));
         services.AddSingleton<IAgentTool>(sp => new ListDirTool(workspaceRoot, projectRoot));
         services.AddSingleton<IAgentTool>(sp => new ReadFileTool(workspaceRoot, projectRoot));
         services.AddSingleton<IAgentTool>(sp => new WriteFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots, sp.GetRequiredService<AgentMemoryStore>(),
-            Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db")));   // ← 10-14 P1-6：P-D 写前类型冲突查符号索引
+            sp.GetRequiredService<Project.SymbolIndexStore>()));   // ← 10-14 P1-6/P2-3：P-D 写前类型冲突查符号索引（进程内单例）
         services.AddSingleton<IAgentTool>(sp => new EditFileTool(workspaceRoot, projectRoot, projectWriteEnabled, taskId, sp.GetRequiredService<Metrics.ToolRejectionStore>(), explicitWriteRoots,
-            Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "symbol_index.db")));   // ← 10-14 P1-6：P-D 写前类型冲突查符号索引
+            sp.GetRequiredService<Project.SymbolIndexStore>()));   // ← 10-14 P1-6/P2-3：同上
         services.AddSingleton<IAgentTool>(_ => new CreateDirTool(workspaceRoot, projectRoot, projectWriteEnabled, explicitWriteRoots));   // ← 新增
         services.AddSingleton<IAgentTool>(_ => new RunCommandTool(workspaceRoot, projectRoot, projectWriteEnabled));
         services.AddSingleton<IAgentTool>(_ => new RememberTool(_.GetRequiredService<AgentMemoryStore>()));   // ← P3：模型级记忆

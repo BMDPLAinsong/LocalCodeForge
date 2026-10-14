@@ -114,6 +114,22 @@ public static class Suites_Tuning
             Check("P2 成功率 0.6 ≥0.5 → 保持 agent_pro",
                 !Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDropAgentPro(
                     new Agent.Infrastructure.Routing.ServiceStats(5, 3, 1000), 5, 0.5, out _));
+
+            // 【10-14 P2-1 单源】调权报告回归断言（本段已 seed agent_pro/Rule 时代 2 条）：
+            // ① agent_pro 层级必须是 Rule——若再按 SmallModel 过滤必然得 0 样本（10-11 错配 / 8-A1 漏改的根因）；
+            // ② 读升级与 Complex 降级两处 pro 消费同查一次，样本数/成功率必然相等（双出口分叉不可能再发生）。
+            var rep = Agent.Infrastructure.Routing.RoutingTuningReporter
+                .BuildAsync(mc, new Agent.Core.Models.AgentOptions { LawUnifiedEpoch = epoch }, CancellationToken.None)
+                .GetAwaiter().GetResult();
+            Check("P2-1 单源报告：agent_pro Rule 时代样本 = 2（层级错配则得 0）",
+                rep.Pro.TotalCount == 2 && rep.ComplexDrop.SampleCount == 2);
+            Check("P2-1 单源报告：读升级与 Complex 降级同源（pro 样本数/成功率一致）",
+                rep.ReadUpgrade.SampleCount == rep.ComplexDrop.SampleCount
+                && rep.ReadUpgrade.SuccessRate == rep.ComplexDrop.SuccessRate
+                && rep.ReadUpgrade.SuccessRate == 1.0);
+            Check("P2-1 成功率口径：RateOf(0 样本) = 0",
+                Agent.Infrastructure.Routing.RoutingTuningReporter
+                    .RateOf(new Agent.Infrastructure.Routing.ServiceStats(0, 0, 0)) == 0);
         }
     }
 }

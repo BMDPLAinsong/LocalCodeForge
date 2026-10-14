@@ -92,7 +92,7 @@ internal class Program
                 Endpoint = "http://localhost:11434",
                 ApiKey = "ollama",
                 Temperature = 0.5
-            },
+            },  
 
             EnableRouting = true,
             MaxSteps = 20,
@@ -317,7 +317,11 @@ internal class Program
                     options,
                     Path.Combine(Path.GetDirectoryName(dbPath) ?? ".", "agent_memory.db"),
                     commandHub,
-                    dashToken),
+                    dashToken,
+                    // 【10-14 P2-3】注入 DI 单例：/api/memory 与 /api/deps 复用同一 store 实例
+                    // （原实现每请求 new + 建表 + PRAGMA 迁移——同源债根源）
+                    provider.GetRequiredService<Agent.Infrastructure.Memory.AgentMemoryStore>(),
+                    provider.GetRequiredService<Agent.Infrastructure.Project.SymbolIndexStore>()),
                 CancellationToken.None);
             url = url + "?token=" + dashToken;
             dashboardUrl = url;
@@ -1658,36 +1662,20 @@ internal class Program
         }
 
         // 【路由调权收尾】调权状态可观测：三处调权当前判定（样本/成功率/阈值/触发与否）
+        // 【10-14 P2-1 单源】样本查询 + 三判定改调 RoutingTuningReporter（与 Dashboard /api/tuning 同源）：
+        // 原此处与 Dashboard 各写一份查询 + 判定（10-11 的 P2 层级错配正是从这类双出口漏改流出）。
+        // 时代过滤语义在 reporter 内（读 options.LawUnifiedEpoch——本方法唯一调用点传入同值，见 stats 命令）。
         if (options is not null)
         {
             try
             {
-                // 与 ModelRouter 同一时代过滤语义：epoch 已配置 → 只统计 30B 时代样本
-                async Task<Agent.Infrastructure.Routing.ServiceStats> TuningAsync(string svc, string tier) =>
-                    lawUnifiedEpoch is { } e
-                        ? await metrics.GetServiceStatsSinceAsync(svc, tier, e, 10, CancellationToken.None)
-                        : await metrics.GetServiceStatsAsync(svc, tier, 10, CancellationToken.None);
-
-                var smallRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.Small, "Rule");
-                var largeRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.Large, "Rule");
-                var proRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.AgentPro, "Rule");
-                // 【10-11 P2 调权错配修复】agent_pro 任务路由层级实为 Rule（L1 规则命中），非 SmallModel——
-                // 用 SmallModel 过滤永远 0 样本，P2 从未真正评估过 agent_pro。与 ModelRouter 同源修正。
-                var proRuleP2 = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.AgentPro, "Rule");
-
-                var downgrade = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDowngrade(
-                    smallRule, largeRule, options.RoutingTuningMinSamples, options.RoutingDowngradeMinSuccessRate, out var dowReason);
-                var readUp = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestReadTier(
-                    proRule, smallRule, options.RoutingTuningMinSamples, options.RoutingReadUpgradeBadRate, options.RoutingReadUpgradeMinSuccessRate, out var readReason);
-                var dropPro = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDropAgentPro(
-                    proRuleP2, options.RoutingDropAgentProMinSamples, options.RoutingDropAgentProMinSuccessRate, out var dropReason);
-
-                Console.WriteLine("=== 路由调权状态 ===");
+                var t = await Agent.Infrastructure.Routing.RoutingTuningReporter.BuildAsync(metrics, options, CancellationToken.None);
                 static string RateOf(Agent.Infrastructure.Routing.ServiceStats s) =>
                     s.TotalCount > 0 ? $"{(double)s.SuccessCount / s.TotalCount:P0}" : "无样本";
-                Console.WriteLine($"  L0.5 写降级 small:  small 样本 {smallRule.TotalCount} 成功率 {RateOf(smallRule)}（阈值 {options.RoutingDowngradeMinSuccessRate:P0}）→ {(downgrade ? "触发：写任务降级 small" : "保持 large")}（{dowReason}）");
-                Console.WriteLine($"  L0.5b 读升级 pro:   small 成功率 {RateOf(smallRule)}（坏率阈值 {options.RoutingReadUpgradeBadRate:P0}）/ pro 成功率 {RateOf(proRule)}（阈值 {options.RoutingReadUpgradeMinSuccessRate:P0}）→ {(readUp ? "触发：读任务升级 agent_pro" : "保持 small")}（{readReason}）");
-                Console.WriteLine($"  P2 Complex 降级 large: pro 样本 {proRuleP2.TotalCount} 成功率 {RateOf(proRuleP2)}（阈值 {options.RoutingDropAgentProMinSuccessRate:P0}）→ {(dropPro ? "触发：ComplexReason 降级 large" : "保持 agent_pro")}（{dropReason}）");
+                Console.WriteLine("=== 路由调权状态 ===");
+                Console.WriteLine($"  L0.5 写降级 small:  small 样本 {t.Small.TotalCount} 成功率 {RateOf(t.Small)}（阈值 {options.RoutingDowngradeMinSuccessRate:P0}）→ {(t.WriteDowngrade.Triggered ? "触发：写任务降级 small" : "保持 large")}（{t.WriteDowngrade.Reason}）");
+                Console.WriteLine($"  L0.5b 读升级 pro:   small 成功率 {RateOf(t.Small)}（坏率阈值 {options.RoutingReadUpgradeBadRate:P0}）/ pro 成功率 {RateOf(t.Pro)}（阈值 {options.RoutingReadUpgradeMinSuccessRate:P0}）→ {(t.ReadUpgrade.Triggered ? "触发：读任务升级 agent_pro" : "保持 small")}（{t.ReadUpgrade.Reason}）");
+                Console.WriteLine($"  P2 Complex 降级 large: pro 样本 {t.Pro.TotalCount} 成功率 {RateOf(t.Pro)}（阈值 {options.RoutingDropAgentProMinSuccessRate:P0}）→ {(t.ComplexDrop.Triggered ? "触发：ComplexReason 降级 large" : "保持 agent_pro")}（{t.ComplexDrop.Reason}）");
                 Console.WriteLine("  （阈值来自 AgentOptions.Routing* 配置；样本仅统计 law-unified 30B 时代）");
             }
             catch (Exception ex)

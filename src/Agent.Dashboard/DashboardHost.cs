@@ -26,15 +26,20 @@ namespace Agent.Dashboard;
 public sealed record DashboardOptions(
     string WorkspaceRoot,
     string? ProjectRoot,
-    string SymbolDbPath,               // ← 10-07 UI 层 #3：工程依赖图谱（symbol_index.db 路径，与 find_symbol/analyze_deps 同源）
+    string SymbolDbPath,               // ← 10-07 UI 层 #3：工程依赖图谱（symbol_index.db 路径；【10-14 P2-3】SymbolStore 未注入时的回退建实例路径）
     DateTimeOffset? LawUnifiedEpoch,
     IMetricsCollector Metrics,
     TaskEventHub Hub,
     TaskEventStore EventStore,         // ← 10-07 UI 层 #1：任务事件持久化（详情回放数据源）
     AgentOptions Options,              // ← 10-07 UI 层：调权阈值配置（/api/tuning）
-    string MemoryDbPath,               // ← 10-07 UI 层：agent_memory.db 路径（/api/memory）
+    string MemoryDbPath,               // ← 10-07 UI 层：agent_memory.db 路径（【10-14 P2-3】MemoryStore 未注入时的回退建实例路径）
     CommandHub CommandHub,             // ← 10-07 webUI 交互：web 提交汇入 CLI 主循环命令通道
-    string? AuthToken = null);         // ← 10-08 ③ 安全 token：非空时所有端点校验 query token / X-Dashboard-Token（401 拒绝）
+    string? AuthToken = null,          // ← 10-08 ③ 安全 token：非空时所有端点校验 query token / X-Dashboard-Token（401 拒绝）
+    // 【10-14 P2-3】store 实例注入（可选）：非空直接复用（CLI 传 DI 单例——消除"每请求 new + 建表"，
+    // 原实现每次 /api/memory、/api/deps 请求都跑一遍 CREATE TABLE + PRAGMA 列迁移）；
+    // 为 null 时 StartAsync 按上述路径建一次实例并全程复用（tests 直构路径的默认行为）。
+    Agent.Infrastructure.Memory.AgentMemoryStore? MemoryStore = null,
+    Agent.Infrastructure.Project.SymbolIndexStore? SymbolStore = null);
 
 /// <summary>POST /api/commands 请求体（最小输入 DTO，非业务模型）。</summary>
 public sealed record CommandRequest(string? Input);
@@ -50,10 +55,6 @@ public static class DashboardHost
 
     // 持有当前宿主引用：StartAsync 返回后 Kestrel 依赖 app 对象存活（防 GC 停止服务）
     private static WebApplication? _running;
-
-    /// <summary>成功率（0 样本 → 0）。/api/tuning 展示用。</summary>
-    private static double Rate(Agent.Infrastructure.Routing.ServiceStats s) =>
-        s.TotalCount > 0 ? (double)s.SuccessCount / s.TotalCount : 0;
 
     // ── 任务产物浏览辅助（10-08 ①）：文本判定 + 预览截断 ──
     private static readonly System.Collections.Generic.HashSet<string> TextExts = new(
@@ -97,13 +98,21 @@ public static class DashboardHost
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
         var app = builder.Build();
         _running = app;
-        MapEndpoints(app, options);
+        // 【10-14 P2-3】store 解析一次全程复用：注入优先（CLI 传 DI 单例）；未注入则按路径建实例
+        // （tests 直构路径的默认）——原实现每请求 new store + 建表 + PRAGMA 列迁移，是同源债根源。
+        var memoryStore = options.MemoryStore
+            ?? new Agent.Infrastructure.Memory.AgentMemoryStore(options.MemoryDbPath);
+        var symbolStore = options.SymbolStore
+            ?? new Agent.Infrastructure.Project.SymbolIndexStore(options.SymbolDbPath);
+        MapEndpoints(app, options, memoryStore, symbolStore);
         await app.StartAsync(ct);
         var addr = app.Urls.FirstOrDefault() ?? "http://127.0.0.1:0";
         return (addr, () => app.StopAsync());
     }
 
-    private static void MapEndpoints(WebApplication app, DashboardOptions o)
+    private static void MapEndpoints(WebApplication app, DashboardOptions o,
+        Agent.Infrastructure.Memory.AgentMemoryStore memoryStore,
+        Agent.Infrastructure.Project.SymbolIndexStore symbolStore)
     {
         // ── 10-08 Monaco vendor 静态文件：/vendor → bin\vendor（csproj Content 构建复制，自包含）。
         // 置于鉴权中间件之前：Monaco loader 内部按相对路径 fetch worker/language 资源，无法带 query token；
@@ -288,30 +297,14 @@ public static class DashboardHost
         });
 
         // ── 路由调权状态（10-07）：三处调权当前判定——与终端 stats"路由调权状态"小节同语义 ──
-        // 时代过滤：LawUnifiedEpoch 非空 → 只统计 30B 时代样本（与 ModelRouter.GetTuningStatsAsync 一致）；
-        // 阈值来自 DashboardOptions.Options（AgentOptions.Routing*），默认值与原硬编码一致。
+        // 【10-14 P2-1 单源】样本查询 + 三判定改调 RoutingTuningReporter（与 CLI stats / ModelRouter 同源）——
+        // 本端点曾是 10-11 P2 层级错配的漏改出口（web 端 P2 永远 0 样本，任务8-A1）；单源后不可再分叉。
+        // 时代过滤在 reporter 内（LawUnifiedEpoch 非空 → 只统计 30B 时代样本）；阈值来自 AgentOptions.Routing*。
         app.MapGet("/api/tuning", async (CancellationToken ct) =>
         {
+            var t = await Agent.Infrastructure.Routing.RoutingTuningReporter.BuildAsync(o.Metrics, o.Options, ct);
             var opt = o.Options;
-            async Task<Agent.Infrastructure.Routing.ServiceStats> TuningAsync(string svc, string tier) =>
-                o.LawUnifiedEpoch is { } e
-                    ? await o.Metrics.GetServiceStatsSinceAsync(svc, tier, e, 10, ct)
-                    : await o.Metrics.GetServiceStatsAsync(svc, tier, 10, ct);
-
-            var smallRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.Small, "Rule");
-            var largeRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.Large, "Rule");
-            var proRule = await TuningAsync(Agent.Infrastructure.Routing.RoutingDecision.AgentPro, "Rule");
-
-            var downgrade = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDowngrade(
-                smallRule, largeRule, opt.RoutingTuningMinSamples, opt.RoutingDowngradeMinSuccessRate, out var dowReason);
-            var readUp = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestReadTier(
-                proRule, smallRule, opt.RoutingTuningMinSamples, opt.RoutingReadUpgradeBadRate, opt.RoutingReadUpgradeMinSuccessRate, out var readReason);
-            // 【10-14 P0 双出口同步】10-11 在 CLI 侧修复 P2 调权错配（Program.cs proRuleP2：agent_pro 层级
-            // SmallModel→Rule，SmallModel 过滤永远 0 样本）时本端点漏改——web 端 P2 从未真正评估。
-            // 现与 CLI 对齐复用 proRule（同为 AgentPro+Rule，亦避免 CLI 侧 proRule/proRuleP2 的重复查询）。
-            // 双出口长期收敛方案：RoutingTuningReporter 单源（架构审查 P1-8）。
-            var dropPro = Agent.Infrastructure.Routing.RoutingIntelligence.TrySuggestDropAgentPro(
-                proRule, opt.RoutingDropAgentProMinSamples, opt.RoutingDropAgentProMinSuccessRate, out var dropReason);
+            var rate = Agent.Infrastructure.Routing.RoutingTuningReporter.RateOf;
 
             return Results.Json(new
             {
@@ -325,9 +318,9 @@ public static class DashboardHost
                     dropAgentProMinSamples = opt.RoutingDropAgentProMinSamples,
                     dropAgentProMinSuccessRate = opt.RoutingDropAgentProMinSuccessRate,
                 },
-                writeDowngrade = new { sampleCount = smallRule.TotalCount, successRate = Rate(smallRule), threshold = opt.RoutingDowngradeMinSuccessRate, triggered = downgrade, reason = dowReason },
-                readUpgrade = new { small = new { sampleCount = smallRule.TotalCount, successRate = Rate(smallRule) }, pro = new { sampleCount = proRule.TotalCount, successRate = Rate(proRule) }, badRateThreshold = opt.RoutingReadUpgradeBadRate, minSuccessRate = opt.RoutingReadUpgradeMinSuccessRate, triggered = readUp, reason = readReason },
-                complexDrop = new { sampleCount = proRule.TotalCount, successRate = Rate(proRule), threshold = opt.RoutingDropAgentProMinSuccessRate, triggered = dropPro, reason = dropReason },
+                writeDowngrade = new { sampleCount = t.WriteDowngrade.SampleCount, successRate = t.WriteDowngrade.SuccessRate, threshold = opt.RoutingDowngradeMinSuccessRate, triggered = t.WriteDowngrade.Triggered, reason = t.WriteDowngrade.Reason },
+                readUpgrade = new { small = new { sampleCount = t.Small.TotalCount, successRate = rate(t.Small) }, pro = new { sampleCount = t.Pro.TotalCount, successRate = rate(t.Pro) }, badRateThreshold = opt.RoutingReadUpgradeBadRate, minSuccessRate = opt.RoutingReadUpgradeMinSuccessRate, triggered = t.ReadUpgrade.Triggered, reason = t.ReadUpgrade.Reason },
+                complexDrop = new { sampleCount = t.ComplexDrop.SampleCount, successRate = t.ComplexDrop.SuccessRate, threshold = opt.RoutingDropAgentProMinSuccessRate, triggered = t.ComplexDrop.Triggered, reason = t.ComplexDrop.Reason },
             }, JsonOpts);
         });
 
@@ -335,7 +328,7 @@ public static class DashboardHost
         app.MapGet("/api/memory", (int take) =>
         {
             take = take is >= 1 and <= 100 ? take : 50;
-            var store = new Agent.Infrastructure.Memory.AgentMemoryStore(o.MemoryDbPath);
+            var store = memoryStore;
             var rows = store.List(take);
             var stats = store.GetStats();
             return Results.Json(new
@@ -355,7 +348,7 @@ public static class DashboardHost
         {
             if (o.ProjectRoot is null)
                 return Results.BadRequest(new { error = "未设置工程根（CLI 执行 use <路径> 后刷新），依赖图谱不可用。" });
-            var store = new SymbolIndexStore(o.SymbolDbPath);
+            var store = symbolStore;
             try
             {
                 if (!store.HasIndex(o.ProjectRoot))

@@ -49,14 +49,13 @@ public sealed class ModelRouter : IModelRouter
     /// 【P2 调权地基】取调权用历史表现：时代边界已配置（LawUnifiedEpoch 非空）→ 只统计 30B 时代样本
     /// （4B 历史不再污染 agent_pro/small 的能力判定）；未配置 → 全量（兼容旧行为）。
     /// </summary>
-    private async Task<ServiceStats> GetTuningStatsAsync(
+    /// <summary>
+    /// 时代过滤的服务统计（【10-14 P2-1】单源 RoutingTuningReporter.GetStatsAsync——与 CLI stats /
+    /// Dashboard /api/tuning 同一查询口径；判定本身仍内联，运行时决策不能等批量报告）。
+    /// </summary>
+    private Task<ServiceStats> GetTuningStatsAsync(
         string serviceId, string routingTier, int take, CancellationToken ct)
-    {
-        var epoch = _options.LawUnifiedEpoch;
-        return epoch is not null
-            ? await _metrics.GetServiceStatsSinceAsync(serviceId, routingTier, epoch.Value, take, ct)
-            : await _metrics.GetServiceStatsAsync(serviceId, routingTier, take, ct);
-    }
+        => RoutingTuningReporter.GetStatsAsync(_metrics, _options, serviceId, routingTier, take, ct);
 
     /// <summary>E2E 冒烟运行判定（LAW_E2E=1）。路由决策落库守卫的唯一逻辑源，
     /// public static 供 tests 行为验证（见 3A 块"路由决策 E2E 源头隔离"）。</summary>

@@ -27,11 +27,12 @@ public sealed class EditFileTool : AgentToolBase
     // 【批次1·E】显式写目标授权（CLI 层注入；敏感区源头兜底）
     private readonly List<string> _explicitWriteRoots;
 
-    /// <summary>【10-14 P1-6】符号索引库（可空：tests 直构不传 → P-D 走全扫回退；DI 传 symbol_index.db 路径）。</summary>
+    /// <summary>【10-14 P1-6】符号索引库（可空：tests 直构不传 → P-D 走全扫回退；【10-14 P2-3】DI 传进程内单例）。
+    /// </summary>
     private readonly SymbolIndexStore? _symbolStore;
 
     /// <summary>构造函数。</summary>
-    public EditFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null, IEnumerable<string>? explicitWriteRoots = null, string? symbolDbPath = null)
+    public EditFileTool(string workspaceRoot, string? projectRoot = null, bool projectWriteEnabled = false, string? taskId = null, ToolRejectionStore? rejections = null, IEnumerable<string>? explicitWriteRoots = null, SymbolIndexStore? symbolStore = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : Path.GetFullPath(projectRoot);
@@ -42,7 +43,7 @@ public sealed class EditFileTool : AgentToolBase
             .Where(r => !string.IsNullOrWhiteSpace(r))
             .Select(Path.GetFullPath)
             .ToList() ?? new List<string>();
-        _symbolStore = string.IsNullOrWhiteSpace(symbolDbPath) ? null : new SymbolIndexStore(symbolDbPath);
+        _symbolStore = symbolStore;
     }
 
     /// <summary>记录一次拒绝事件（fail-safe：记录失败不影响工具主流程）。</summary>
