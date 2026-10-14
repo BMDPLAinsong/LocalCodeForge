@@ -43,7 +43,8 @@
 ### 1.2 源码规模（改哪里先看这里）
 
 ```
-Agent.Cli/Program.cs                    1889 行（Main 704 + 16 助手方法）  CLI 主循环 + 命令处理器 + 归档 + 回滚
+Agent.Cli/Program.cs                    1554 行（Main + 任务流/报表助手）  CLI 主循环 + 归档 + 回滚（10-14 C1：命令处理器已外提）
+Agent.Cli/Program.Commands.cs           372 行（partial）   10 个命令处理器（C1 外提）
 Agent.Infrastructure/AgentLoop.cs       1679 行   ReAct 主循环 + 防线全家桶
 Agent.Infrastructure/Orchestration/Orchestrator.cs    1197 行   三阶段编排
 Agent.Dashboard/DashboardPages/index.html             1167 行   单页（纯 CSS/JS 零外网）
@@ -628,7 +629,8 @@ external_credential → compile_error → runtime_error → timeout → validato
 
 | 路径 | 一句话 | 关键方法 |
 | ---- | ---- | ---- |
-| `src/Agent.Cli/Program.cs` | CLI 主循环 + 命令分发 + 归档 + 回滚 | Main（704 行）/ **命令处理器**（HandleStats·HandleUse·HandleMemory·HandleDiff·HandleRollback·HandleDashboard·HandleNew·HandleHelp + AutoDetectUseFromInput + IsExitCommand，【10-14 P3-3】）/ ApplyUse / ArchiveTask / AutoRollbackOnFailure / CleanOldRuns / Print* |
+| `src/Agent.Cli/Program.cs` | CLI 主循环 + 任务流 + 归档 + 回滚 | Main / ApplyUse / ArchiveTask / AutoRollbackOnFailure / CheckLocalModelsAsync / CleanOldRuns / Print* |
+| `src/Agent.Cli/Program.Commands.cs` | **命令处理器（10-14 C1 外提为 partial，372 行）** | IsExitCommand / HandleNew·Help·Dashboard·Memory·Stats·Use / AutoDetectUseFromInput / HandleDiff·Rollback |
 | `src/Agent.Infrastructure/AgentLoop.cs` | ReAct 主循环 + 防线全家桶 | RunAsync / BuildCycleSignature / 完成门三处接线 |
 | `src/Agent.Infrastructure/Orchestration/Orchestrator.cs` | 三阶段编排 | RunAsync / CheckIncrementalPlanConflicts / BuildEngineeringGraphBlock / RecordSubMetricAsync |
 | `src/Agent.Infrastructure/Orchestration/PlannerService.cs` | Plan JSON 生成 | GeneratePlanAsync / TryParsePlan / SimplifyRunCommand |

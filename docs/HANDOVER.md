@@ -1086,6 +1086,8 @@ powershell -NoProfile -File scripts/e2e/e2e.ps1
 
 7k. **【已完成】B2 Dashboard 全局异常处理 + D1 一键门禁（10-14）**：①**B2 全局异常处理中间件**——`DashboardHost` 原仅 3 处局部 `try/catch`、无 `UseExceptionHandler`，未处理端点异常 → **裸 500**（无结构、无日志）。实施：`MapEndpoints` 首部加 `UseExceptionHandler` → 500 + 结构化 JSON `{error}`（与端点既有 error 形状一致，前端统一消费）+ `LogError` 记录（Method/Path/异常）。**测试缝**：环境变量 `LAW_DASH_TEST_THROW=1` 时注册抛错路由 `/api/__test_throw`（生产不设置 = 该路由不存在，零影响），集成测试确定性验证中间件生效。②**D1 一键门禁 `scripts/verify.ps1`**（纯 ASCII 规避 PS 5.1 无 BOM 编码陷阱；**以退出码为准**，不解析中文输出）：构建(0 错误) → tests(0 失败) → drift-check(阈值内)，全绿 `exit 0`；+ versioned `pre-commit` 钩子（`scripts/git-hooks/pre-commit`，已安装到 `.git/hooks/`）→ 提交前自动跑门禁，失败阻断（`--no-verify` 可绕过）——把"人肉门禁"变自动。**验证**：构建 0 错误（警告基线 9）；tests 840→**841/841**（+1 B2 断言，日志确证 `ExceptionHandlerMiddleware` 捕获并记录）；`verify.ps1` 端到端 **ALL GREEN（exit 0）**。
 
+7l. **【已完成】C1 Program.cs 命令处理器外提 partial（10-14，可维护性）**：P3-3 抽出的 10 个命令处理器（IsExitCommand / HandleNew·Help·Dashboard·Memory·Stats·Use / AutoDetectUseFromInput / HandleDiff·Rollback）当时虽已搬出 `Main`，但仍在**同一个 1904 行文件**内。实施：按域外提 `Program.Commands.cs`（372 行，`internal partial class Program`）——从 P3-3 处理器区（350 行）**字节级搬运**（保留 UTF-8 BOM 与原换行风格，零手抄，仅把 `internal class Program` 改 `internal partial class Program`）。`Program.cs` **1904→1554 行**。**纯搬移零行为变更**（同类型 partial，私有成员互通，Main 分派点不动）。**验证**：构建 0 错误（警告基线 9）；tests 841/841；无头冒烟 4 处理器（help/memory list/diff/rollback）全命中、退出码 0。
+
 4. **补 Executor prompt 禁令**：「禁止 Console.ReadLine/while (true)」，让交互式任务在规划层就规避，而不是靠超时判失败。5. **清理 RoutingRules.json 重名规则**，合并语义；**EnableOrchestration 接线或删除**。
 
 6. `git init`**&#x20;纳入版本控制**；为 TaskClassifier / RuleEngine / TryParseToolCallsFromText 补单元测试。
