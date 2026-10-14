@@ -43,7 +43,7 @@
 ### 1.2 源码规模（改哪里先看这里）
 
 ```
-Agent.Cli/Program.cs                    1104+ 行  CLI 主循环 + 命令分发 + 归档 + 回滚 + dashboard/diff 命令
+Agent.Cli/Program.cs                    1889 行（Main 704 + 16 助手方法）  CLI 主循环 + 命令处理器 + 归档 + 回滚
 Agent.Infrastructure/AgentLoop.cs       1129 行   ReAct 主循环 + 防线全家桶
 Agent.Infrastructure/Orchestration/Orchestrator.cs    1046 行   三阶段编排
 Agent.Infrastructure/Orchestration/PlannerService.cs   678 行   Plan JSON 生成
@@ -69,12 +69,16 @@ Agent.Infrastructure/Events/TaskEventHub.cs            ~70 行   事件多播总
 用户输入
   │
   ▼
-CLI 主循环（Program.cs 194 行起）：
+CLI 主循环（Program.cs 27 行 Main 起；主循环体 292 行起）：
   ① input.TrimStart('\uFEFF').Trim()          ← BOM 清理（根治 PS 管道 BOM 乱码）
-  ② 命令分发：
-     - 临时测试/plan/orch/stats/memory/use/rollback/exit/new → 各自分支处理
+  ② 命令分发（【10-14 P3-3】块体已抽为具名处理器，Main 内只剩分派与 continue）：
+     - 处理器：IsExitCommand / HandleNewCommand / HandleHelpCommand / HandleDashboardCommandAsync /
+       HandleMemoryCommand / HandleStatsCommandAsync / HandleUseCommand / AutoDetectUseFromInput /
+       HandleDiffCommand / HandleRollbackCommand（均 static，Main 之后定义）
+     - 仍在 Main 内的块：plan / orch（带【临时测试】标记，待单独决策）、任务执行核心（与loop/超时令牌/归档交织，不抽）
+     - 状态传递两档：只读依赖走参数；需回写的（sessionId / pendingTask）走 ref；lastTaskId 仅处理器只读（回写在任务执行段）
      - 输入路径自动识别（ProjectRoot 为空 && 输入含绝对目录路径 + 读语境）→ 自动只读 use
-  ③ 自动分发（483 行起）：
+  ③ 自动分发（560 行起）：
      a. ReadOnlyGuard 预检（只读工程 + 写任务引用工程内文件 → 直接阻断，不跑任务）
      b. 生成 taskId（8 位）→ 打印 [工作目录]
      c. 显式写目标解析（TryGetWriteTarget + 敏感区源头拒 → 本次任务临时白名单）
@@ -458,8 +462,8 @@ CompletionGate.Evaluate(isWriteTask, wroteAny, writeRejected, target, targetIsFi
 
 | 对象 | 策略 | 位置 |
 | ---- | ---- | ---- |
-| runs/ | 保留最近 10（启动 CleanOldRuns，keepDays=7） | Program.cs 106 行 |
-| .backup/ | 保留最近 8 个任务备份（PruneBackups） | Program.cs 570 行 |
+| runs/ | 保留最近 10（启动 CleanOldRuns，keepDays=7） | Program.cs 118 行 |
+| .backup/ | 保留最近 8 个任务备份（PruneBackups） | Program.cs 713 行 |
 | test-tmp/ | >7 天清理（按创建时间） | tests Program.cs 启动段 |
 | 记忆 | 自动清理 30 天未用且 0 命中（MemoryPruneDays/MinHits） | AgentLoop 152 行 |
 
@@ -615,7 +619,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 
 | 路径 | 一句话 | 关键方法 |
 | ---- | ---- | ---- |
-| `src/Agent.Cli/Program.cs` | CLI 主循环 + 命令分发 + 归档 + 回滚 | Main / ApplyUse / ArchiveTask / AutoRollbackOnFailure / CleanOldRuns |
+| `src/Agent.Cli/Program.cs` | CLI 主循环 + 命令分发 + 归档 + 回滚 | Main（704 行）/ **命令处理器**（HandleStats·HandleUse·HandleMemory·HandleDiff·HandleRollback·HandleDashboard·HandleNew·HandleHelp + AutoDetectUseFromInput + IsExitCommand，【10-14 P3-3】）/ ApplyUse / ArchiveTask / AutoRollbackOnFailure / CleanOldRuns / Print* |
 | `src/Agent.Infrastructure/AgentLoop.cs` | ReAct 主循环 + 防线全家桶 | RunAsync / BuildCycleSignature / 完成门三处接线 |
 | `src/Agent.Infrastructure/Orchestration/Orchestrator.cs` | 三阶段编排 | RunAsync / CheckIncrementalPlanConflicts / BuildEngineeringGraphBlock / RecordSubMetricAsync |
 | `src/Agent.Infrastructure/Orchestration/PlannerService.cs` | Plan JSON 生成 | GeneratePlanAsync / TryParsePlan / SimplifyRunCommand |
