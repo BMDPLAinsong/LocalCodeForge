@@ -79,6 +79,10 @@ public sealed class PythonLintService : ILintService
 
     // ─────────── ruff 路径 ───────────
 
+    // 【10-14 P4-16】执行超时（毫秒）——原实现无超时，仅靠 ct；卡死的 ruff/py_compile 会无限等待。
+    private const int RuffTimeoutMs = 60_000;
+    private const int PyCompileTimeoutMs = 30_000;
+
     private async Task<LintResult> LintWithRuffAsync(
         string workspaceRoot,
         List<string> pyFiles,
@@ -96,28 +100,26 @@ public sealed class PythonLintService : ILintService
         {
             FileName = "ruff",
             Arguments = $"check --select F821,F811,F841,F401 --output-format=json --no-fix {fileArgs}",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workspaceRoot,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
+            WorkingDirectory = workspaceRoot
         };
 
-        using var process = Process.Start(psi);
-        if (process is null)
+        // 【10-14 P4-16 统一执行链路】改走 Execution.ProcessRunner 单一原语（原为此处第三份手写
+        // 执行实现）。**顺带补上原先完全缺失的超时**：原实现只靠 ct，ruff 卡死即无限等待。
+        var run = await Agent.Infrastructure.Execution.ProcessRunner.RunAsync(psi, RuffTimeoutMs, ct);
+        if (run.TimedOut)
+        {
+            _logger.LogWarning("ruff 执行超时（>{RuffTimeoutMs}ms），按工具异常不阻断流程", RuffTimeoutMs);
             return LintResult.Success();
+        }
 
-        var stdout = await process.StandardOutput.ReadToEndAsync(ct);
-        var stderr = await process.StandardError.ReadToEndAsync(ct);
-        await process.WaitForExitAsync(ct);
+        var stdout = run.Stdout;
+        var stderr = run.Stderr;
 
         // 退出码：0 = 无错误；1 = 有 lint 错误；2 = 工具异常
-        if (process.ExitCode == 0)
+        if (run.ExitCode == 0)
             return LintResult.Success(stdout);
 
-        if (process.ExitCode == 2)
+        if (run.ExitCode == 2)
         {
             _logger.LogWarning("ruff 执行异常：{Stderr}", stderr);
             return LintResult.Success();   // 工具错误不阻断流程
@@ -176,22 +178,20 @@ public sealed class PythonLintService : ILintService
             {
                 FileName = "python",
                 Arguments = $"-m py_compile \"{file}\"",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = workspaceRoot,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8
+                WorkingDirectory = workspaceRoot
             };
 
-            using var process = Process.Start(psi);
-            if (process is null) continue;
+            // 【10-14 P4-16】同走 ProcessRunner 单一原语；补上原实现缺失的超时（单文件编译 30s 足够）。
+            var run = await Agent.Infrastructure.Execution.ProcessRunner.RunAsync(psi, PyCompileTimeoutMs, ct);
+            if (run.TimedOut)
+            {
+                _logger.LogWarning("py_compile 超时（>{PyCompileTimeoutMs}ms）：{File}", PyCompileTimeoutMs, file);
+                continue;
+            }
 
-            var stderr = await process.StandardError.ReadToEndAsync(ct);
-            await process.WaitForExitAsync(ct);
+            var stderr = run.Stderr;
 
-            if (process.ExitCode != 0)
+            if (run.ExitCode != 0)
             {
                 allOutput.AppendLine(stderr);
                 var err = ParsePyCompileError(file, stderr);

@@ -167,56 +167,37 @@ public sealed class RunCommandTool : AgentToolBase
             FileName = "cmd.exe",
             // 先切到 UTF-8 代码页
             Arguments = $"/c chcp 65001 > nul && {command}",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
             // 【10-10 问题2】cwd 与写工具基准统一：可写工程模式 → 工程根（dotnet 构建工程）；
             // 只读工程模式 / 沙箱 → run 目录（任务产物验证）。此前只读工程模式 cwd=工程根，
             // 写工具却落在 run 目录 → dotnet run --project 找不到产物（E2E parity 实证）。
-            WorkingDirectory = ResolveWorkingDirectory(_workspaceRoot, _projectRoot, _projectWriteEnabled),
-            // 明确指定 UTF-8 编码
-            StandardOutputEncoding = System.Text.Encoding.UTF8,
-            StandardErrorEncoding = System.Text.Encoding.UTF8
+            WorkingDirectory = ResolveWorkingDirectory(_workspaceRoot, _projectRoot, _projectWriteEnabled)
         };
+        // 重定向/无窗口/UTF-8 解码由 ProcessRunner 统一设置（10-14 P4-16 单一执行原语）
 
         // 【新增】设置 Python 输出编码
         psi.Environment["PYTHONIOENCODING"] = "utf-8";
 
-        // 启动进程
-        using var process = Process.Start(psi)!;
-
-        // 异步读取 stdout
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        // 异步读取 stderr
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-
-        // 用 Task.WhenAny 实现超时
-        var waitTask = process.WaitForExitAsync(ct);
+        // 【10-14 P4-16 统一执行链路】执行阶段改走 Execution.ProcessRunner（原为此处一份手写实现，
+        // 与 TestRunnerService 各一份：超时竞态用 Task.WhenAny，此处用 CTS；编码/终止语义易分叉）。
+        // 策略不变：cmd.exe + chcp 65001 包装、超时秒数仍按 ResolveTimeoutSeconds（沙箱 30s /
+        // 工程 90s），超时与外部取消的对外表现均与原实现一致（返回 124 超时失败）。
         var timeoutSeconds = ResolveTimeoutSeconds(_projectRoot, command);
-        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(timeoutSeconds), ct);
+        var run = await Agent.Infrastructure.Execution.ProcessRunner.RunAsync(
+            psi, timeoutSeconds * 1000, ct);
 
-        // 哪个先完成
-        var completed = await Task.WhenAny(waitTask, timeoutTask);
-
-        // 超时则杀进程
-        if (completed == timeoutTask)
+        // 超时则杀进程（ProcessRunner 已杀进程树并回收部分输出，此处按原语义仅返回失败文案）
+        if (run.TimedOut)
         {
-            try { process.Kill(entireProcessTree: true); } catch { /* 忽略 */ }
             // 【修复】带非 0 退出码（124 = timeout 惯用码），
             // 并注明常见原因：交互式程序（ReadLine/input）等待输入会一直挂起
             return Agent.Core.Models.ToolResult.Fail(Agent.Core.Models.ToolErrorCodes.Timeout, $"错误：命令执行超时（>{timeoutSeconds}秒）。常见原因：程序含交互输入（Console.ReadLine/input）或死循环。\n退出码：124");
         }
 
-        // 拿到输出
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-
         // 拼接
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"退出码：{process.ExitCode}");
-        if (!string.IsNullOrWhiteSpace(stdout)) sb.AppendLine("--- stdout ---").AppendLine(stdout);
-        if (!string.IsNullOrWhiteSpace(stderr)) sb.AppendLine("--- stderr ---").AppendLine(stderr);
+        sb.AppendLine($"退出码：{run.ExitCode}");
+        if (!string.IsNullOrWhiteSpace(run.Stdout)) sb.AppendLine("--- stdout ---").AppendLine(run.Stdout);
+        if (!string.IsNullOrWhiteSpace(run.Stderr)) sb.AppendLine("--- stderr ---").AppendLine(run.Stderr);
 
         // 返回
         return Agent.Core.Models.ToolResult.Ok(sb.ToString());

@@ -212,11 +212,41 @@ public static class Suites_Project
         }
     }
 
-    // ── 区段 1551：TestRunnerService（测试命令检测） ──
+    // ── 区段 1551：TestRunnerService（测试命令检测）+ ProcessRunner（执行单一原语） ──
     public static void Run1551()
     {
-        Console.WriteLine("== TestRunnerService（测试命令检测） ==");
+        Console.WriteLine("== TestRunnerService（测试命令检测）+ ProcessRunner（执行单一原语） ==");
         {
+            // ── 【10-14 P4-16】ProcessRunner 契约：成功取双流 / 超时杀进程树并回部分输出 / ct 取消同路径 ──
+            var prOk = Agent.Infrastructure.Execution.ProcessRunner.RunAsync(
+                new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c echo out-ok && echo err-ok 1>&2"
+                }, timeoutMs: 30_000, CancellationToken.None).GetAwaiter().GetResult();
+            Check("ProcessRunner：成功退出 → 退出码 0 + 双流分别回收",
+                prOk.ExitCode == 0 && !prOk.TimedOut
+                && prOk.Stdout.Contains("out-ok") && prOk.Stderr.Contains("err-ok"));
+
+            var prTimeout = Agent.Infrastructure.Execution.ProcessRunner.RunAsync(
+                new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c ping -n 30 127.0.0.1 > nul"
+                }, timeoutMs: 800, CancellationToken.None).GetAwaiter().GetResult();
+            Check("ProcessRunner：超时 → TimedOut=true 且不抛异常（调用方按超时语义处理）",
+                prTimeout.TimedOut);
+
+            using (var prCts = new CancellationTokenSource())
+            {
+                prCts.Cancel();
+                var prCancel = Agent.Infrastructure.Execution.ProcessRunner.RunAsync(
+                    new System.Diagnostics.ProcessStartInfo { FileName = "cmd.exe", Arguments = "/c echo x" },
+                    timeoutMs: 0, prCts.Token).GetAwaiter().GetResult();
+                Check("ProcessRunner：外部取消 → 与超时同路径（TimedOut=true）",
+                    prCancel.TimedOut);
+            }
+
             // 【10-14 P0】词边界判定单点断言（正/负例）
             Check("IsTestProjectName：独立词与 PascalCase 段命中",
                 Agent.Infrastructure.Project.TestRunnerService.IsTestProjectName("MyApp.Tests")

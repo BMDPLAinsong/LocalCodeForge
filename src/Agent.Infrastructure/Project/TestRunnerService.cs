@@ -91,6 +91,10 @@ public static class TestRunnerService
     /// <summary>
     /// 运行测试。超时杀死进程；退出码非 0 视为失败。
     /// Summary 为一行摘要（退出码 / 超时 / 关键输出行）。
+    /// 【10-14 P4-16 统一执行链路】进程执行改走 Execution.ProcessRunner 单一原语（原为此处
+    /// 手写 55 行：PSI +BeginOutputReadLine 双流泵 + CTS 超时 + Kill 进程树，与 RunCommandTool
+    /// 各一份实现，超时/编码/终止语义出现两个口径）。**策略不变**：直连进程（不经 cmd.exe）、
+    /// cwd = 工程根、超时由调用方给（AgentLoop 传 150s，run_command 上限 90s）、输出摘要格式原样。
     /// </summary>
     public static async Task<TestRunResult> RunAsync(string projectRoot, int timeoutMs, CancellationToken ct)
     {
@@ -105,44 +109,22 @@ public static class TestRunnerService
             {
                 FileName = command,
                 Arguments = args,
-                WorkingDirectory = projectRoot,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
+                WorkingDirectory = projectRoot
             };
 
-            using var proc = new Process { StartInfo = psi };
-            var outBuilder = new StringBuilder();
-            var errBuilder = new StringBuilder();
-            proc.OutputDataReceived += (_, e) => { if (e.Data is not null) outBuilder.AppendLine(e.Data); };
-            proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) errBuilder.AppendLine(e.Data); };
+            var r = await Agent.Infrastructure.Execution.ProcessRunner.RunAsync(psi, timeoutMs, ct);
 
-            proc.Start();
-            proc.BeginOutputReadLine();
-            proc.BeginErrorReadLine();
+            var stdout = TrimTail(r.Stdout);
+            var stderr = TrimTail(r.Stderr);
+            if (r.TimedOut)
+                return new TestRunResult(null, $"测试超时（>{timeoutMs / 1000}s），已终止。", stdout, true);
 
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(timeoutMs);
-            try
-            {
-                await proc.WaitForExitAsync(timeoutCts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { }
-                var partial = TrimTail(outBuilder.ToString());
-                return new TestRunResult(null, $"测试超时（>{timeoutMs / 1000}s），已终止。", partial, true);
-            }
-
-            var stdout = TrimTail(outBuilder.ToString());
-            var stderr = TrimTail(errBuilder.ToString());
             var output = stdout;
             if (!string.IsNullOrWhiteSpace(stderr))
                 output += "\n--- stderr ---\n" + stderr;
 
-            var summary = Summarize(proc.ExitCode, stdout, stderr, display);
-            return new TestRunResult(proc.ExitCode, summary, output, false);
+            var summary = Summarize(r.ExitCode, stdout, stderr, display);
+            return new TestRunResult(r.ExitCode, summary, output, false);
         }
         catch (Exception ex)
         {

@@ -653,6 +653,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 | `src/Agent.Infrastructure/Project/ProjectContextStore.cs` | 工程上下文缓存 | TryGet / Save |
 | `src/Agent.Infrastructure/Project/DependencyAnalyzer.cs` | 依赖边 | Build / GetDirectDependencies / GetReverseDependencies |
 | `src/Agent.Infrastructure/Quality/OutputVerifier.cs` | 输出判定单一来源 | HasCredentialFailure / StripHarmlessWarnings / HasStructuralError / HasGenericFailure / IsPlaceholderOutput / IsTemplateOutput |
+| `src/Agent.Infrastructure/Execution/ProcessRunner.cs` | **进程执行单一原语（10-14 P4-16新增）** | RunAsync（重定向双流 + 超时/取消杀进程树 + 部分输出回收）。覆盖 run_command / 测试执行 / ruff check / py_compile 四条执行链；**两处有意例外**（`ruff --version`与 `py -c` 可用性探测同步 3s 硬等；浏览器打开与 ollama serve 非命令类启动） |
 | `src/Agent.Infrastructure/Metrics/SqliteMetricsCollector.cs` | 指标三表 | RecordAsync / GetServiceStatsAsync / GetFailureBreakdownAsync / BackfillFailedSubMetricsAsync |
 | `src/Agent.Infrastructure/Metrics/FailureCategorizer.cs` | 失败类别词表 | Categorize |
 | `src/Agent.Infrastructure/Metrics/ToolRejectionStore.cs` | 工具拒绝落库 | RecordAsync / GetSummaryAsync |
