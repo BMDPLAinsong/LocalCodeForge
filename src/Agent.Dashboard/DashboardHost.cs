@@ -148,6 +148,20 @@ public static class DashboardHost
         // ── 单页 ──
         app.MapGet("/", () => Results.Text(ReadEmbeddedPage(), "text/html; charset=utf-8"));
 
+        // ── 【10-14 P3-3 结构拆解】15 个端点按域拆 5 组（纯搬移，零行为变更）。
+        // 端点路径全为字面量、无通配歧义（/api/tasks 与 /api/tasks/{id}/events 段数不同），
+        // 故分组后注册顺序变化不影响路由匹配与中间件语义。
+        MapStatEndpoints(app, o, memoryStore);      // stats / tasks / tuning / memory
+        MapBackupEndpoints(app, o);                   // backups / rollback×2 / diff
+        MapFileEndpoints(app, o, symbolStore);       // files / deps（工程依赖图谱）
+        MapEventEndpoints(app, o);                   // tasks/{id}/events（回放）+ /events（SSE）
+        MapCommandEndpoints(app, o);                 // commands / queue / cancel / current-task
+    }
+
+    // ── 统计组（10-14 P3-3）：成功率/时代隔离/失败类别 + 任务列表 + 调权状态 + 记忆视图 ──
+    private static void MapStatEndpoints(WebApplication app, DashboardOptions o,
+        Agent.Infrastructure.Memory.AgentMemoryStore memoryStore)
+    {
         // ── 统计面板（成功率/耗时/时代隔离/失败类别）──
         app.MapGet("/api/stats", async (CancellationToken ct) =>
         {
@@ -168,132 +182,6 @@ public static class DashboardHost
             take = take is >= 1 and <= 200 ? take : 50;
             var tasks = await o.Metrics.GetRecentAsync(take, ct);
             return Results.Json(tasks, JsonOpts);
-        });
-
-        // ── 备份列表（Diff 数据源定位）──
-        app.MapGet("/api/backups", () => Results.Json(BackupService.ListBackups(o.WorkspaceRoot), JsonOpts));
-
-        // ── Web 端回滚（10-10 补齐"看-改-回"闭环）：dry-run 预览（不执行）+ 执行恢复 ──
-        // 复用 CLI rollback 同一套 BackupService（taskId 隔离 / 最早备份 / 删新建标记），无并行实现。
-        // 有风险操作：前端两步确认（预览 → 确认）；鉴权走全局 AuthToken 中间件。
-        app.MapPost("/api/rollback/dry-run", (RollbackRequest? req) =>
-        {
-            if (o.ProjectRoot is null)
-                return Results.BadRequest(new { error = "当前未设置工程根（CLI 执行 use <路径> 后才有回滚作用域）。" });
-            var taskId = req?.TaskId?.Trim();
-            if (string.IsNullOrWhiteSpace(taskId))
-                return Results.BadRequest(new { error = "taskId 为空。" });
-            var (restoreTargets, removeTargets) =
-                BackupService.DryRunRollbackTask(o.WorkspaceRoot, o.ProjectRoot, taskId);
-            return Results.Json(new { taskId, restoreTargets, removeTargets }, JsonOpts);
-        });
-
-        app.MapPost("/api/rollback", (RollbackRequest? req) =>
-        {
-            if (o.ProjectRoot is null)
-                return Results.BadRequest(new { error = "当前未设置工程根（CLI 执行 use <路径> 后才有回滚作用域）。" });
-            var taskId = req?.TaskId?.Trim();
-            if (string.IsNullOrWhiteSpace(taskId))
-                return Results.BadRequest(new { error = "taskId 为空。" });
-            var (restored, removedNew) =
-                BackupService.RollbackTaskFull(o.WorkspaceRoot, o.ProjectRoot, taskId);
-            return Results.Json(new { taskId, restored, removedNew }, JsonOpts);
-        });
-
-        // ── 任务产物浏览（10-08 ①）：run 工作目录文件浏览 + 文本预览 + 下载 ──
-        // 限定在 WorkspaceRoot 内（PathBoundary 逐段判定，杜绝 .. 跳脱/前缀误判）。
-        // path 为空 → 根 children；path 为目录 → children；path 为文本文件 → {file:true, content 前 50KB}；
-        // 二进制 → {file:true, text:false}；raw=true → 文件下载（octet-stream + 下载名）。
-        // 越界 → 400；不存在 → 404。数据源 = 磁盘真实文件（任务产物），非内存镜像——单一来源。
-        app.MapGet("/api/files", (string? path, bool? raw) =>
-        {
-            var root = PathBoundary.Normalize(o.WorkspaceRoot);
-            var full = string.IsNullOrWhiteSpace(path)
-                ? root
-                : PathBoundary.Normalize(Path.Combine(root, path.TrimStart('/', '\\')));
-            if (!PathBoundary.IsInside(root, full))
-                return Results.Json(new { error = "路径越界。" }, JsonOpts, statusCode: 400);
-            var rel = full == root ? "" : (full.StartsWith(root, StringComparison.OrdinalIgnoreCase)
-                ? full.Substring(root.Length).TrimStart('\\') : Path.GetFileName(full));
-            if (Directory.Exists(full))
-            {
-                var children = Directory.EnumerateFileSystemEntries(full)
-                    .Select(p => new
-                    {
-                        name = Path.GetFileName(p),
-                        isDir = Directory.Exists(p),
-                        size = File.Exists(p) ? new FileInfo(p).Length : (long?)null,
-                        modifiedAt = File.Exists(p)
-                            ? (DateTimeOffset?)new FileInfo(p).LastWriteTimeUtc : null,
-                    })
-                    .OrderByDescending(c => c.isDir)
-                    .ThenBy(c => c.name, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-                return Results.Json(new { path = rel, isDir = true, children }, JsonOpts);
-            }
-            if (File.Exists(full))
-            {
-                var fi = new FileInfo(full);
-                if (raw == true)
-                    return Results.File(fi.FullName, "application/octet-stream", fi.Name);
-                var isText = IsTextFile(fi.Name);
-                return Results.Json(new
-                {
-                    path = rel, isDir = false, size = fi.Length, text = isText,
-                    content = isText ? PreviewText(fi.FullName) : null,
-                }, JsonOpts);
-            }
-            return Results.Json(new { error = "路径不存在。" }, JsonOpts, statusCode: 404);
-        });
-
-        // ── 任务详情回放：完整事件序列（10-07 UI 层 #1/#2；10-10 P0 补 type）──
-        // P0 修复：AgentEvent 为 C# record，序列化无 type 判别字段——SSE/回放双出口统一补
-        // wire type 短名（源头隔离，前端单一渲染函数直接消费，消双路径漂移）。
-        // 返回平铺事件数组 [{type:"thinking"|"toolCall"|…, ...payload}]；无事件 → 空数组。
-        app.MapGet("/api/tasks/{taskId}/events", (string taskId) =>
-        {
-            var list = o.EventStore.GetEventsAsync(taskId);
-            var arr = new System.Text.Json.Nodes.JsonArray();
-            foreach (var s in list)
-            {
-                var node = System.Text.Json.Nodes.JsonNode.Parse(s.Payload);
-                if (node is System.Text.Json.Nodes.JsonObject jo)
-                {
-                    jo.Insert(0, "type", WireType(s.Type));
-                    arr.Add(jo);
-                }
-            }
-            return Results.Json(arr, JsonOpts);
-        });
-
-        // ── Diff：备份 vs 当前（直接序列化引擎模型，无 DTO）──
-        // 10-08 Monaco DiffEditor：额外附 original/modified 全文（仅非 tooLarge；超大文件回退红绿行文本视图）。
-        app.MapGet("/api/diff", (string taskId, string rel, CancellationToken ct) =>
-        {
-            if (o.ProjectRoot is null)
-                return Results.BadRequest(new { error = "未设置工程根，diff 不可用。" });
-            (string TaskId, string Stamp, string Rel, string Full)? backup = null;
-            foreach (var b in BackupService.ListBackups(o.WorkspaceRoot))
-            {
-                if (string.Equals(b.TaskId, taskId, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(b.Rel, rel, StringComparison.OrdinalIgnoreCase))
-                {
-                    backup = b;
-                    break;
-                }
-            }
-            if (backup is null)
-                return Results.NotFound(new { error = $"任务 {taskId} 无文件 {rel} 的备份。" });
-            var current = Path.Combine(o.ProjectRoot, backup.Value.Rel);
-            var result = FileDiffService.Compute(backup.Value.Full, current);
-            string? originalText = null, modifiedText = null;
-            if (!result.TooLarge)
-            {
-                // backup.Value.Full 是备份文件路径（ListBackups 返回 Full=完整路径）——须 ReadAllText 取全文
-                originalText = File.ReadAllText(backup.Value.Full);
-                modifiedText = File.Exists(current) ? File.ReadAllText(current) : "";
-            }
-            return Results.Json(new { original = originalText, modified = modifiedText, diff = result }, JsonOpts);
         });
 
         // ── 路由调权状态（10-07）：三处调权当前判定——与终端 stats"路由调权状态"小节同语义 ──
@@ -339,6 +227,121 @@ public static class DashboardHost
                     m.Id, m.Kind, m.Topic, m.HitCount, m.Count, m.CreatedAt, m.LastHitAt, m.Feature
                 }),
             }, JsonOpts);
+        });
+    }
+
+    // ── 备份组（10-14 P3-3）：备份列表 / Web 端回滚（dry-run + 执行）/ Monaco Diff ──
+    private static void MapBackupEndpoints(WebApplication app, DashboardOptions o)
+    {
+        // ── 备份列表（Diff 数据源定位）──
+        app.MapGet("/api/backups", () => Results.Json(BackupService.ListBackups(o.WorkspaceRoot), JsonOpts));
+
+        // ── Web 端回滚（10-10 补齐"看-改-回"闭环）：dry-run 预览（不执行）+ 执行恢复 ──
+        // 复用 CLI rollback 同一套 BackupService（taskId 隔离 / 最早备份 / 删新建标记），无并行实现。
+        // 有风险操作：前端两步确认（预览 → 确认）；鉴权走全局 AuthToken 中间件。
+        app.MapPost("/api/rollback/dry-run", (RollbackRequest? req) =>
+        {
+            if (o.ProjectRoot is null)
+                return Results.BadRequest(new { error = "当前未设置工程根（CLI 执行 use <路径> 后才有回滚作用域）。" });
+            var taskId = req?.TaskId?.Trim();
+            if (string.IsNullOrWhiteSpace(taskId))
+                return Results.BadRequest(new { error = "taskId 为空。" });
+            var (restoreTargets, removeTargets) =
+                BackupService.DryRunRollbackTask(o.WorkspaceRoot, o.ProjectRoot, taskId);
+            return Results.Json(new { taskId, restoreTargets, removeTargets }, JsonOpts);
+        });
+
+        app.MapPost("/api/rollback", (RollbackRequest? req) =>
+        {
+            if (o.ProjectRoot is null)
+                return Results.BadRequest(new { error = "当前未设置工程根（CLI 执行 use <路径> 后才有回滚作用域）。" });
+            var taskId = req?.TaskId?.Trim();
+            if (string.IsNullOrWhiteSpace(taskId))
+                return Results.BadRequest(new { error = "taskId 为空。" });
+            var (restored, removedNew) =
+                BackupService.RollbackTaskFull(o.WorkspaceRoot, o.ProjectRoot, taskId);
+            return Results.Json(new { taskId, restored, removedNew }, JsonOpts);
+        });
+
+        // ── Diff：备份 vs 当前（直接序列化引擎模型，无 DTO）──
+        // 10-08 Monaco DiffEditor：额外附 original/modified 全文（仅非 tooLarge；超大文件回退红绿行文本视图）。
+        app.MapGet("/api/diff", (string taskId, string rel, CancellationToken ct) =>
+        {
+            if (o.ProjectRoot is null)
+                return Results.BadRequest(new { error = "未设置工程根，diff 不可用。" });
+            (string TaskId, string Stamp, string Rel, string Full)? backup = null;
+            foreach (var b in BackupService.ListBackups(o.WorkspaceRoot))
+            {
+                if (string.Equals(b.TaskId, taskId, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(b.Rel, rel, StringComparison.OrdinalIgnoreCase))
+                {
+                    backup = b;
+                    break;
+                }
+            }
+            if (backup is null)
+                return Results.NotFound(new { error = $"任务 {taskId} 无文件 {rel} 的备份。" });
+            var current = Path.Combine(o.ProjectRoot, backup.Value.Rel);
+            var result = FileDiffService.Compute(backup.Value.Full, current);
+            string? originalText = null, modifiedText = null;
+            if (!result.TooLarge)
+            {
+                // backup.Value.Full 是备份文件路径（ListBackups 返回 Full=完整路径）——须 ReadAllText 取全文
+                originalText = File.ReadAllText(backup.Value.Full);
+                modifiedText = File.Exists(current) ? File.ReadAllText(current) : "";
+            }
+            return Results.Json(new { original = originalText, modified = modifiedText, diff = result }, JsonOpts);
+        });
+    }
+
+    // ── 文件组（10-14 P3-3）：任务产物浏览 + 工程依赖图谱 ──
+    private static void MapFileEndpoints(WebApplication app, DashboardOptions o,
+        Agent.Infrastructure.Project.SymbolIndexStore symbolStore)
+    {
+        // ── 任务产物浏览（10-08 ①）：run 工作目录文件浏览 + 文本预览 + 下载 ──
+        // 限定在 WorkspaceRoot 内（PathBoundary 逐段判定，杜绝 .. 跳脱/前缀误判）。
+        // path 为空 → 根 children；path 为目录 → children；path 为文本文件 → {file:true, content 前 50KB}；
+        // 二进制 → {file:true, text:false}；raw=true → 文件下载（octet-stream + 下载名）。
+        // 越界 → 400；不存在 → 404。数据源 = 磁盘真实文件（任务产物），非内存镜像——单一来源。
+        app.MapGet("/api/files", (string? path, bool? raw) =>
+        {
+            var root = PathBoundary.Normalize(o.WorkspaceRoot);
+            var full = string.IsNullOrWhiteSpace(path)
+                ? root
+                : PathBoundary.Normalize(Path.Combine(root, path.TrimStart('/', '\\')));
+            if (!PathBoundary.IsInside(root, full))
+                return Results.Json(new { error = "路径越界。" }, JsonOpts, statusCode: 400);
+            var rel = full == root ? "" : (full.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+                ? full.Substring(root.Length).TrimStart('\\') : Path.GetFileName(full));
+            if (Directory.Exists(full))
+            {
+                var children = Directory.EnumerateFileSystemEntries(full)
+                    .Select(p => new
+                    {
+                        name = Path.GetFileName(p),
+                        isDir = Directory.Exists(p),
+                        size = File.Exists(p) ? new FileInfo(p).Length : (long?)null,
+                        modifiedAt = File.Exists(p)
+                            ? (DateTimeOffset?)new FileInfo(p).LastWriteTimeUtc : null,
+                    })
+                    .OrderByDescending(c => c.isDir)
+                    .ThenBy(c => c.name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                return Results.Json(new { path = rel, isDir = true, children }, JsonOpts);
+            }
+            if (File.Exists(full))
+            {
+                var fi = new FileInfo(full);
+                if (raw == true)
+                    return Results.File(fi.FullName, "application/octet-stream", fi.Name);
+                var isText = IsTextFile(fi.Name);
+                return Results.Json(new
+                {
+                    path = rel, isDir = false, size = fi.Length, text = isText,
+                    content = isText ? PreviewText(fi.FullName) : null,
+                }, JsonOpts);
+            }
+            return Results.Json(new { error = "路径不存在。" }, JsonOpts, statusCode: 404);
         });
 
         // ── 工程依赖图谱（10-07 UI 层 #3）：全工程边概览 / 单文件直接+反向依赖 ──
@@ -395,7 +398,59 @@ public static class DashboardHost
             var reverse = DependencyAnalyzer.GetReverseDependencies(norm, graph.Edges);
             return Results.Json(new { direct, reverse }, JsonOpts);
         });
+    }
 
+    // ── 事件组（10-14 P3-3）：任务详情回放 + SSE 实时流（两侧同源，勿再分叉）──
+    private static void MapEventEndpoints(WebApplication app, DashboardOptions o)
+    {
+        // ── 任务详情回放：完整事件序列（10-07 UI 层 #1/#2；10-10 P0 补 type）──
+        // AgentEvent 为 C# record，序列化无 type 判别字段——SSE/回放双出口统一补
+        // wire type 短名（源头隔离，前端单一渲染函数直接消费，消双路径漂移）。
+        // 返回平铺事件数组 [{type:"thinking"|"toolCall"|…, ...payload}]；无事件 → 空数组。
+        app.MapGet("/api/tasks/{taskId}/events", (string taskId) =>
+        {
+            var list = o.EventStore.GetEventsAsync(taskId);
+            var arr = new System.Text.Json.Nodes.JsonArray();
+            foreach (var s in list)
+            {
+                var node = System.Text.Json.Nodes.JsonNode.Parse(s.Payload);
+                if (node is System.Text.Json.Nodes.JsonObject jo)
+                {
+                    jo.Insert(0, "type", WireType(s.Type));
+                    arr.Add(jo);
+                }
+            }
+            return Results.Json(arr, JsonOpts);
+        });
+
+        // ── SSE：当前任务实时事件流（每订阅者 BoundedChannel 1000 DropOldest）──
+        app.MapGet("/events", async (HttpContext ctx, CancellationToken ct) =>
+        {
+            ctx.Response.Headers.ContentType = "text/event-stream";
+            ctx.Response.Headers.CacheControl = "no-cache";
+            ctx.Response.Headers.Connection = "keep-alive";
+            var (reader, handle) = o.Hub.Subscribe();
+            using (handle)
+            {
+                await foreach (var evt in reader.ReadAllAsync(ct))
+                {
+                    // 【10-14 P2-2 同源】与回放/存储完全相同的序列化路径：Serialize(evt, GetType(), JsonOpts)
+                    // + 首位补 wire type。原实现走 ToWire 手工匿名对象（34 行）——record 新增字段时
+                    // 回放能看到、SSE 看不到，同一任务两视图悄悄分叉（机制不对称 = 漂移温床）。
+                    var node = JsonSerializer.SerializeToNode(evt, evt.GetType(), JsonOpts)
+                        as System.Text.Json.Nodes.JsonObject;
+                    if (node is null) continue;
+                    node.Insert(0, "type", WireType(evt.GetType().Name));
+                    await ctx.Response.WriteAsync($"data: {node.ToJsonString(JsonOpts)}\n\n", ct);
+                    await ctx.Response.Body.FlushAsync(ct);
+                }
+            }
+        });
+    }
+
+    // ── 命令组（10-14 P3-3）：web 命令汇入 CLI 主循环通道 + 队列/取消/归属 ──
+    private static void MapCommandEndpoints(WebApplication app, DashboardOptions o)
+    {
         // ── 命令提交（10-07 webUI 交互）：web 命令汇入 CLI 主循环命令通道 ──
         // 终端输入与 web 提交统一排队（CommandHub 有界 100 DropOldest）——一次一任务串行语义不变。
         // 空输入/超限 → 400；通道满 → 429；成功 → 202 {queued:true, seq, pending}。
@@ -436,30 +491,6 @@ public static class DashboardHost
             return seq == 0 || input is null
                 ? Results.Json(new { running = false }, JsonOpts)
                 : Results.Json(new { running = true, seq, input }, JsonOpts);
-        });
-
-        // ── SSE：当前任务实时事件流（每订阅者 BoundedChannel 1000 DropOldest）──
-        app.MapGet("/events", async (HttpContext ctx, CancellationToken ct) =>
-        {
-            ctx.Response.Headers.ContentType = "text/event-stream";
-            ctx.Response.Headers.CacheControl = "no-cache";
-            ctx.Response.Headers.Connection = "keep-alive";
-            var (reader, handle) = o.Hub.Subscribe();
-            using (handle)
-            {
-                await foreach (var evt in reader.ReadAllAsync(ct))
-                {
-                    // 【10-14 P2-2 同源】与回放/存储完全相同的序列化路径：Serialize(evt, GetType(), JsonOpts)
-                    // + 首位补 wire type。原实现走 ToWire 手工匿名对象（34 行）——record 新增字段时
-                    // 回放能看到、SSE 看不到，同一任务两视图悄悄分叉（机制不对称 = 漂移温床）。
-                    var node = JsonSerializer.SerializeToNode(evt, evt.GetType(), JsonOpts)
-                        as System.Text.Json.Nodes.JsonObject;
-                    if (node is null) continue;
-                    node.Insert(0, "type", WireType(evt.GetType().Name));
-                    await ctx.Response.WriteAsync($"data: {node.ToJsonString(JsonOpts)}\n\n", ct);
-                    await ctx.Response.Body.FlushAsync(ct);
-                }
-            }
         });
     }
 
