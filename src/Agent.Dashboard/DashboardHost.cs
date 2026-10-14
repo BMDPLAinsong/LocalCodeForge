@@ -344,44 +344,55 @@ public static class DashboardHost
         // ── 工程依赖图谱（10-07 UI 层 #3）：全工程边概览 / 单文件直接+反向依赖 ──
         // 无 path → { files, edges, topReverse }（改动风险 Top5）；path=相对文件 → { direct, reverse }。
         // 与 find_symbol/analyze_deps 同一 symbol_index.db + DependencyAnalyzer 引擎（单一来源，无 DTO）。
-        app.MapGet("/api/deps", (string? path) =>
+        app.MapGet("/api/deps", async (string? path, CancellationToken ct) =>
         {
             if (o.ProjectRoot is null)
                 return Results.BadRequest(new { error = "未设置工程根（CLI 执行 use <路径> 后刷新），依赖图谱不可用。" });
             var store = symbolStore;
-            try
+            ct.ThrowIfCancellationRequested();
+
+            DepGraph graph;
+            if (!TryGetCachedGraph(o.ProjectRoot, out graph!))
             {
-                if (!store.HasIndex(o.ProjectRoot))
+                try
                 {
-                    if (store.BuildAndSave(o.ProjectRoot) == 0)
-                        return Results.Ok(new { files = Array.Empty<string>(), edges = Array.Empty<object>(), topReverse = Array.Empty<object>(), direct = Array.Empty<string>(), reverse = Array.Empty<string>() });
+                    if (!store.HasIndex(o.ProjectRoot))
+                    {
+                        if (store.BuildAndSave(o.ProjectRoot) == 0)
+                            return Results.Ok(new { files = Array.Empty<string>(), edges = Array.Empty<object>(), topReverse = Array.Empty<object>(), direct = Array.Empty<string>(), reverse = Array.Empty<string>() });
+                    }
+                    else
+                    {
+                        store.BuildAndSaveIncremental(o.ProjectRoot);
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    store.BuildAndSaveIncremental(o.ProjectRoot);
+                    return Results.BadRequest(new { error = $"符号索引失败：{ex.Message}" });
                 }
+                ct.ThrowIfCancellationRequested();   // 索引/边计算为同步 CPU+IO，节点间检查取消
+                var symbols = store.GetAll(o.ProjectRoot);
+                var edges = DependencyAnalyzer.Build(o.ProjectRoot, symbols);
+                var files = edges.Select(e => e.File).Concat(edges.Select(e => e.DependsOnFile))
+                    .Distinct().OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+                graph = new DepGraph(files, edges);
+                SetCachedGraph(o.ProjectRoot, graph);
             }
-            catch (Exception ex)
-            {
-                return Results.BadRequest(new { error = $"符号索引失败：{ex.Message}" });
-            }
-            var symbols = store.GetAll(o.ProjectRoot);
-            var edges = DependencyAnalyzer.Build(o.ProjectRoot, symbols);
-            var files = edges.Select(e => e.File).Concat(edges.Select(e => e.DependsOnFile)).Distinct().OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+
             if (string.IsNullOrWhiteSpace(path))
             {
-                var topReverse = files
-                    .Select(f => (File: f, Count: DependencyAnalyzer.GetReverseDependencies(f, edges).Count))
+                var topReverse = graph.Files
+                    .Select(f => (File: f, Count: DependencyAnalyzer.GetReverseDependencies(f, graph.Edges).Count))
                     .Where(x => x.Count > 0)
                     .OrderByDescending(x => x.Count).ThenBy(x => x.File, StringComparer.OrdinalIgnoreCase)
                     .Take(5)
                     .Select(x => new { file = x.File, count = x.Count })
                     .ToList();
-                return Results.Json(new { files, edges, topReverse }, JsonOpts);
+                return Results.Json(new { files = graph.Files, edges = graph.Edges, topReverse }, JsonOpts);
             }
             var norm = path.Replace('\\', '/');
-            var direct = DependencyAnalyzer.GetDirectDependencies(norm, edges);
-            var reverse = DependencyAnalyzer.GetReverseDependencies(norm, edges);
+            var direct = DependencyAnalyzer.GetDirectDependencies(norm, graph.Edges);
+            var reverse = DependencyAnalyzer.GetReverseDependencies(norm, graph.Edges);
             return Results.Json(new { direct, reverse }, JsonOpts);
         });
 
@@ -438,9 +449,14 @@ public static class DashboardHost
             {
                 await foreach (var evt in reader.ReadAllAsync(ct))
                 {
-                    // P0 修复：record 序列化无 type，此处补 wire type（与回放端点同一映射）
-                    var json = JsonSerializer.Serialize(ToWire(evt), JsonOpts);
-                    await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
+                    // 【10-14 P2-2 同源】与回放/存储完全相同的序列化路径：Serialize(evt, GetType(), JsonOpts)
+                    // + 首位补 wire type。原实现走 ToWire 手工匿名对象（34 行）——record 新增字段时
+                    // 回放能看到、SSE 看不到，同一任务两视图悄悄分叉（机制不对称 = 漂移温床）。
+                    var node = JsonSerializer.SerializeToNode(evt, evt.GetType(), JsonOpts)
+                        as System.Text.Json.Nodes.JsonObject;
+                    if (node is null) continue;
+                    node.Insert(0, "type", WireType(evt.GetType().Name));
+                    await ctx.Response.WriteAsync($"data: {node.ToJsonString(JsonOpts)}\n\n", ct);
                     await ctx.Response.Body.FlushAsync(ct);
                 }
             }
@@ -458,33 +474,55 @@ public static class DashboardHost
 
     // ── P0 事件 wire type（10-10）：AgentEvent 是 record，JSON 无 type 判别字段；
     //    SSE 与回放双出口用同一映射补短名（前端渲染单一入口消费）。
-    //    .NET 类名 → wire 短名；未知类名兜底原样（不吞）。
-    private static readonly Dictionary<string, string> WireTypeMap = new(StringComparer.Ordinal)
+    // 【10-14 P2-2】映射来源改为 Agent.Core 的 [WireName] 特性反射构建（原 nameof 手工表 8 项：
+    // 新增/重命名事件需手工同步两处，漏改则两视图不一致）。.NET 类名 → wire 短名；
+    // 未标记/未知类名兜底原样（不吞）。原 ToWire（34 行手工匿名对象）已删——SSE 与回放
+    // 现共用"序列化 + 补 type"同一条路径，record 加字段两视图同步可见。
+    private static readonly Dictionary<string, string> WireTypeMap = BuildWireTypeMap();
+
+    private static Dictionary<string, string> BuildWireTypeMap()
     {
-        [nameof(Agent.Core.Models.AgentEvent.Thinking)] = "thinking",
-        [nameof(Agent.Core.Models.AgentEvent.ToolCall)] = "toolCall",
-        [nameof(Agent.Core.Models.AgentEvent.ToolResultEvent)] = "toolResultEvent",
-        [nameof(Agent.Core.Models.AgentEvent.FinalAnswer)] = "finalAnswer",
-        [nameof(Agent.Core.Models.AgentEvent.Error)] = "error",
-        [nameof(Agent.Core.Models.AgentEvent.Routing)] = "routing",
-        [nameof(Agent.Core.Models.AgentEvent.PlanGenerated)] = "planGenerated",
-        [nameof(Agent.Core.Models.AgentEvent.FileWritten)] = "fileWritten",
-    };
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var t in typeof(Agent.Core.Models.AgentEvent).GetNestedTypes())
+        {
+            var attr = t.GetCustomAttributes(typeof(Agent.Core.Models.WireNameAttribute), inherit: false)
+                .OfType<Agent.Core.Models.WireNameAttribute>()
+                .FirstOrDefault();
+            map[t.Name] = attr?.Name ?? t.Name;
+        }
+        return map;
+    }
+
     private static string WireType(string typeName) =>
         WireTypeMap.TryGetValue(typeName, out var w) ? w : typeName;
 
-    private static object ToWire(Agent.Core.Models.AgentEvent evt) => evt switch
+    // ── 【P2-4】依赖图缓存（30s TTL）：原 /api/deps 每次请求都"增量索引检查 + 全量依赖边重算"，
+    //    前端刷新/轮询即重算（51 文件毫秒级，工程变大后线性恶化）。TTL 内复用同一份图；
+    //    键为工程根（换 use 目标自动切换），条目上限 8（CLI 会话内项目数有限，超限整体清空）。
+    private sealed record DepGraph(List<string> Files, List<DependencyEdge> Edges);
+
+    private static readonly TimeSpan DepGraphTtl = TimeSpan.FromSeconds(30);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTimeOffset At, DepGraph Graph)> DepGraphCache = new();
+
+    private static bool TryGetCachedGraph(string projectRoot, out DepGraph graph)
     {
-        Agent.Core.Models.AgentEvent.Thinking e => new { type = "thinking", text = e.Text },
-        Agent.Core.Models.AgentEvent.ToolCall e => new { type = "toolCall", name = e.Name, args = e.Args },
-        Agent.Core.Models.AgentEvent.ToolResultEvent e => new { type = "toolResultEvent", name = e.Name, output = e.Output, success = e.Success },
-        Agent.Core.Models.AgentEvent.FinalAnswer e => new { type = "finalAnswer", text = e.Text },
-        Agent.Core.Models.AgentEvent.Error e => new { type = "error", message = e.Message },
-        Agent.Core.Models.AgentEvent.Routing e => new { type = "routing", serviceId = e.ServiceId, tier = e.Tier, reason = e.Reason, intent = e.Intent },
-        Agent.Core.Models.AgentEvent.PlanGenerated e => new { type = "planGenerated", summary = e.Summary, language = e.Language, filePaths = e.FilePaths },
-        Agent.Core.Models.AgentEvent.FileWritten e => new { type = "fileWritten", path = e.Path, size = e.Size },
-        _ => new { type = WireType(evt.GetType().Name) },
-    };
+        graph = null!;
+        if (!DepGraphCache.TryGetValue(projectRoot, out var hit)) return false;
+        if (DateTimeOffset.UtcNow - hit.At > DepGraphTtl)
+        {
+            DepGraphCache.TryRemove(projectRoot, out _);
+            return false;
+        }
+        graph = hit.Graph;
+        return true;
+    }
+
+    private static void SetCachedGraph(string projectRoot, DepGraph graph)
+    {
+        if (DepGraphCache.Count > 8) DepGraphCache.Clear();
+        DepGraphCache[projectRoot] = (DateTimeOffset.UtcNow, graph);
+    }
 
     private sealed record EpochBreakdown(
         Agent.Infrastructure.Routing.ServiceStats Current,

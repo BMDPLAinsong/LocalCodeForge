@@ -221,35 +221,20 @@ public sealed class SymbolIndexStore
 
         using var conn = new SqliteConnection(_connectionString);
         conn.Open();
-        using var del = conn.CreateCommand();
-        del.CommandText = "DELETE FROM symbol_index WHERE project_root = $k;";
-        del.Parameters.AddWithValue("$k", key);
-        del.ExecuteNonQuery();
-
-        using var tx = conn.BeginTransaction();
-        using var ins = conn.CreateCommand();
-        ins.CommandText = """
-            INSERT INTO symbol_index (project_root, symbol, file, line, kind, file_mtime)
-            VALUES ($k, $s, $f, $l, $k2, $m);
-        """;
-        var pk = ins.Parameters.Add("$k", SqliteType.Text);
-        var ps = ins.Parameters.Add("$s", SqliteType.Text);
-        var pf = ins.Parameters.Add("$f", SqliteType.Text);
-        var pl = ins.Parameters.Add("$l", SqliteType.Integer);
-        var pk2 = ins.Parameters.Add("$k2", SqliteType.Text);
-        var pm = ins.Parameters.Add("$m", SqliteType.Integer);
-
-        foreach (var (e, mtime) in fileEntries)
+        using (var del = conn.CreateCommand())
         {
-            pk.Value = key;
-            ps.Value = e.Symbol;
-            pf.Value = e.File;
-            pl.Value = e.Line;
-            pk2.Value = e.Kind;
-            pm.Value = mtime;
-            ins.ExecuteNonQuery();
+            del.CommandText = "DELETE FROM symbol_index WHERE project_root = $k;";
+            del.Parameters.AddWithValue("$k", key);
+            del.ExecuteNonQuery();
         }
-        tx.Commit();
+
+        // 【10-14 P2-5 批量插入】单事务内按批 multi-VALUES 插入（每批 ≤100 行 = 600 参数，远低于
+        // SQLite 变量上限）——原逐行 ExecuteNonQuery 对 300 文件工程持锁上千次。
+        using (var tx = conn.BeginTransaction())
+        {
+            InsertBatch(conn, tx, key, fileEntries);
+            tx.Commit();
+        }
         return fileEntries.Count;
     }
 
@@ -304,24 +289,11 @@ public sealed class SymbolIndexStore
             var entries = SymbolIndexer.BuildFile(full, relPath);
             if (entries.Count > 0)
             {
-                using var ins = conn.CreateCommand();
-                ins.Transaction = tx;
-                ins.CommandText = """
-                    INSERT INTO symbol_index (project_root, symbol, file, line, kind, file_mtime)
-                    VALUES ($k, $s, $f, $l, $k2, $m);
-                """;
-                var pk = ins.Parameters.Add("$k", SqliteType.Text);
-                var ps = ins.Parameters.Add("$s", SqliteType.Text);
-                var pf = ins.Parameters.Add("$f", SqliteType.Text);
-                var pl = ins.Parameters.Add("$l", SqliteType.Integer);
-                var pk2 = ins.Parameters.Add("$k2", SqliteType.Text);
-                var pm = ins.Parameters.Add("$m", SqliteType.Integer);
+                // 【10-14 P2-5】按文件批插（单文件符号数通常 <100 → 单次 ExecuteNonQuery）
+                var rows = new List<(SymbolEntry, long)>(entries.Count);
                 foreach (var e in entries)
-                {
-                    pk.Value = key; ps.Value = e.Symbol; pf.Value = relPath;
-                    pl.Value = e.Line; pk2.Value = e.Kind; pm.Value = mtime;
-                    ins.ExecuteNonQuery();
-                }
+                    rows.Add((e, mtime));
+                InsertBatch(conn, tx, key, rows);
             }
             rescanned++;
         }
@@ -350,6 +322,43 @@ public sealed class SymbolIndexStore
             total = Convert.ToInt64(cnt.ExecuteScalar());
         }
         return ((int)total, rescanned);
+    }
+
+    /// <summary>
+    /// 【10-14 P2-5】批量插入符号行：按批拼 multi-VALUES INSERT，单次 ExecuteNonQuery。
+    /// 分批 100 行 = 600 参数（SQLite 变量上限保守取值）；全量与增量两条路径共用此实现。
+    /// </summary>
+    private static void InsertBatch(SqliteConnection conn, SqliteTransaction tx, string key,
+        IReadOnlyList<(SymbolEntry Entry, long Mtime)> rows)
+    {
+        const int batchSize = 100;
+        for (var offset = 0; offset < rows.Count; offset += batchSize)
+        {
+            var take = Math.Min(batchSize, rows.Count - offset);
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            var sb = new System.Text.StringBuilder(
+                "INSERT INTO symbol_index (project_root, symbol, file, line, kind, file_mtime) VALUES ");
+            for (var i = 0; i < take; i++)
+            {
+                if (i > 0) sb.Append(',');
+                var b = i * 6;
+                sb.Append($"($k{b}, $s{b}, $f{b}, $l{b}, $k2{b}, $m{b})");
+            }
+            cmd.CommandText = sb.ToString();
+            for (var i = 0; i < take; i++)
+            {
+                var (e, mtime) = rows[offset + i];
+                var b = i * 6;
+                cmd.Parameters.AddWithValue($"$k{b}", key);
+                cmd.Parameters.AddWithValue($"$s{b}", e.Symbol);
+                cmd.Parameters.AddWithValue($"$f{b}", e.File);
+                cmd.Parameters.AddWithValue($"$l{b}", e.Line);
+                cmd.Parameters.AddWithValue($"$k2{b}", e.Kind);
+                cmd.Parameters.AddWithValue($"$m{b}", mtime);
+            }
+            cmd.ExecuteNonQuery();
+        }
     }
 
     private void DeleteProject(string key)

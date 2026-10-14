@@ -32,6 +32,35 @@ public static class Suites_Dashboard
             reader2.TryRead(out first);
             Check("退订后不再接收（第二个订阅者不受影响）", first is Agent.Core.Models.AgentEvent.Thinking && (first as Agent.Core.Models.AgentEvent.Thinking)!.Text == "t2");
 
+            // ── 1b. 【10-14 P2-2】wire 短名随类型声明（[WireName]）+ SSE/回放同源序列化 ──
+            // ① 锁 wire 名：前端按短名分派渲染，短名漂移 = 事件渲染不出来
+            var wireNames = new (Type T, string Name)[]
+            {
+                (typeof(Agent.Core.Models.AgentEvent.Thinking), "thinking"),
+                (typeof(Agent.Core.Models.AgentEvent.ToolCall), "toolCall"),
+                (typeof(Agent.Core.Models.AgentEvent.ToolResultEvent), "toolResultEvent"),
+                (typeof(Agent.Core.Models.AgentEvent.FinalAnswer), "finalAnswer"),
+                (typeof(Agent.Core.Models.AgentEvent.Error), "error"),
+                (typeof(Agent.Core.Models.AgentEvent.Routing), "routing"),
+                (typeof(Agent.Core.Models.AgentEvent.PlanGenerated), "planGenerated"),
+                (typeof(Agent.Core.Models.AgentEvent.FileWritten), "fileWritten"),
+            };
+            Check("P2-2 wire 短名：8 类事件 [WireName] 标注齐全且与前端契约一致",
+                wireNames.All(x => x.T.GetCustomAttributes(typeof(Agent.Core.Models.WireNameAttribute), false)
+                    .OfType<Agent.Core.Models.WireNameAttribute>().FirstOrDefault()?.Name == x.Name));
+            // ② 锁同源序列化：SSE 现走"Serialize(evt, GetType(), TaskEventStore.JsonOpts) + 宿主补 type"
+            //    （原为 ToWire 手工匿名对象 34 行——record 加字段时回放可见、SSE 不可见的分叉温床）
+            var sseNode = JsonSerializer.SerializeToNode(
+                new Agent.Core.Models.AgentEvent.ToolResultEvent("write_file", "ok", true),
+                typeof(Agent.Core.Models.AgentEvent.ToolResultEvent),
+                Agent.Infrastructure.Events.TaskEventStore.JsonOpts) as System.Text.Json.Nodes.JsonObject;
+            Check("P2-2 SSE 同源序列化：ToolResultEvent → {name,output,success} 且 type 由宿主补",
+                sseNode is not null
+                && (string?)sseNode["name"] == "write_file"
+                && (string?)sseNode["output"] == "ok"
+                && (bool?)sseNode["success"] == true
+                && !sseNode.ContainsKey("type"));
+
             // ── 2. TaskEventStore：记录 → 读取（seq 升序）→ Prune 清理 → JsonOpts 单一来源 ──
             var ws2 = Path.Combine(Path.GetTempPath(), "store_smoke_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(ws2);
