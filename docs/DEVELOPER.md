@@ -59,7 +59,7 @@
 | 核心依赖 | Microsoft.SemanticKernel 1.80.1 + SK OpenAI Connector（走 Ollama `/v1` 兼容端点，全本地）+ Microsoft.Data.Sqlite                                                               |
 | 模型   | Ollama：classifier=`qwen2.5:1.5b`；small/large/agent\_pro 三角色全部 = `law-unified`（30B Qwen3-Coder-A3B，同 tag 单驻，请求级 temperature 区分：small 0.3 /agent\_pro 0.5 /large 0.7） |
 | 版本控制 | 本机 git 仓库（main，100+ commits）；远端 `origin` = GitHub（BMDPLAinsong/LocalAiWorkbench，**推送按用户要求暂缓进行中**）                                              |
-| 测试   | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，**831/831**，`dotnet run --project` 一键回归）                                                                           |
+| 测试   | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，**864/864**，`dotnet run --project` 一键回归）                                                                           |
 | 数据落盘 | `workspace/`：sessions.db、runs/、project\_context.db、agent\_memory.db、symbol\_index.db、test-tmp/、e2e/。**边界（10-14 F1）**：`SqliteConnection` 默认连接池在方法返回后仍持有 db 文件句柄——进程持有 store 期间**不要删除 workspace 目录**（测试夹具已因此改为"库文件放在待删目录之外"） |
 
 ### 1.1 三层项目结构
@@ -71,6 +71,12 @@
 | `src/Agent.Core`           | 抽象接口（IAgentLoop/IAgentTool/IToolRegistry/ISessionStore）+ 纯模型（AgentOptions/AgentEvent/Plan/TaskMetric/SystemPrompt 等），零依赖 | 无                     |
 | `src/Agent.Infrastructure` | **全部实现**：AgentLoop、Orchestration、Routing、Project、Tools、Metrics、Memory、Quality、Session、Ollama                             | Core + SK + Sqlite    |
 | `src/Agent.Cli`            | 控制台入口：交互循环、命令分发（use/plan/orch/stats/memory/rollback）、事件渲染、健康检查、run 目录清理、任务归档                                             | Core + Infrastructure |
+
+### 1.2 工程增量编排判定（10-15 变体实证）
+
+- `TaskClassifier.ShouldOrchestrate(input, inProjectWriteMode)`：**工程可写模式（use --write）+ 输入含文件引用（如 "…接入 Program.cs"）= 工程增量任务 → 走 Planner 编排**（新增类+改入口+验证闭环）；非工程可写（沙箱）下文件引用任务走 AgentLoop（read_file/edit_file 处理单文件）。历史教训：5.5 文件引用规则曾把引用 Program.cs 的工程增量误拦出编排 → 模型裸奔直连 AgentLoop → 读文件后连续空响应终止。
+- **工程增量验证语义**：编译/运行验证命令（`dotnet run/build/test`、python、node）的 expected_output 为 advisory——Planner 自产期望无工程数据基准（实证真实 1.03 vs 计划 100.00），跳过精确断言；退出码/stderr/结构性错误/失败信号检查保留。
+- **E2E 增量用例集**（`scripts/e2e/e2e.ps1`）：数据驱动 4 用例（新类复用两服务 / 修改既有方法 / 新类调服务链 / 静态工具类），完成场景断言写入保留 + 预期产物存在；"受控失败（安全网回滚）"= 模型失败但回滚健康，PASS 仅表示基础设施无回归。
 
 
 
