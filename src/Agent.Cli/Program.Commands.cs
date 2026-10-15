@@ -46,7 +46,7 @@ internal partial class Program
         renderer.System(
             "命令：use [--write] <路径>（工程模式/可写） | stats [failures|recent] | " +
             "memory [list [N]|stats|forget <topic>|prune|dedup] | rollback [--dry-run] | " +
-            "plan <需求> | orch <需求> | dashboard（web UI；交互终端启动即自动起并开浏览器） | " +
+            "plan <需求> | orch <需求> | dashboard（主交互入口 Web UI；交互终端启动即自动起并开浏览器） | " +
             "new（新会话） | exit（退出） | help");
     }
 

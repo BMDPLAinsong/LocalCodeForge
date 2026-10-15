@@ -39,7 +39,7 @@ dotnet run --project src\Agent.Cli\Agent.Cli.csproj
 > add a ShippingService class that reuses TaxService and DiscountService, wire it into Program.cs
 ```
 
-The CLI launches a local web dashboard (loopback + token) with live task streams, stats, history, backup diff and rollback.
+The **web dashboard is the primary interaction surface**: the CLI auto-launches it on startup (loopback + token) and opens your browser, with live task streams, stats, history, backup diff, rollback and one-click rerun. The CLI itself stays as a fallback (pipeline/headless safe) — every command keeps working.
 
 ---
 

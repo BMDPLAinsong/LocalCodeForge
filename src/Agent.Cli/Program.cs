@@ -346,7 +346,7 @@ internal partial class Program
         {
             var autoUrl = await StartDashboardAsync(silentIfRunning: true);
             if (autoUrl is not null)
-                renderer.Notice($"Dashboard 已自动启动（仅本机回环 + token 鉴权）：[link]{autoUrl}[/]\n  浏览器已自动打开（失败可手动复制上方 URL）；任务实时流 / stats / 历史任务 / 备份 Diff / 回滚 / 任务详情回放");
+                renderer.Notice($"主交互入口：Web Dashboard（已自动启动，仅本机回环 + token 鉴权）：[link]{autoUrl}[/]\n  浏览器已自动打开（失败可手动复制上方 URL）；任务实时流 / stats / 历史任务 / 备份 Diff / 回滚 / 任务详情回放\n  CLI 保留兜底：use/stats/memory/rollback/plan/orch/new/exit/help 照常可用");
         }
 
         // 【10-12 IME 兼容修复】交互态读行改回 Console.ReadLine()（原生行编辑）。
