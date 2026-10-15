@@ -539,8 +539,19 @@ const TOKEN = new URLSearchParams(location.search).get("token") || "";
   window.fetch = (input, init) => {
     const u = (typeof input === "string") ? input : input.url;
     const nu = TOKEN ? u + (u.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN) : u;
-    return origFetch(nu, init);
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 12000);   // 12s 超时：杜绝 fetch 永久 pending
+    return origFetch(nu, Object.assign({}, init, { signal: ctl.signal })).finally(() => clearTimeout(timer));
   };
+}
+// ── 网络失败/超时统一转伪响应：既有 `!r.ok` 分支接管错误展示（消除"加载中…"永久卡死）──
+async function wrapFetch(url) {
+  try { return await fetch(url); }
+  catch (err) { return { ok: false, status: (err && err.name === "AbortError") ? "连接超时" : "连接失败" }; }
+}
+if (!TOKEN) {
+  const s = document.getElementById("sub");
+  if (s) s.textContent = "未授权：URL 缺少 token（请从 CLI 打印的完整 URL 打开）";
 }
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
@@ -892,7 +903,7 @@ function loadDeps() {
         for (const t of data.topReverse) html += `<tr><td>${esc(t.file)}</td><td>${t.count}</td></tr>`;
         html += `</table><div class="dim" style="margin-top:6px">改动这些文件会波及最多其他文件——多文件修改前先查影响面。</div>`;
       } else {
-        html += emptyState("暂无类型级依赖边", "符号索引为空，或工程内没有可索引的代码定义。CLI 执行 use <路径> 后点"加载"重建索引。");
+        html += emptyState("暂无类型级依赖边", "符号索引为空，或工程内没有可索引的代码定义。CLI 执行 use <路径> 后点「加载」重建索引。");
       }
       dep.innerHTML = html;
       if (sel.value) loadFileDeps(sel.value);
@@ -1008,7 +1019,8 @@ function openStream() {
     dot.className = "dot " + (evt.type === "error" ? "yellow" : "green");
     $("sub").textContent = "运行目录：" + (evt.type === "toolCall" ? "任务执行中…" : "在线");
   };
-  es.onerror = () => { const dot = $("liveDot"); dot.className = "dot yellow"; /* 无任务事件时 SSE 保持连接；错误自动重连 */ };
+  es.onopen = () => { const dot = $("liveDot"); dot.className = "dot green"; $("sub").textContent = "在线（实时流已连接）"; };
+  es.onerror = () => { const dot = $("liveDot"); dot.className = "dot yellow"; $("sub").textContent = "实时流连接异常（自动重连中…）"; };
 }
 
 // ── 任务详情回放（10-07 UI 层 #2；10-10 ① 分组渲染）──
@@ -1044,7 +1056,7 @@ async function showTaskEvents(taskId) {
 
 // ── stats ──
 async function fetchStats() {
-  const r = await fetch("/api/stats");
+  const r = await wrapFetch("/api/stats");
   if (!r.ok) { $("stats").innerHTML = emptyState("统计不可用", "请求 /api/stats 返回 " + r.status + "。", { err: true, action: `<button class="btn" onclick="fetchStats()">重试</button>` }); return; }
   const d = await r.json();
   const s = d.summary;
@@ -1107,7 +1119,7 @@ async function fetchStats() {
 async function fetchTasks() {
   const q = encodeURIComponent(($("taskQ") ? $("taskQ").value : "").trim() || "");
   const st = encodeURIComponent(($("taskStatus") ? $("taskStatus").value : "") || "");
-  const r = await fetch(`/api/tasks?take=50&q=${q}&status=${st}`);
+  const r = await wrapFetch(`/api/tasks?take=50&q=${q}&status=${st}`);
   if (!r.ok) { $("tasks").innerHTML = emptyState("历史任务不可用", "请求 /api/tasks 返回 " + r.status + "。", { err: true, action: `<button class="btn" onclick="fetchTasks()">重试</button>` }); return; }
   const list = await r.json();
   if (!list.length) {
@@ -1162,7 +1174,7 @@ async function rerunTask(input) {
 
 // ── 路由调权状态（10-07：与终端 stats 小节同语义，阈值来自 AgentOptions.Routing*）──
 async function fetchTuning() {
-  const r = await fetch("/api/tuning");
+  const r = await wrapFetch("/api/tuning");
   if (!r.ok) { $("tuning").innerHTML = `<div class="empty">tuning 不可用（${r.status}）</div>`; return; }
   const d = await r.json();
   const pct = (v) => (v * 100).toFixed(0) + "%";
@@ -1180,7 +1192,7 @@ async function fetchTuning() {
 
 // ── 记忆（10-07：agent_memory.db 列表 + 统计）──
 async function fetchMemory() {
-  const r = await fetch("/api/memory?take=50");
+  const r = await wrapFetch("/api/memory?take=50");
   if (!r.ok) { $("memory").innerHTML = `<div class="empty">memory 不可用（${r.status}）</div>`; return; }
   const d = await r.json();
   if (!d.rows.length) { $("memory").innerHTML = `<div class="empty">暂无记忆（模型使用 remember 工具 / 失败教训自动归档后出现）</div>`; return; }
@@ -1196,7 +1208,7 @@ async function fetchMemory() {
 // ── 备份 + Diff ──
 let backups = [];
 async function fetchBackups() {
-  const r = await fetch("/api/backups");
+  const r = await wrapFetch("/api/backups");
   if (!r.ok) { $("backups").innerHTML = `<div class="empty">backups 不可用（${r.status}）</div>`; return; }
   backups = await r.json();
   if (!backups.length) { $("backups").innerHTML = `<div class="empty">暂无工程备份（工程模式改动文件后出现）</div>`; return; }
@@ -1316,8 +1328,8 @@ async function showDiff(taskId, rel) {
 // ── P0-2 健康状态常显（/api/health）：模型端点 / 工程模式 / 运行开关 ──
 async function fetchHealth() {
   try {
-    const r = await fetch("/api/health");
-    if (!r.ok) { $("healthLine").textContent = ""; return; }
+    const r = await wrapFetch("/api/health");
+    if (!r.ok) { $("healthLine").textContent = "状态不可用（" + r.status + "）"; return; }
     const d = await r.json();
     const parts = [];
     parts.push(`${d.models.small.split("@")[0]}`);
@@ -1325,7 +1337,7 @@ async function fetchHealth() {
     else parts.push("沙箱模式（CLI use <路径> 启用工程感知）");
     parts.push(`路由${d.runtime.routing ? "开" : "关"} · 严格验证${d.runtime.strictOutput ? "开" : "关"}`);
     $("healthLine").textContent = parts.join("　");
-  } catch { /* 服务未就绪时静默 */ }
+  } catch (err) { $("healthLine").textContent = "状态不可用（" + ((err && err.name === "AbortError") ? "连接超时" : "连接失败") + "）"; }
 }
 
 function refreshAll() {

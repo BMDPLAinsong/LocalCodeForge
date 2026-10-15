@@ -2,7 +2,8 @@
 # verify.ps1 -- one-command gate for LocalAiWorkbench
 #   1. build       (exit code must be 0)
 #   2. tests       (exit code must be 0; harness: 0=all pass, 1=has failure)
-#   3. drift-check (exit code must be 0)
+#   3. js-syntax   (embedded index.html <script> must pass node --check)
+#   4. drift-check (exit code must be 0)
 # Exit 0 = all green. Non-zero = gate failed (CI / git hook friendly).
 # Usage:  powershell -NoProfile -File scripts\verify.ps1
 #
@@ -48,8 +49,33 @@ if ($buildOk) {
     $failed += "tests(skipped)"
 }
 
-# ---------------- 3/3 drift gate ----------------
-Step "3/3 DRIFT CHECK (expect exit 0)"
+# ---------------- 3/4 JS syntax gate ----------------
+# 10-15: embedded index.html <script> must pass node --check. The old gate
+# only checked HTML strings, so a broken JS syntax (unbalanced quote) shipped
+# and killed the whole dashboard script silently. Extract script block with
+# python, syntax-check with node, then delete the temp file.
+Step "3/4 JS SYNTAX (index.html <script> via node --check)"
+$htmlPath = Join-Path $RepoRoot "src\Agent.Dashboard\DashboardPages\index.html"
+$tmpJs    = Join-Path $env:TEMP ("lcf_jscheck_" + [guid]::NewGuid().ToString("N") + ".js")
+$nodeExe  = Get-Command node -ErrorAction SilentlyContinue
+if (-not $nodeExe) {
+    Write-Host "node not found -- JS gate skipped" -ForegroundColor Yellow
+} elseif (-not (Test-Path $htmlPath)) {
+    Write-Host "index.html not found -- JS gate skipped" -ForegroundColor Yellow
+} else {
+    $pyCode = "import re,io,sys; s=io.open(sys.argv[1],encoding='utf-8').read(); m=re.findall(r'<script>(.*?)</script>', s, re.S); io.open(sys.argv[2],'w',encoding='utf-8').write(m[0] if m else '')"
+    & python -c $pyCode $htmlPath $tmpJs 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Bad "JS EXTRACT FAILED (python)"; $failed += "js-syntax"
+    } else {
+        & node --check $tmpJs 2>&1 | Select-Object -First 5 | ForEach-Object { Write-Host $_ }
+        if ($LASTEXITCODE -eq 0) { Ok "JS SYNTAX OK" } else { Bad "JS SYNTAX FAILED (exit $LASTEXITCODE)"; $failed += "js-syntax" }
+    }
+    Remove-Item $tmpJs -ErrorAction SilentlyContinue
+}
+
+# ---------------- 4/4 drift gate ----------------
+Step "4/4 DRIFT CHECK (expect exit 0)"
 if (Test-Path $driftPath) {
     & powershell -NoProfile -File $driftPath 2>&1 | Select-Object -Last 3 | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -eq 0) { Ok "DRIFT OK" } else { Bad "DRIFT CHECK FAILED (exit $LASTEXITCODE)"; $failed += "drift-check" }

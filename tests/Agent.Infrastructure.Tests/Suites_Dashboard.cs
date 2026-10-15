@@ -603,9 +603,10 @@ public static class Suites_Dashboard
     {
         var ws = Path.Combine(TestTmp, "ev-schema");
         Directory.CreateDirectory(ws);
+        var run = Guid.NewGuid().ToString("N");   // 10-15 幂等修复：每次运行唯一化，防复跑残留冲突
 
         // 1. 新库：建表默认带 schema_version=1，写入/读取往返携带版本
-        var db1 = Path.Combine(ws, "new.db");
+        var db1 = Path.Combine(ws, "new_" + run + ".db");
         var store1 = new Agent.Infrastructure.Events.TaskEventStore(db1);
         store1.Record("t1", 0, new Agent.Core.Models.AgentEvent.Thinking("x"));
         var evs1 = store1.GetEvents("t1");
@@ -615,7 +616,7 @@ public static class Suites_Dashboard
 
         // 2. 老库迁移：手工建旧 schema（无 schema_version 列）+ 塞一条历史数据 → Initialize 补列 →
         //    历史数据默认 1、新写入带 1
-        var db2 = Path.Combine(ws, "old.db");
+        var db2 = Path.Combine(ws, "old_" + run + ".db");
         using (var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={db2}"))
         {
             conn.Open();

@@ -162,8 +162,12 @@ public static class DashboardHost
         if (Environment.GetEnvironmentVariable("LAW_DASH_TEST_THROW") == "1")
             app.MapGet("/api/__test_throw", () => { throw new InvalidOperationException("B2 测试抛错"); });
 
-        // ── 单页 ──
-        app.MapGet("/", () => Results.Text(ReadEmbeddedPage(), "text/html; charset=utf-8"));
+        // ── 单页（10-15 no-store：页面随服务版本内嵌，禁止浏览器缓存旧版 → 杜绝"重启后仍旧界面"）──
+        app.MapGet("/", (HttpContext ctx) =>
+        {
+            ctx.Response.Headers.CacheControl = "no-store";
+            return Results.Text(ReadEmbeddedPage(), "text/html; charset=utf-8");
+        });
 
         // ── 【10-14 P3-3 结构拆解】15 个端点按域拆 5 组（纯搬移，零行为变更）。
         // 端点路径全为字面量、无通配歧义（/api/tasks 与 /api/tasks/{id}/events 段数不同），
