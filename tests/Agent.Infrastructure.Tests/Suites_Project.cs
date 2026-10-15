@@ -175,6 +175,16 @@ public static class Suites_Project
                 invSig is not null && invSig.Contains("public int Id"));
             Check("清单增强：构造签名保留（可访问性判断依据）",
                 invSig is not null && invSig.Contains("public Order(int id)"));
+            // 无修饰符类型 = C# 默认 internal（10-15 复测新缺口：demo 的 class Order 被模型当可公开引用 → CS0051）
+            var invDef = Agent.Infrastructure.Project.ExistingTypeInventory.Build(new[]
+            {
+                ("DefaultService.cs", "class DefaultService\n{\n    public int Ping() { return 1; }\n}\n"),
+                ("PartialThing.cs", "public partial class PartialThing\n{\n}\n"),
+            });
+            Check("清单增强：无修饰符类型默认 internal（C# 语义补全，防 CS0051）",
+                invDef is not null
+                && invDef.Contains("DefaultService (internal class, DefaultService.cs)")
+                && invDef.Contains("PartialThing (public class, PartialThing.cs)"));
             // 成员上限折叠：21 个方法 → 显示 20 + 折叠计数
             var manyCs = "public class Big\n{\n" +
                 string.Concat(Enumerable.Range(1, 21).Select(i => $"    public void M{i}() {{ }}\n")) + "}\n";

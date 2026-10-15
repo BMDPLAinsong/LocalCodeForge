@@ -41,10 +41,15 @@ public static class ExistingTypeInventory
         foreach (var kw in TypeKinds)
         {
             var i = signature.IndexOf(kw, StringComparison.Ordinal);
-            if (i <= 0) continue;
+            if (i < 0) continue;
             // 要求关键字前是行首或空格（防 "classify" 之类前缀误配）
             if (i > 0 && signature[i - 1] != ' ' && signature[i - 1] != '\t') continue;
-            return signature[..i].Trim() + " ";
+            // 只标注访问性：显式 public/internal 原样；无显式访问修饰符（含 partial/static/sealed 前缀）=
+            // C# 顶层类型默认 internal —— 数据语义补全，防模型把无修饰符类当可公开引用（CS0051）
+            var prefix = signature[..i].Trim();
+            if (prefix.Contains("public")) return "public ";
+            if (prefix.Contains("internal")) return "internal ";
+            return "internal ";
         }
         return "";
     }
