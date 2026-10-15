@@ -4,6 +4,7 @@
 // 区段：1411 / 1449 / 1486 / 1516 / 1551
 // 依赖：using static AgentTests.TestHarness（Check / TestTmp）
 // ============================================================
+using System.Linq;
 using System.Text.Json;
 using static AgentTests.TestHarness;
 
@@ -151,10 +152,38 @@ public static class Suites_Project
             Check("C3 类型清单：无类型 → null（调用方不注入）",
                 Agent.Infrastructure.Project.ExistingTypeInventory.Build(
                     new[] { ("a.txt", "no types here") }) is null);
-            Check("C3 类型清单：成员按行序归组到所属类型（跨文件不误挂）",
+            Check("C3 类型清单：成员按行序归组到所属类型（跨文件不误挂；签名=定义行原文）",
                 inv is not null
-                && inv.Contains("Order (class, Order.cs): Id, Status")
-                && inv.Contains("TaxService (class, TaxService.cs): ComputeTax"));
+                && inv.Contains("Order (public class, Order.cs): public int Id; public string Status")
+                && inv.Contains("TaxService (public class, TaxService.cs): public double ComputeTax(double amount)"));
+
+            // ── 【10-15 清单增强】类型清单带签名与可访问性（7n 数据缺口：CS0051/CS1503）──
+            var invSig = Agent.Infrastructure.Project.ExistingTypeInventory.Build(new[]
+            {
+                ("TaxService.cs", "internal class TaxService\n{\n    public double CalculateTax(Order order) { return 0; }\n}\n"),
+                ("Order.cs", "public class Order\n{\n    public int Id { get; set; }\n    public Order(int id) { Id = id; }\n}\n"),
+                ("ShippingService.cs",
+                    "public class ShippingService\n{\n    public ShippingService(TaxService tax, DiscountService disc) { }\n}\n"),
+            }, excludeRel: "ShippingService.cs");
+            Check("清单增强：internal 类型修饰符可见（防 CS0051 public 签名暴露 internal 类型）",
+                invSig is not null && invSig.Contains("TaxService (internal class, TaxService.cs)"));
+            Check("清单增强：public 修饰符可见（模型可确认该类型可公开引用）",
+                invSig is not null && invSig.Contains("Order (public class, Order.cs)"));
+            Check("清单增强：方法签名含参数类型（防 CS1503 传参类型错）",
+                invSig is not null && invSig.Contains("public double CalculateTax(Order order)"));
+            Check("清单增强：属性保留类型（public int Id）",
+                invSig is not null && invSig.Contains("public int Id"));
+            Check("清单增强：构造签名保留（可访问性判断依据）",
+                invSig is not null && invSig.Contains("public Order(int id)"));
+            // 成员上限折叠：21 个方法 → 显示 20 + 折叠计数
+            var manyCs = "public class Big\n{\n" +
+                string.Concat(Enumerable.Range(1, 21).Select(i => $"    public void M{i}() {{ }}\n")) + "}\n";
+            var invMany = Agent.Infrastructure.Project.ExistingTypeInventory.Build(
+                new[] { ("Big.cs", manyCs) });
+            Check("清单增强：成员上限折叠（>20 个成员计数折叠，不撑爆上下文）",
+                invMany is not null
+                && invMany.Contains("另有 1 个成员")
+                && !invMany.Contains("M21()"));
 
             Directory.Delete(fgDir, true);
             Directory.Delete(pdIdx, true);

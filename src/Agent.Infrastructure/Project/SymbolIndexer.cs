@@ -11,8 +11,8 @@ using Microsoft.Data.Sqlite;
 
 namespace Agent.Infrastructure.Project;
 
-/// <summary>符号条目：符号名 + 定义位置。</summary>
-public sealed record SymbolEntry(string Symbol, string File, int Line, string Kind);
+/// <summary>符号条目：符号名 + 定义位置 + 定义行原文（签名，截到首个 '{' 前）。</summary>
+public sealed record SymbolEntry(string Symbol, string File, int Line, string Kind, string Signature = "");
 
 /// <summary>符号索引结果。</summary>
 public sealed record SymbolIndexResult(int Count, string Message);
@@ -80,6 +80,17 @@ public static class SymbolIndexer
         return files;
     }
 
+    /// <summary>
+    /// 定义行原文 → 签名（截到首个 '{' 前，防方法体/属性体污染；跨行声明无 '{' 则原样）。
+    /// 【10-15 清单增强】确定性字符串裁剪，非解析——数据保真，零解析风险。
+    /// </summary>
+    private static string ToSignature(string line)
+    {
+        var b = line.Trim();
+        var brace = b.IndexOf('{');
+        return brace >= 0 ? b[..brace].TrimEnd() : b;
+    }
+
     /// <summary>扫描单个代码文件（供增量重建复用）。rel 为相对工程根路径（/ 分隔）。</summary>
     public static List<SymbolEntry> BuildFile(string fullPath, string rel)
     {
@@ -108,7 +119,7 @@ public static class SymbolIndexer
                 var m = PyClassRe.Match(line);
                 if (m.Success)
                 {
-                    result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "class"));
+                    result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "class", ToSignature(line)));
                     continue;
                 }
                 m = PyDefRe.Match(line);
@@ -116,7 +127,7 @@ public static class SymbolIndexer
                 {
                     var indent = line.Length - line.TrimStart().Length;
                     result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1,
-                        indent > 0 ? "method" : "function"));
+                        indent > 0 ? "method" : "function", ToSignature(line)));
                 }
             }
             else
@@ -124,19 +135,19 @@ public static class SymbolIndexer
                 var m = CSharpTypeRe.Match(line);
                 if (m.Success)
                 {
-                    result.Add(new SymbolEntry(m.Groups[2].Value, rel, i + 1, m.Groups[1].Value));
+                    result.Add(new SymbolEntry(m.Groups[2].Value, rel, i + 1, m.Groups[1].Value, ToSignature(line)));
                     continue;
                 }
                 m = CSharpPropRe.Match(line);
                 if (m.Success)
                 {
-                    result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "property"));
+                    result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "property", ToSignature(line)));
                     continue;
                 }
                 m = CSharpMethodRe.Match(line);
                 if (m.Success && !NonMethodKeywords.Contains(m.Groups[1].Value))
                 {
-                    result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "method"));
+                    result.Add(new SymbolEntry(m.Groups[1].Value, rel, i + 1, "method", ToSignature(line)));
                 }
             }
         }
@@ -182,6 +193,7 @@ public sealed class SymbolIndexStore
                 file         TEXT NOT NULL,
                 line         INTEGER NOT NULL,
                 kind         TEXT NOT NULL,
+                signature    TEXT NOT NULL DEFAULT '',
                 file_mtime   INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (project_root, symbol, file, line)
             );
@@ -196,6 +208,15 @@ public sealed class SymbolIndexStore
             using var alter = conn.CreateCommand();
             alter.CommandText = "ALTER TABLE symbol_index ADD COLUMN file_mtime INTEGER NOT NULL DEFAULT 0;";
             alter.ExecuteNonQuery();
+        }
+        // 【10-15 清单增强】旧库迁移：补充 signature 列（不存在则 ALTER ADD）。
+        using var migrateSig = conn.CreateCommand();
+        migrateSig.CommandText = "SELECT COUNT(*) FROM pragma_table_info('symbol_index') WHERE name='signature';";
+        if (Convert.ToInt64(migrateSig.ExecuteScalar()) == 0)
+        {
+            using var alterSig = conn.CreateCommand();
+            alterSig.CommandText = "ALTER TABLE symbol_index ADD COLUMN signature TEXT NOT NULL DEFAULT '';";
+            alterSig.ExecuteNonQuery();
         }
     }
 
@@ -335,7 +356,7 @@ public sealed class SymbolIndexStore
 
     /// <summary>
     /// 【10-14 P2-5】批量插入符号行：按批拼 multi-VALUES INSERT，单次 ExecuteNonQuery。
-    /// 分批 100 行 = 600 参数（SQLite 变量上限保守取值）；全量与增量两条路径共用此实现。
+    /// 分批 100 行 = 700 参数（SQLite 变量上限保守取值）；全量与增量两条路径共用此实现。
     /// </summary>
     private static void InsertBatch(SqliteConnection conn, SqliteTransaction tx, string key,
         IReadOnlyList<(SymbolEntry Entry, long Mtime)> rows)
@@ -347,23 +368,24 @@ public sealed class SymbolIndexStore
             using var cmd = conn.CreateCommand();
             cmd.Transaction = tx;
             var sb = new System.Text.StringBuilder(
-                "INSERT INTO symbol_index (project_root, symbol, file, line, kind, file_mtime) VALUES ");
+                "INSERT INTO symbol_index (project_root, symbol, file, line, kind, signature, file_mtime) VALUES ");
             for (var i = 0; i < take; i++)
             {
                 if (i > 0) sb.Append(',');
-                var b = i * 6;
-                sb.Append($"($k{b}, $s{b}, $f{b}, $l{b}, $k2{b}, $m{b})");
+                var b = i * 7;
+                sb.Append($"($k{b}, $s{b}, $f{b}, $l{b}, $k2{b}, $g{b}, $m{b})");
             }
             cmd.CommandText = sb.ToString();
             for (var i = 0; i < take; i++)
             {
                 var (e, mtime) = rows[offset + i];
-                var b = i * 6;
+                var b = i * 7;
                 cmd.Parameters.AddWithValue($"$k{b}", key);
                 cmd.Parameters.AddWithValue($"$s{b}", e.Symbol);
                 cmd.Parameters.AddWithValue($"$f{b}", e.File);
                 cmd.Parameters.AddWithValue($"$l{b}", e.Line);
                 cmd.Parameters.AddWithValue($"$k2{b}", e.Kind);
+                cmd.Parameters.AddWithValue($"$g{b}", e.Signature);
                 cmd.Parameters.AddWithValue($"$m{b}", mtime);
             }
             cmd.ExecuteNonQuery();
@@ -395,7 +417,7 @@ public sealed class SymbolIndexStore
             conn.Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                SELECT symbol, file, line, kind FROM symbol_index
+                SELECT symbol, file, line, kind, signature FROM symbol_index
                 WHERE project_root = $k AND symbol = $s
                 ORDER BY file, line;
             """;
@@ -405,7 +427,8 @@ public sealed class SymbolIndexStore
             while (reader.Read())
             {
                 result.Add(new SymbolEntry(
-                    reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3)));
+                    reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3),
+                    reader.GetString(4)));
             }
         }
         catch { }
@@ -423,7 +446,7 @@ public sealed class SymbolIndexStore
             conn.Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                SELECT symbol, file, line, kind FROM symbol_index
+                SELECT symbol, file, line, kind, signature FROM symbol_index
                 WHERE project_root = $k
                 ORDER BY file, line;
             """;
@@ -432,7 +455,8 @@ public sealed class SymbolIndexStore
             while (reader.Read())
             {
                 result.Add(new SymbolEntry(
-                    reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3)));
+                    reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3),
+                    reader.GetString(4)));
             }
         }
         catch { }

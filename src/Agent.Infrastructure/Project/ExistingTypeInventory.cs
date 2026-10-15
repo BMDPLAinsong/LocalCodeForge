@@ -26,6 +26,29 @@ public static class ExistingTypeInventory
     private static bool IsMemberKind(string kind) =>
         kind is "method" or "property" or "function";
 
+    /// <summary>成员上限（防大工程清单膨胀撑爆上下文）；超出折叠计数。</summary>
+    private const int MaxMembersPerType = 20;
+
+    /// <summary>
+    /// 类型定义行原文 → 修饰符前缀（如 "internal class TaxService" → "internal "；
+    /// "public class Order" → "public "）。找不到类型关键字 → 空串。
+    /// 【10-15 清单增强】确定性字符串定位，非解析。
+    /// </summary>
+    private static string TypeModifiers(string signature)
+    {
+        if (string.IsNullOrWhiteSpace(signature)) return "";
+        // 定位类型关键字（class/interface/enum/record/struct）在行中的位置
+        foreach (var kw in TypeKinds)
+        {
+            var i = signature.IndexOf(kw, StringComparison.Ordinal);
+            if (i <= 0) continue;
+            // 要求关键字前是行首或空格（防 "classify" 之类前缀误配）
+            if (i > 0 && signature[i - 1] != ' ' && signature[i - 1] != '\t') continue;
+            return signature[..i].Trim() + " ";
+        }
+        return "";
+    }
+
     /// <summary>
     /// 从 (相对路径, 内容) 集合构建紧凑清单。无类型 → 返回 null（调用方不注入）。
     /// excludeRel：排除目标文件（正在生成/修复的那个文件不算"已有"）。
@@ -36,7 +59,7 @@ public static class ExistingTypeInventory
         string? excludeRel = null,
         int maxTypes = 30)
     {
-        var groups = new List<(string Kind, string Name, string File, List<string> Members)>();
+        var groups = new List<(string Kind, string Name, string File, string Signature, List<string> Members)>();
 
         foreach (var (rel, content) in files)
         {
@@ -49,12 +72,13 @@ public static class ExistingTypeInventory
             {
                 if (TypeKinds.Contains(s.Kind))
                 {
-                    groups.Add((s.Kind, s.Symbol, rel, new List<string>()));
+                    groups.Add((s.Kind, s.Symbol, rel, s.Signature, new List<string>()));
                 }
                 else if (IsMemberKind(s.Kind) && groups.Count > 0
                          && string.Equals(groups[^1].File, rel, StringComparison.OrdinalIgnoreCase))
                 {
-                    groups[^1].Members.Add(s.Symbol);
+                    groups[^1].Members.Add(
+                        string.IsNullOrWhiteSpace(s.Signature) ? s.Symbol : s.Signature);
                 }
             }
         }
@@ -62,17 +86,26 @@ public static class ExistingTypeInventory
         if (groups.Count == 0) return null;
 
         var sb = new StringBuilder();
-        sb.AppendLine("【已有类型清单（强约束·数据来源：工程实际代码）】以下类型已在工程中定义，其成员**仅限下列**：");
+        sb.AppendLine("【已有类型清单（强约束·数据来源：工程实际代码）】以下类型已在工程中定义，其成员**仅限下列**（行内为定义原文签名）：");
         foreach (var g in groups.Take(maxTypes))
         {
-            var members = g.Members.Count > 0
-                ? string.Join(", ", g.Members.Distinct(StringComparer.Ordinal))
-                : "（无方法/属性）";
-            sb.AppendLine($"- {g.Name} ({g.Kind}, {g.File}): {members}");
+            var mods = TypeModifiers(g.Signature);
+            var kindLabel = string.IsNullOrEmpty(mods) ? g.Kind : mods + g.Kind;
+            if (g.Members.Count == 0)
+            {
+                sb.AppendLine($"- {g.Name} ({kindLabel}, {g.File}): （无方法/属性）");
+                continue;
+            }
+            var distinct = g.Members.Distinct(StringComparer.Ordinal).ToList();
+            var shown = distinct.Take(MaxMembersPerType).ToList();
+            var members = string.Join("; ", shown);
+            if (distinct.Count > MaxMembersPerType)
+                members += $"…（另有 {distinct.Count - MaxMembersPerType} 个成员）";
+            sb.AppendLine($"- {g.Name} ({kindLabel}, {g.File}): {members}");
         }
         if (groups.Count > maxTypes)
             sb.AppendLine($"（另有 {groups.Count - maxTypes} 个类型未列出）");
-        sb.AppendLine("使用这些类型时**只允许调用上列成员**；需要新成员/新类型时自行新增，不得臆造。");
+        sb.AppendLine("使用这些类型时**只允许调用上列成员**（按签名传参/选用，注意访问修饰符：internal 类型不得出现在 public 签名中）；需要新成员/新类型时自行新增，不得臆造。");
         return sb.ToString().TrimEnd();
     }
 }
