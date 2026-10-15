@@ -73,10 +73,18 @@ public static class TaskClassifier
     ///   3. 查询词 → AgentLoop
     ///   4. 设计词 → AgentLoop（设计类不生成代码）
     ///   5. 项目词 → 编排
+    ///   5.5 文件引用 → 非工程可写：AgentLoop；工程可写：编排（10-15 变体实证缺口）
     ///   6. 长度 > 40 → 编排
     ///   7. 默认 → AgentLoop
     /// </summary>
-    public static bool ShouldOrchestrate(string input)
+    /// <param name="inProjectWriteMode">
+    /// 工程可写模式（ProjectRoot 非空且 ProjectWriteEnabled）。
+    /// 【10-15 变体实证缺口】工程可写 + 文件引用（如"…接入 Program.cs"）= 工程增量任务
+    /// （新增类 + 改入口 + 验证运行），必须走编排做多文件规划与验证闭环；实测变体 B/C/D
+    /// 因引用 Program.cs 被 5.5 误拦出编排 → 模型裸奔直连 AgentLoop → 读文件后连续空响应终止。
+    /// 非工程可写（沙箱）保持原行为：读/改单文件由 read_file/edit_file 工具处理。
+    /// </param>
+    public static bool ShouldOrchestrate(string input, bool inProjectWriteMode = false)
     {
         if (string.IsNullOrWhiteSpace(input))
             return false;
@@ -122,9 +130,11 @@ public static class TaskClassifier
         // 5.5 文件引用检查——任务明确引用具体文件（含扩展名路径）时走 AgentLoop
         // （工程模式任务天然带长路径：修改/读取具体文件由 read_file/edit_file 工具处理，
         //   不需要 orchestrator 的多文件规划；避免长度规则把带路径任务误拉入编排卡死）
+        // 【10-15 变体实证缺口】工程可写 + 文件引用 = 工程增量任务（新增类+改入口+验证），
+        // 走编排；非工程可写保持原行为（读/改单文件由 AgentLoop 处理）。
         if (FileReferencePattern.IsMatch(input))
         {
-            return false;
+            return inProjectWriteMode;
         }
 
         // 6. 长输入（> 60 字）——倾向于编排

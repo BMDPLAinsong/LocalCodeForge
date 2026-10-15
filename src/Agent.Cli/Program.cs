@@ -686,7 +686,8 @@ internal partial class Program
                 taskServices.AddAgent(options, workspace, dbPath, options.ProjectRoot, options.ProjectWriteEnabled, taskId, explicitWriteRoots);
                 var taskProvider = taskServices.BuildServiceProvider();
 
-                if (TaskClassifier.ShouldOrchestrate(input))
+                if (TaskClassifier.ShouldOrchestrate(input,
+                        options.ProjectRoot is not null && options.ProjectWriteEnabled))
                 {
                     // 走三阶段编排
                     renderer.Notice($"[自动编排] 任务复杂，启用 Planner-Executor");

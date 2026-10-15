@@ -88,6 +88,18 @@ public static class Suites_Routing
                 !Orc("修改 src/Agent.Core/Models/AgentOptions.cs 中 ProjectWriteEnabled 属性的注释说明"));
             Check("含多文件词的工程任务 → 仍编排（强多文件词优先于文件引用）",
                 Orc("做一个多文件的 C# 项目：src/Agent.Core/Models/AgentOptions.cs 和 Program.cs"));
+
+            // 【10-15 变体实证缺口】工程可写 + 文件引用 = 工程增量任务 → 编排；
+            // 非工程可写保持原行为（单文件读/改走 AgentLoop）。
+            bool OrcW(string input) => Agent.Infrastructure.Orchestration.TaskClassifier.ShouldOrchestrate(input, inProjectWriteMode: true);
+            Check("工程可写+文件引用（改既有方法+接入 Program.cs）→ 编排（变体B）",
+                OrcW("给 OrderService 增加一个 CalculateFinalTotal(Order order) 方法，复用 TaxService 和 DiscountService 依次计算税费与折扣，返回最终总价；并把 Program.cs 改为调用该方法输出结果。"));
+            Check("工程可写+文件引用（新类调既有服务链+接入）→ 编排（变体C）",
+                OrcW("新增一个 LoyaltyService 类，包含方法 CalculateLoyaltyPrice(Order order)，内部调用 OrderService.CalculateTotal(order) 计算基础总价，再调用 DiscountService.CalculateDiscount(order) 获取折扣并减去，返回会员价；接入 Program.cs 输出。"));
+            Check("工程可写+文件引用（静态工具类+Program.cs）→ 编排（变体D）",
+                OrcW("新增一个 ShippingCalculator 静态类，包含静态方法 CalculateShipping(Order order, double baseRate)，返回 baseRate 与订单 Id 的乘积；在 Program.cs 中调用并输出。"));
+            Check("非工程可写+文件引用 → 仍走 Agent（单文件修复回归）",
+                !Orc("修复 X:\\index.html 的语法错误"));
         }
     }
 
