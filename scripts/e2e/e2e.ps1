@@ -95,8 +95,10 @@ function Run-Case($name, $kind, $userInput, $writeMode, $expectFile) {
         $pdFired       = $logText -match "类型重复定义"
 
         if ($hasDone) {
+            # 【10-15 修正】完成场景：写入保留的 ShippingService.cs 是预期产物（任务要求新增该类），
+            # 不算脏残留——dirty 语义仅用于"失败回滚后仍有残留"（回滚失效=基础设施回归）。
             $detail = if ($touched -or $writeFired) { "完成" } else { "侧路假完成-疑似漏洞" }
-            $ok = ($touched -or $writeFired) -and (-not $dirty)
+            $ok = ($touched -or $writeFired)
         }
         elseif ($rollbackFired) {
             # 模型写入了工程文件 + 失败 + 自动回滚触发 = 安全网健康；残留则回滚失效（基础设施回归）
