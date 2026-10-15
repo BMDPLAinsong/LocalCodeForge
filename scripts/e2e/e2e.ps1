@@ -83,7 +83,8 @@ function Run-Case($name, $kind, $userInput, $writeMode, $expectFile) {
                 if ($a -ne $b) { $touched = $true; break }
             }
         }
-        $leftovers = Get-ChildItem $caseDir -Name -ErrorAction SilentlyContinue | Where-Object { $_ -match "ShippingService|OrderSystem" }
+        $leftovers = Get-ChildItem $caseDir -Name -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match "ShippingService|OrderSystem|LoyaltyService|ShippingCalculator" }
         $dirty = $leftovers.Count -gt 0
 
         # 【10-14 A2 基础设施健康探针】原实现只用 demo 基线 diff（post-rollback 状态）判 touched——
@@ -95,10 +96,13 @@ function Run-Case($name, $kind, $userInput, $writeMode, $expectFile) {
         $pdFired       = $logText -match "类型重复定义"
 
         if ($hasDone) {
-            # 【10-15 修正】完成场景：写入保留的 ShippingService.cs 是预期产物（任务要求新增该类），
+            # 【10-15 修正】完成场景：写入保留的 ShippingService.cs 等是预期产物（任务要求新增该类），
             # 不算脏残留——dirty 语义仅用于"失败回滚后仍有残留"（回滚失效=基础设施回归）。
+            # 【10-15 变体】完成场景额外断言任务要求的产物文件存在（expectFile 给出时）。
             $detail = if ($touched -or $writeFired) { "完成" } else { "侧路假完成-疑似漏洞" }
-            $ok = ($touched -or $writeFired)
+            $expectExists = -not $expectFile -or (Test-Path (Join-Path $caseDir $expectFile))
+            if (-not $expectExists) { $detail += " [⚠ 预期产物缺失: $expectFile]" }
+            $ok = ($touched -or $writeFired) -and $expectExists
         }
         elseif ($rollbackFired) {
             # 模型写入了工程文件 + 失败 + 自动回滚触发 = 安全网健康；残留则回滚失效（基础设施回归）
@@ -140,7 +144,20 @@ function Run-Case($name, $kind, $userInput, $writeMode, $expectFile) {
 }
 
 # ── 用例集 ──
-Run-Case "工程增量-ShippingService" "incremental" "在工程中新增一个 ShippingService 类，复用 TaxService 和 DiscountService 计算运费和折扣后的总价，并接入 OrderService。" $true $null
+# 【10-15 变体】工程增量用例集（数据驱动，验证普适性）：
+#   A 原 ShippingService（新类复用两个既有服务）
+#   B 修改既有类新增方法（OrderService 增方法 + 改入口）
+#   C 新类调用既有服务链（LoyaltyService → OrderService → DiscountService）
+#   D 新增静态工具类（静态方法上下文，防 CS0120 反方向：静态上下文误调实例成员）
+$incrementalCases = @(
+    @{ Name = "工程增量-ShippingService"; Input = "在工程中新增一个 ShippingService 类，复用 TaxService 和 DiscountService 计算运费和折扣后的总价，并接入 OrderService。"; Expect = "ShippingService.cs" },
+    @{ Name = "工程增量-修改既有方法"; Input = "给 OrderService 增加一个 CalculateFinalTotal(Order order) 方法，复用 TaxService 和 DiscountService 依次计算税费与折扣，返回最终总价；并把 Program.cs 改为调用该方法输出结果。"; Expect = $null },
+    @{ Name = "工程增量-会员价服务"; Input = "新增一个 LoyaltyService 类，包含方法 CalculateLoyaltyPrice(Order order)，内部调用 OrderService.CalculateTotal(order) 计算基础总价，再调用 DiscountService.CalculateDiscount(order) 获取折扣并减去，返回会员价；接入 Program.cs 输出。"; Expect = "LoyaltyService.cs" },
+    @{ Name = "工程增量-静态工具类"; Input = "新增一个 ShippingCalculator 静态类，包含静态方法 CalculateShipping(Order order, double baseRate)，返回 baseRate 与订单 Id 的乘积；在 Program.cs 中调用并输出。"; Expect = "ShippingCalculator.cs" }
+)
+foreach ($c in $incrementalCases) {
+    Run-Case $c.Name "incremental" $c.Input $true $c.Expect
+}
 Run-Case "单文件-hello python" "single" "写一个名为 hello_e2e.py 的脚本，打印 Hello E2E" $false "hello_e2e.py"
 Run-Case "多文件-C#学生系统" "multi" "用 C# 写一个学生管理系统，分 Student 模型、StudentService、Program，多文件组织" $false $null
 Run-Case "读查-Order.cs 内容" "read" "读取 X:\lawcheck_demo\Order.cs 的内容" $false $null
