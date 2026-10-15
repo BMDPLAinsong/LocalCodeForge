@@ -249,8 +249,19 @@ public static class Suites_Dashboard
                 using var http = new HttpClient { BaseAddress = new Uri(url + "/") };
                 var page = await http.GetStringAsync("");
                 Check("GET / 返回嵌入单页（含标题 + 回放 API + 过滤/滚动开关）",
-                    page.Contains("LocalAI Workbench") && page.Contains("/events") && page.Contains("showTaskEvents")
+                    page.Contains("LocalCodeForge") && page.Contains("/events") && page.Contains("showTaskEvents")
                     && page.Contains("fbtn") && page.Contains("autoScroll"));
+                Check("P0-1 品牌一致性：页签与头部标题均为 LocalCodeForge（推广改名同步，无旧名残留）",
+                    !page.Contains("LocalAI Workbench"));
+                Check("P0-2 健康常显：header healthLine + fetchHealth 读取 /api/health（模型端点/工程模式/运行开关）",
+                    page.Contains("id=\"healthLine\"") && page.Contains("function fetchHealth")
+                    && page.Contains("沙箱模式（CLI use <路径> 启用工程感知）"));
+                Check("P0-3 浏览器通知：notifyTaskDone 挂钩 finalAnswer/error + 提交时请求权限（纯前端，SSE 事件驱动）",
+                    page.Contains("function notifyTaskDone") && page.Contains("new Notification(")
+                    && page.Contains("Notification.requestPermission"));
+                Check("P0-4 历史任务筛选+重跑：taskQ/taskStatus 过滤控件 + rerunTask 复用提交链路 + stopPropagation 防回放",
+                    page.Contains("id=\"taskQ\"") && page.Contains("id=\"taskStatus\"")
+                    && page.Contains("function rerunTask") && page.Contains("event.stopPropagation();rerunTask"));
                 Check("嵌入单页含 SVG 依赖子图（layoutOneDegree 纯函数 + renderDepSvg + 节点点击联动 selectDepFile + 箭头 marker）",
                     page.Contains("function layoutOneDegree") && page.Contains("function renderDepSvg")
                     && page.Contains("function selectDepFile") && page.Contains("depArrowG") && page.Contains("DEP_NODE_MAX"));
@@ -287,6 +298,58 @@ public static class Suites_Dashboard
                     && stats.Contains("\"suspicious\"") && stats.Contains("\"featureBreakdown\""));
                 var tasks = await http.GetStringAsync("api/tasks?take=3");
                 Check("GET /api/tasks 200 + 数组", tasks.StartsWith("["));
+
+                // 【P0-4】历史任务过滤（端点内结构性过滤：q 关键词 / status / since）
+                var t0 = DateTimeOffset.Now;
+                await metrics.RecordAsync(new Agent.Core.Models.TaskMetric
+                {
+                    TaskId = "flt_fail", SessionId = "s", UserInput = "修复编译错误",
+                    Mode = "agent_pro", RoutingTier = "L0", ServiceId = "agent_pro", RoutingReason = "test",
+                    Success = false, IsSuspicious = false, IsE2E = false, RetryCount = 1,
+                    TotalMs = 1000, PlannerMs = 100, ExecutorMs = 500, ValidatorMs = 400,
+                    LintBlockingErrors = 1, LintWarningErrors = 0, ErrorSummary = "编译错误 CS1001",
+                    StartedAt = t0.AddMinutes(-10), FinishedAt = t0.AddMinutes(-10).AddSeconds(5),
+                }, CancellationToken.None);
+                await metrics.RecordAsync(new Agent.Core.Models.TaskMetric
+                {
+                    TaskId = "flt_ok", SessionId = "s", UserInput = "生成 2048 小游戏",
+                    Mode = "small", RoutingTier = "L0", ServiceId = "small", RoutingReason = "test",
+                    Success = true, IsSuspicious = false, IsE2E = false, RetryCount = 0,
+                    TotalMs = 2000, PlannerMs = 200, ExecutorMs = 1000, ValidatorMs = 800,
+                    LintBlockingErrors = 0, LintWarningErrors = 0, ErrorSummary = "",
+                    StartedAt = t0.AddMinutes(-8), FinishedAt = t0.AddMinutes(-8).AddSeconds(5),
+                }, CancellationToken.None);
+                await metrics.RecordAsync(new Agent.Core.Models.TaskMetric
+                {
+                    TaskId = "flt_susp", SessionId = "s", UserInput = "分析日志文件",
+                    Mode = "large", RoutingTier = "L0", ServiceId = "large", RoutingReason = "test",
+                    Success = true, IsSuspicious = true, IsE2E = false, RetryCount = 2,
+                    TotalMs = 3000, PlannerMs = 300, ExecutorMs = 1500, ValidatorMs = 1200,
+                    LintBlockingErrors = 0, LintWarningErrors = 0, ErrorSummary = "",
+                    StartedAt = t0.AddMinutes(-6), FinishedAt = t0.AddMinutes(-6).AddSeconds(5),
+                }, CancellationToken.None);
+                var tasksQ = await http.GetStringAsync("api/tasks?take=50&q=" + Uri.EscapeDataString("编译错误"));
+                Check("P0-4 GET /api/tasks q 过滤：关键词命中 user_input/error_summary（1 条，无过滤混入）",
+                    tasksQ.Contains("flt_fail") && !tasksQ.Contains("flt_ok") && !tasksQ.Contains("flt_susp"));
+                var tasksFail = await http.GetStringAsync("api/tasks?take=50&status=fail");
+                Check("P0-4 GET /api/tasks status=fail 过滤：仅非成功且非可疑（1 条）",
+                    tasksFail.Contains("flt_fail") && !tasksFail.Contains("flt_ok") && !tasksFail.Contains("flt_susp"));
+                var tasksSusp = await http.GetStringAsync("api/tasks?take=50&status=susp");
+                Check("P0-4 GET /api/tasks status=susp 过滤：仅可疑成功（1 条）",
+                    tasksSusp.Contains("flt_susp") && !tasksSusp.Contains("flt_fail") && !tasksSusp.Contains("flt_ok"));
+                var tasksSince = await http.GetStringAsync("api/tasks?take=50&since=" + Uri.EscapeDataString(t0.AddMinutes(-5).ToString("o")));
+                Check("P0-4 GET /api/tasks since 过滤：只含 started_at ≥ 边界（无 flt_fail/flt_ok，仍含 flt_susp 需视边界）",
+                    tasksSince.StartsWith("[") && !tasksSince.Contains("flt_fail") && !tasksSince.Contains("flt_ok"));
+                var tasksNoF = await http.GetStringAsync("api/tasks?take=50&q=" + Uri.EscapeDataString("不存在的关键词xyz"));
+                Check("P0-4 GET /api/tasks 过滤无命中 → 空数组", tasksNoF.Trim() == "[]");
+
+                // 【P0-2】健康状态：模型端点 / 工程模式 / 运行开关（数据全来自注入 AgentOptions，无并行口径）
+                var health = await http.GetStringAsync("api/health");
+                Check("GET /api/health 200 + 结构（models 三角色 + executor + projectWritable + runtime 开关）",
+                    health.Contains("\"models\"") && health.Contains("qwen2.5:1.5b") && health.Contains("law-unified")
+                    && health.Contains("classifier") && health.Contains("\"projectWritable\":false")
+                    && health.Contains("\"routing\":true") && health.Contains("strictOutput")
+                    && health.Contains("\"taskTimeoutMinutes\":30"));
                 var backups = await http.GetStringAsync("api/backups");
                 Check("GET /api/backups 200 + 数组", backups.StartsWith("["));
                 var files = await http.GetStringAsync("api/files");
@@ -324,6 +387,9 @@ public static class Suites_Dashboard
                     diffResp.Contains("\"modified\":\"class A { int x; int y; }"));
                 Check("GET /api/diff 附 diff 引擎结果（10-08：original/modified + diff 三字段）",
                     diffResp.Contains("\"diff\""));
+                var healthProj = await http3.GetStringAsync("api/health");
+                Check("GET /api/health 有工程根 → project 非空（projDir 实例）",
+                    healthProj.Contains("proj") && healthProj.Contains("projectWritable"));
                 await stop3();
 
                 // 【10-10 Web 端回滚】端点注册 + 工程根守卫（有工程根的真实 dry-run/回滚行为由 BackupService 单元覆盖）

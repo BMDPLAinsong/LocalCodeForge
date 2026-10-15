@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LocalAI Workbench Dashboard</title>
+<title>LocalCodeForge Dashboard</title>
 <style>
   :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#c9d1d9; --dim:#8b949e;
           --green:#3fb950; --red:#f85149; --yellow:#d29922; --blue:#58a6ff; --cyan:#39c5cf;
@@ -174,9 +174,10 @@
 </head>
 <body>
 <header>
-  <h1>LocalAI Workbench</h1>
+  <h1>LocalCodeForge</h1>
   <span class="dot green" id="liveDot" title="服务在线"></span>
   <span class="sub" id="sub">加载中…</span>
+  <span class="sub" id="healthLine" title="模型端点 / 工程模式 / 运行开关（/api/health，P0-2）" style="max-width:46vw"></span>
   <button class="btn" onclick="refreshAll()">刷新</button>
 </header>
 <main>
@@ -250,8 +251,21 @@
   </div>
 
   <div class="card collapsible" data-load="tasks">
-    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>历史任务（/api/tasks · 最近 50）<span class="sp"></span><span class="badge" id="badgeTasks"></span></h2>
-    <div class="cbody"><div id="tasks"><div class="empty">加载中…</div></div></div>
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>历史任务（/api/tasks · 最近 50 · 可筛选）<span class="sp"></span><span class="badge" id="badgeTasks"></span></h2>
+    <div class="cbody">
+      <div style="display:flex;gap:6px;margin:0 0 8px;align-items:center">
+        <input id="taskQ" type="text" placeholder="搜索输入/错误（关键词，本地过滤）"
+               style="flex:1;max-width:260px;background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:2px 8px;font-size:12px" />
+        <select id="taskStatus" style="background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:2px 6px;font-size:12px">
+          <option value="">全部状态</option>
+          <option value="ok">OK</option>
+          <option value="fail">FAIL</option>
+          <option value="susp">可疑</option>
+        </select>
+        <button class="btn" id="taskFilterBtn" title="按关键词/状态过滤历史任务">筛选</button>
+      </div>
+      <div id="tasks"><div class="empty">加载中…</div></div>
+    </div>
   </div>
 
   <div class="card collapsible">
@@ -711,6 +725,20 @@ function loadFileDeps(file) {
 $("depLoad").addEventListener("click", loadDeps);
 $("depFile").addEventListener("change", (e) => { if (e.target.value) loadFileDeps(e.target.value); });
 
+// ── P0-3 浏览器通知：实时流 final/error → Web Notification（任务完成/失败提醒）──
+// 纯前端增强：权限在用户主动提交任务时请求（不弹页载权限）；tag 固定 → 新通知替换旧通知。
+function notifyTaskDone(evt) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  try {
+    const isErr = evt.type === "error";
+    const body = isErr
+      ? cut(evt.error || evt.message || "任务执行失败", 200)
+      : cut(evt.text || "", 200);
+    new Notification(isErr ? "LocalCodeForge：任务失败" : "LocalCodeForge：任务完成",
+      { body, tag: "lcf-task-done" });
+  } catch { /* 系统拒绝/不可用时静默（页面内已有事件流可见） */ }
+}
+
 // ── SSE 实时流 ──
 function openStream() {
   const es = new EventSource("/events" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : ""));
@@ -722,6 +750,8 @@ function openStream() {
       $("sub").textContent = "运行目录：实时流为中途接入（此前事件请看任务详情回放）";
       return;
     }
+    // P0-3：任务结束事件（finalAnswer/error）触发浏览器通知
+    if (evt.type === "finalAnswer" || evt.type === "error") notifyTaskDone(evt);
     eventsCache.push(evt);
     while (eventsCache.length > 300) eventsCache.shift();
     renderEvents();
@@ -824,19 +854,23 @@ async function fetchStats() {
   badge("badgeStats", `${s.totalCount} · ${(s.successRate * 100).toFixed(0)}%`, s.successRate >= 0.8);
 }
 
-// ── 历史任务 ──
+// ── 历史任务（P0-4：关键词/状态过滤 + 一键重跑）──
 async function fetchTasks() {
-  const r = await fetch("/api/tasks?take=50");
+  const q = encodeURIComponent(($("taskQ") ? $("taskQ").value : "").trim() || "");
+  const st = encodeURIComponent(($("taskStatus") ? $("taskStatus").value : "") || "");
+  const r = await fetch(`/api/tasks?take=50&q=${q}&status=${st}`);
   if (!r.ok) { $("tasks").innerHTML = `<div class="empty">tasks 不可用（${r.status}）</div>`; return; }
   const list = await r.json();
-  if (!list.length) { $("tasks").innerHTML = `<div class="empty">暂无任务记录</div>`; return; }
-  let html = `<table><thead><tr><th>时间</th><th>模式</th><th>服务</th><th>结果</th><th>耗时</th><th>输入</th></tr></thead><tbody id="tasksBody">`;
+  if (!list.length) { $("tasks").innerHTML = `<div class="empty">${q || st ? "无匹配任务（调整关键词/状态）" : "暂无任务记录"}</div>`; return; }
+  let html = `<table><thead><tr><th>时间</th><th>模式</th><th>服务</th><th>结果</th><th>耗时</th><th>输入</th><th></th></tr></thead><tbody id="tasksBody">`;
   for (const t of list) {
     const d = new Date(t.startedAt);
     const hm = d.toTimeString ? d.toTimeString().slice(0, 8) : "";
     const res = t.success ? `<span class="ok">OK</span>` : t.isSuspicious ? `<span class="warn">可疑</span>` : `<span class="fail">FAIL</span>`;
+    // 重跑按钮：stopPropagation 防触发行回放；复用 POST /api/commands 提交链路（与输入框同一通道）
+    const rerun = `<button class="btn" title="用同一输入重跑该任务" onclick="event.stopPropagation();rerunTask(this.dataset.input)" data-input="${esc(t.userInput).replace(/"/g, "&quot;")}">重跑</button>`;
     html += `<tr title="点击回放任务事件" onclick="showTaskEvents('${esc(t.taskId).replace(/'/g, "\\'")}')"><td>${hm}</td><td>${esc(t.mode)}</td><td>${esc(t.serviceId)}</td><td>${res}</td>
-             <td>${fmtMs(t.totalMs)}</td><td class="inp" title="${esc(t.userInput)}">${esc(cut(t.userInput, 60))}</td></tr>`;
+             <td>${fmtMs(t.totalMs)}</td><td class="inp" title="${esc(t.userInput)}">${esc(cut(t.userInput, 60))}</td><td>${rerun}</td></tr>`;
   }
   $("tasks").innerHTML = html + "</tbody></table>";
   badge("badgeTasks", `${list.length} 条`);
@@ -845,6 +879,23 @@ async function fetchTasks() {
     const row = document.querySelector(`#tasksBody tr[onclick*="${lastDetailTaskId}"]`);
     if (row) row.classList.add("sel");
   }
+}
+// ── P0-4 一键重跑：同一输入重新提交（复用 /api/commands 提交链路）──
+async function rerunTask(input) {
+  try {
+    const r = await fetch("/api/commands", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input })
+    });
+    if (r.status === 202) {
+      const d = await r.json().catch(() => ({}));
+      toast(d.pending > 1 ? `已重跑，队列第 ${d.pending} 位` : "已重跑提交执行", "ok");
+    } else {
+      const d = await r.json().catch(() => ({}));
+      toast("重跑提交失败：" + (d.error || r.status), "err");
+    }
+  } catch (e) { toast("重跑提交失败：" + e.message, "err"); }
 }
 
 // ── 路由调权状态（10-07：与终端 stats 小节同语义，阈值来自 AgentOptions.Routing*）──
@@ -1000,8 +1051,23 @@ async function showDiff(taskId, rel) {
   renderDiffText(df);
 }
 
+// ── P0-2 健康状态常显（/api/health）：模型端点 / 工程模式 / 运行开关 ──
+async function fetchHealth() {
+  try {
+    const r = await fetch("/api/health");
+    if (!r.ok) { $("healthLine").textContent = ""; return; }
+    const d = await r.json();
+    const parts = [];
+    parts.push(`${d.models.small.split("@")[0]}`);
+    if (d.project) parts.push(`工程：${trunc(d.project, 28)}${d.projectWritable ? "（可写）" : "（只读）"}`);
+    else parts.push("沙箱模式（CLI use <路径> 启用工程感知）");
+    parts.push(`路由${d.runtime.routing ? "开" : "关"} · 严格验证${d.runtime.strictOutput ? "开" : "关"}`);
+    $("healthLine").textContent = parts.join("　");
+  } catch { /* 服务未就绪时静默 */ }
+}
+
 function refreshAll() {
-  fetchStats(); fetchTasks(); fetchBackups(); fetchTuning(); fetchMemory();
+  fetchStats(); fetchTasks(); fetchBackups(); fetchTuning(); fetchMemory(); fetchHealth();
   // 预加载即视为已加载：展开卡片直接显示，不再重复请求（懒加载分支留给异常路径）
   document.querySelectorAll(".card.collapsible[data-load]").forEach(c => c.dataset.loaded = "1");
 }
@@ -1047,6 +1113,9 @@ async function submitCommand() {
         ? `已排队：第 ${d.pending} 位（队列中 ${d.pending} 个，一次一任务串行）`
         : "已提交，任务开始执行…";
       toast(d.pending > 1 ? `已提交，队列第 ${d.pending} 位` : "任务已提交执行", "ok");
+      // P0-3：用户主动提交时请求通知权限（非页载弹窗；授权后任务完成/失败会系统通知）
+      if ("Notification" in window && Notification.permission === "default")
+        Notification.requestPermission().catch(() => {});
       $("cmdInput").value = "";
       cmdHistory.push(input);
       if (cmdHistory.length > 10) cmdHistory.shift();
@@ -1170,6 +1239,10 @@ function fmtSize(n) {
   return (n / 1048576).toFixed(1) + " MB";
 }
 $("filesRefresh").addEventListener("click", () => loadFiles(filesDir));
+// P0-4：历史任务筛选（关键词 + 状态；回车/按钮同行为）
+$("taskFilterBtn").addEventListener("click", fetchTasks);
+$("taskQ").addEventListener("keydown", e => { if (e.key === "Enter") fetchTasks(); });
+$("taskStatus").addEventListener("change", fetchTasks);
 $("filesUp").addEventListener("click", () => {
   const idx = filesDir.lastIndexOf("/");
   loadFiles(idx > 0 ? filesDir.slice(0, idx) : "");

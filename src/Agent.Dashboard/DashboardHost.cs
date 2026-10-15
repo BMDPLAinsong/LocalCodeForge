@@ -245,11 +245,70 @@ public static class DashboardHost
         });
 
         // ── 历史任务（轮询；SSE 只推当前任务）──
-        app.MapGet("/api/tasks", async (int take, CancellationToken ct) =>
+        // 【P0-4】过滤参数：q（关键词，user_input/error_summary 包含，大小写不敏感）、
+        // status（ok / fail / susp）、since（ISO 时间，started_at ≥）。
+        // 结构性过滤在端点内完成（上限内样本内存过滤，SQLite 查询层不扩散接口）；
+        // 无过滤参数时行为与历史完全一致。数据单一来源 = Metrics。
+        app.MapGet("/api/tasks", async (int take, string? q, string? status, string? since, CancellationToken ct) =>
         {
             take = take is >= 1 and <= 200 ? take : 50;
             var tasks = await o.Metrics.GetRecentAsync(take, ct);
-            return Results.Json(tasks, JsonOpts);
+            var filtered = tasks.AsEnumerable();
+            if (!string.IsNullOrWhiteSpace(q))
+            {
+                var needle = q.Trim();
+                filtered = filtered.Where(m =>
+                    m.UserInput.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                    || m.ErrorSummary.Contains(needle, StringComparison.OrdinalIgnoreCase));
+            }
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                filtered = status.ToLowerInvariant() switch
+                {
+                    "ok" => filtered.Where(m => m.Success),
+                    "fail" => filtered.Where(m => !m.Success && !m.IsSuspicious),
+                    "susp" => filtered.Where(m => m.IsSuspicious),
+                    _ => filtered,
+                };
+            }
+            if (DateTimeOffset.TryParse(since, out var sinceUtc))
+            {
+                var sinceLocal = sinceUtc.ToLocalTime();
+                filtered = filtered.Where(m => m.StartedAt >= sinceLocal);
+            }
+            return Results.Json(filtered.ToList(), JsonOpts);
+        });
+
+        // ── 健康状态面板（P0-2）：模型端点 / 工程模式 / 运行开关一览 ──
+        // 启动自检（CLI 侧 tag 校验）结果在 web 的常显镜像；数据全来自注入的
+        // AgentOptions + ProjectRoot（无新状态源，无并行口径）。
+        app.MapGet("/api/health", () =>
+        {
+            var oo = o.Options;
+            static string Ep(ModelEndpoint e) => $"{e.Provider}:{e.Model}@{e.Endpoint}";
+            return Results.Json(new
+            {
+                workspace = o.WorkspaceRoot,
+                project = o.ProjectRoot,
+                projectWritable = o.ProjectRoot is not null && oo.ProjectWriteEnabled,
+                epoch = o.LawUnifiedEpoch,
+                models = new
+                {
+                    classifier = Ep(oo.Classifier),
+                    small = Ep(oo.Small) + (oo.Small.Temperature is { } ts ? $" · temp {ts}" : ""),
+                    large = Ep(oo.Large) + (oo.Large.Temperature is { } tl ? $" · temp {tl}" : ""),
+                    agentPro = Ep(oo.AgentPro) + (oo.AgentPro.Temperature is { } ta ? $" · temp {ta}" : ""),
+                    executor = oo.ExecutorModel,
+                },
+                runtime = new
+                {
+                    routing = oo.EnableRouting,
+                    strictOutput = oo.StrictOutputVerification,
+                    toolLayering = oo.EnableToolLayering,
+                    taskTimeoutMinutes = oo.TaskTimeoutMinutes,
+                    maxSteps = oo.MaxSteps,
+                },
+            }, JsonOpts);
         });
 
         // ── 路由调权状态（10-07）：三处调权当前判定——与终端 stats"路由调权状态"小节同语义 ──
