@@ -5,171 +5,412 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LocalCodeForge Dashboard</title>
 <style>
-  :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#c9d1d9; --dim:#8b949e;
-          --green:#3fb950; --red:#f85149; --yellow:#d29922; --blue:#58a6ff; --cyan:#39c5cf;
-          --headH:42px; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.5 Consolas,"Courier New",monospace; }
-  header { display:flex; align-items:center; gap:12px; padding:0 16px; background:#010409; height:var(--headH);
-           border-bottom:1px solid var(--border); position:sticky; top:0; z-index:9; }
-  header h1 { font-size:15px; margin:0; color:var(--cyan); }
-  header .sub { color:var(--dim); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .btn { background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:4px;
-         padding:3px 10px; cursor:pointer; font:inherit; }
-  .btn:hover { border-color:var(--blue); }
-  main { display:grid; grid-template-columns: minmax(0,1.15fr) minmax(0,1fr); gap:12px; padding:12px;
-         align-items:start; }
-  @media (max-width:1100px){ main { grid-template-columns:1fr; } }
-  .card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:10px 12px;
-          box-shadow:0 1px 3px rgba(0,0,0,.25); }
-  .card h2 { margin:0 0 8px; font-size:13px; color:var(--dim); font-weight:600; letter-spacing:.5px; }
-  /* 折叠卡片（10-10 UI 收纳）：点击标题展开/收起，首次展开懒加载 */
-  .card.collapsible { padding-bottom:6px; }
-  .card.collapsible > h2 { cursor:pointer; user-select:none; margin:0; padding:4px 0 6px;
-                           display:flex; align-items:center; gap:6px; }
-  .card.collapsible > h2:hover { color:var(--fg); }
-  .card.collapsible > h2 .chev { color:var(--blue); font-size:11px; transition:transform .15s; }
-  .card.collapsible > h2 .sp { flex:1; }
-  .card.collapsible > h2 .h2btns { font-weight:400; display:inline-flex; gap:6px; align-items:center; }
-  .badge { background:#21262d; color:var(--dim); border:1px solid var(--border); border-radius:10px;
-           font-size:11px; font-weight:600; padding:1px 8px; margin-left:8px; white-space:nowrap; }
-  .badge.hot { color:var(--green); border-color:var(--green); }
-  .cbody { display:none; }
-  .card.collapsible.open > .cbody { display:block; }
-  .card.collapsible.open > h2 .chev { transform:rotate(90deg); }
-  /* 命令条吸顶（10-10 P1 修复）：cmdBar 必须是滚动容器（body）的直接子级，
-     sticky 才相对视口吸附——埋在卡片内时父容器=卡片，滚过卡片即滚出。
-     top 对齐 --headH：吸顶后紧贴 header 下方，不与 header 重叠。 */
-  #cmdBar { position:sticky; top:var(--headH); z-index:50; background:var(--panel);
-            border:1px solid var(--border); border-radius:6px; padding:6px 8px;
-            margin:0 0 12px; box-shadow:0 2px 6px rgba(0,0,0,.3); }
-  /* 双栏容器：左侧主工作区 / 右侧信息区 */
-  .colL { display:flex; flex-direction:column; gap:12px; min-width:0; }
-  .colR { display:flex; flex-direction:column; gap:12px; min-width:0; }
-  /* 滚动条（暗色 slim） */
-  ::-webkit-scrollbar { width:8px; height:8px; }
-  ::-webkit-scrollbar-thumb { background:#30363d; border-radius:4px; }
-  ::-webkit-scrollbar-thumb:hover { background:#3d444d; }
-  ::-webkit-scrollbar-track { background:transparent; }
-  /* 按钮主次 */
-  .btn { background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:5px;
-         padding:3px 10px; cursor:pointer; font:inherit; transition:border-color .15s, background .15s; }
-  .btn:hover { border-color:var(--blue); background:#1c2333; }
-  .btn.primary { background:var(--blue); color:#04070d; border-color:var(--blue); font-weight:600; }
-  .btn.primary:hover { filter:brightness(1.1); background:var(--blue); }
-  .btn.danger:hover { border-color:var(--red); background:#2d1416; }
-  #events { height:340px; overflow-y:auto; font-size:12px; }
-  /* 任务节分组卡片（10-10 ①：平铺 → 卡片内分节）——后续 Markdown 渲染/工具配对/折叠的地基 */
-  .taskcard { background:#11161d; border:1px solid var(--border); border-radius:6px; margin:0 0 6px; overflow:hidden; }
-  .taskcard.collapsed .tc-body { display:none; }
-  .taskcard.done .tc-head { border-left:3px solid var(--green); }
-  .taskcard.fail .tc-head { border-left:3px solid var(--red); }
-  .tc-head { display:flex; align-items:center; gap:6px; padding:3px 8px; background:#1c232d;
-             cursor:pointer; user-select:none; font-size:12px; }
-  .tc-head:hover { background:#222b37; }
-  .tc-head .chev { color:var(--blue); font-size:10px; width:10px; text-align:center; }
-  .tc-head .tag { min-width:74px; }
-  .tc-head .hint { color:var(--dim); margin-left:auto; }
-  .tc-body { padding:2px 4px 4px; }
-  .tc-sep { border-top:1px dashed #2b333d; margin:2px 0 0; }
-  /* ② 轻量 Markdown 渲染（10-10：finalAnswer 结构化展示；转义先行防 XSS） */
-  .md { padding:2px 0; }
-  .md .md-h { color:var(--cyan); font-weight:600; margin:4px 0 2px; }
-  .md .md-p { margin:1px 0; }
-  .md ul, .md ol { margin:2px 0 2px 18px; padding:0; }
-  .md li { margin:1px 0; }
-  .md b { color:var(--fg); }
-  .md code { background:#21262d; border:1px solid var(--border); border-radius:3px; padding:0 3px; font-size:11px; }
-  .md .md-pre { background:#0d1117; border:1px solid var(--border); border-radius:4px; padding:6px 8px;
-                white-space:pre-wrap; word-break:break-all; margin:3px 0; font-size:11px; }
-  /* ③ 工具调用配对块（10-10：call+result 合成；④ 折叠挂载：tp-call 点击折叠/展开结果区） */
-  .toolpair { border:1px solid #21262d; border-radius:4px; margin:2px 0; background:#141b24; overflow:hidden; }
-  .toolpair .tp-call { display:flex; align-items:center; gap:6px; padding:2px 6px; color:var(--blue);
-                       cursor:pointer; user-select:none; }
-  .toolpair .tp-call:hover { background:#1c2333; }
-  .toolpair .tp-call .chev { color:var(--blue); font-size:10px; width:10px; text-align:center; }
-  .toolpair .tp-call .tag { min-width:74px; }
-  .toolpair .tp-res { padding:0 6px 3px 28px; color:var(--dim); white-space:pre-wrap; word-break:break-all; }
-  .toolpair .tp-res.fold { display:none; }
-  .toolpair .tp-res .okmark { color:var(--green); font-weight:600; }
-  .toolpair .tp-res .failmark { color:var(--red); font-weight:600; }
-  .ev { white-space:pre-wrap; word-break:break-all; border-bottom:1px solid #21262d; padding:2px 0; }
-  .ev .tag { display:inline-block; min-width:74px; color:var(--dim); }
-  .ev.thinking  .tag { color:var(--dim); }
-  .ev.toolcall  .tag { color:var(--blue); }
-  .ev.toolresult .tag { color:var(--cyan); }
-  .ev.toolresult .okmark { color:var(--green); font-weight:600; }
-  .ev.toolresult .failmark { color:var(--red); font-weight:600; }
-  .ev.routing  .tag { color:var(--yellow); }
-  .ev.plan .tag { color:var(--yellow); }
-  .ev.file .tag { color:var(--cyan); }
-  .ev.final .tag, .ev.final { color:var(--green); }
-  .ev.error .tag, .ev.error { color:var(--red); }
-  .ev.fail { color:var(--red); }
-  .ev.ok { color:var(--green); }
-  .ev .exp { color:var(--blue); cursor:pointer; margin-left:6px; user-select:none; }
-  .ev .exp:hover { text-decoration:underline; }
-  .big { font-size:30px; font-weight:700; }
-  .big.green { color:var(--green); } .big.red { color:var(--red); }
-  .statrow { display:flex; justify-content:space-between; padding:2px 0; }
-  .bar { background:#21262d; border-radius:3px; height:12px; margin:3px 0 8px; overflow:hidden; }
-  .bar i { display:block; height:100%; }
-  .b-green { background:var(--green); } .b-red { background:var(--red); } .b-yellow { background:var(--yellow); }
-  .b-blue { background:var(--blue); } .b-dim { background:var(--dim); }
-  table { width:100%; border-collapse:collapse; font-size:12px; }
-  th,td { text-align:left; padding:3px 6px; border-bottom:1px solid #21262d; white-space:nowrap; }
-  th { color:var(--dim); font-weight:600; }
-  #tasksBody tr:nth-child(even), .tbl tr:nth-child(even) { background:#141b24; }
-  td.inp { max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .ok { color:var(--green); } .fail { color:var(--red); } .warn { color:var(--yellow); }
-  #tasksBody { display:block; max-height:260px; overflow-y:auto; }
-  #tasksBody tr { cursor:pointer; }
-  #tasksBody tr:hover { background:#21262d; }
-  #tasksBody tr.sel { background:#1f3a2a; }
-  #detail { max-height:240px; overflow-y:auto; font-size:12px; }
-  .ev.error.bad { outline:1px solid var(--red); outline-offset:-1px; }
-  #backups { max-height:220px; overflow-y:auto; }
-  .bk-roll { margin-left:8px; padding:1px 10px; font-size:12px; cursor:pointer;
-             border:1px solid #888; border-radius:4px; background:#333; color:#eee; }
-  .bk-roll:hover { background:#c0392b; border-color:#c0392b; }
-  .bk-task { cursor:pointer; padding:3px 6px; border-radius:3px; }
-  .bk-task:hover { background:#21262d; }
-  .bk-task.open { background:#1f3a2a; }
-  .bk-file { padding-left:22px; cursor:pointer; color:var(--blue); }
-  .bk-file:hover { text-decoration:underline; }
-  .bk-meta { color:var(--dim); font-size:11px; margin-left:6px; }
-  #diff { white-space:pre-wrap; font-size:12px; max-height:340px; overflow-y:auto; background:#0d1117;
-          border:1px solid var(--border); border-radius:4px; padding:8px; }
-  .d-hunk { color:var(--yellow); }
-  .d-add { color:var(--green); } .d-del { color:var(--red); } .d-same { color:var(--dim); }
-  .empty { color:var(--dim); padding:6px 0; }
-  /* 10-08 Monaco：代码块点击升级只读编辑器；diff 左右对比（StandaloneDiffEditor） */
-  .md-pre { cursor:pointer; } .md-pre:hover { border-color:var(--blue) !important; }
-  .monaco-host { height:420px; border:1px solid var(--border); border-radius:4px; margin:4px 0; }
-  .monaco-diff-host { height:500px; border:1px solid var(--border); border-radius:4px; margin:4px 0; }
-  .d-bar { display:flex; gap:6px; margin-bottom:6px; }
-  /* toast 全局反馈 */
-  #toast { position:fixed; right:16px; bottom:16px; z-index:99; display:flex; flex-direction:column; gap:6px; }
-  .toast { padding:8px 14px; border-radius:6px; font-size:12px; max-width:360px; word-break:break-all;
-           box-shadow:0 4px 12px rgba(0,0,0,.4); animation:toastIn .18s ease-out; }
-  .toast.ok { background:#12291a; border:1px solid var(--green); color:var(--green); }
-  .toast.err { background:#2b1416; border:1px solid var(--red); color:var(--red); }
-  .toast.info { background:#12202f; border:1px solid var(--blue); color:var(--blue); }
-  .toast.dim { background:#21262d; border:1px solid var(--border); color:var(--dim); }
-  @keyframes toastIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
-  /* header 状态点 */
-  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
-  .dot.green { background:var(--green); box-shadow:0 0 6px var(--green); }
-  .dot.yellow { background:var(--yellow); box-shadow:0 0 6px var(--yellow); }
-  /* 10-07 SVG 依赖子图：暗色主题节点/边 */
-  .depRect { fill:#1f2a3d; stroke:var(--border); stroke-width:1; }
-  .depRect.depC { fill:#233a5c; stroke:var(--blue); stroke-width:2; }
-  .depRect.depD { stroke:#4caf78; }
-  .depRect.depR { stroke:#e06c5a; }
-  .depText { fill:var(--fg); font-size:12px; }
-  .depNode { cursor:pointer; }
-  .depNode:hover .depRect { filter:brightness(1.35); }
-  .depEdge { fill:none; stroke-width:1.5; opacity:.85; }
+  /* ============================================================
+     LocalCodeForge Dashboard — 设计系统 v3（10-15 视觉重构 · 演示优先）
+     美学定位：深底高对比「锻造台」——大面积近黑中性 + 极少量高饱和强调。
+     主强调 = 电光青（--cyan，品牌/交互/焦点一贯色）；次强调 = 琥珀金（--gold，
+     呼应"锻造"命名，只用于品牌标记与完成态辉光）。渐变只出现在 4 处（品牌标记、
+     header 分隔线、主按钮、页面顶部环境光），其余全靠明度阶梯与色条——
+     亮色可以大胆，但用得少才高级。
+     约束：保留全部既有类名与旧变量名（DOM 内联样式仍引用 var(--fg/--border/--dim/--blue)）。
+     ============================================================ */
+  :root {
+    color-scheme: dark;
+    /* ── 中性阶梯：更深底、更亮内容 → 对比度拉开（治"灰闷"）── */
+    --bg:        oklch(12.5% 0.014 252);
+    --bg-sunk:   oklch(9.5%  0.013 252);
+    --panel:     oklch(18%   0.016 250);
+    --panel-2:   oklch(21.5% 0.018 250);
+    --panel-3:   oklch(27%   0.020 250);
+    --border:    oklch(33%   0.020 250);
+    --border-2:  oklch(45%   0.026 250);
+    --fg:        oklch(97%   0.004 250);
+    --fg-2:      oklch(84%   0.008 250);
+    --dim:       oklch(67%   0.012 250);
+    --faint:     oklch(53%   0.014 250);
+    /* ── 语义色：饱和度整体上调（此前过低导致"没精神"）── */
+    --green:  oklch(78% 0.190 150);
+    --red:    oklch(70% 0.215 25);
+    --yellow: oklch(86% 0.175 92);
+    --blue:   oklch(76% 0.170 245);
+    --cyan:   oklch(90% 0.165 192);
+    --gold:   oklch(84% 0.160 78);
+    --accent: var(--cyan);
+    /* ── 阴影 / 高光：双层接触+扩散，近看不糊 ── */
+    --sh-1: 0 1px 2px oklch(0% 0 0 / .55);
+    --sh-2: 0 10px 28px -10px oklch(0% 0 0 / .75), 0 2px 6px -2px oklch(0% 0 0 / .55);
+    --sh-glow: 0 0 0 1px oklch(90% 0.165 192 / .35), 0 6px 18px -8px oklch(90% 0.165 192 / .45);
+    --hi: inset 0 1px 0 oklch(100% 0 0 / .07);
+    /* ── 排版 ── */
+    --font-ui:   "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+    --font-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Consolas", ui-monospace, "SFMono-Regular", monospace;
+    /* ── 间距节奏（4px 基准，流式）── */
+    --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+    --sp-5: 24px; --sp-6: 32px;
+    --r-sm: 4px; --r: 8px; --r-lg: 12px;
+    /* header 高度：cmdBar sticky 基准（勿删，测试与布局双依赖） */
+    --headH: 46px;
+    --ease: cubic-bezier(.22, .61, .36, 1);
+    --dur: .16s;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(900px 420px at 22% -12%, oklch(90% 0.165 192 / .13), transparent 68%),
+      radial-gradient(700px 360px at 92% 0%, oklch(84% 0.16 78 / .07), transparent 70%),
+      var(--bg);
+    color: var(--fg);
+    font: 13px/1.55 var(--font-mono);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection { background: oklch(90% 0.165 192 / .3); color: oklch(12% 0.02 252); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+  .dim { color: var(--dim); }
+
+  /* ── header：品牌是唯一"发光"的地方 ── */
+  header {
+    display: flex; align-items: center; gap: var(--sp-3);
+    padding: 0 clamp(12px, 1.6vw, 20px);
+    background: linear-gradient(oklch(15% 0.016 252), var(--bg-sunk));
+    height: var(--headH);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 9;
+  }
+  /* 分隔线：从左向右衰减的渐变（唯一允许的"装饰性"渐变之一） */
+  header::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+    background: linear-gradient(90deg, oklch(90% 0.165 192 / .85), oklch(84% 0.16 78 / .35) 32%, transparent 62%);
+  }
+  header h1 {
+    margin: 0; font: 700 16px/1 var(--font-ui); letter-spacing: -.022em; color: var(--fg);
+    display: inline-flex; align-items: center; gap: 9px; white-space: nowrap;
+  }
+  /* 锻造标记：斜切方块 + 金青渐变 + 微光（品牌记忆点，纯 CSS 无依赖） */
+  header h1::before {
+    content: ""; width: 13px; height: 13px;
+    background: linear-gradient(135deg, var(--gold), var(--cyan));
+    clip-path: polygon(0 0, 100% 0, 100% 62%, 62% 100%, 0 100%);
+    box-shadow: 0 0 10px oklch(84% 0.16 78 / .45);
+  }
+  /* 状态改为胶囊标签：从"灰字"变成有形的状态件（更像产品） */
+  header .sub {
+    color: var(--fg-2); font-size: 11.5px; font-family: var(--font-ui);
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 10px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46vw;
+  }
+  /* 健康状态是长串（模型/工程/路由/重试），胶囊放宽容度避免截断 */
+  #healthLine { max-width: 58vw; }
+  header .spacer { flex: 1; }
+  .dot { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 1px; }
+  .dot.green  { background: var(--green);  box-shadow: 0 0 7px oklch(78% 0.19 150 / .8); }
+  .dot.yellow { background: var(--yellow); box-shadow: 0 0 7px oklch(86% 0.175 92 / .8); }
+  @media (prefers-reduced-motion: no-preference) {
+    .dot.green { animation: breathe 2.6s var(--ease) infinite; }
+  }
+  @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+
+  /* ── 按钮：UI 字体（此前继承等宽，是"像终端不像产品"的元凶之一）── */
+  .btn {
+    background: linear-gradient(var(--panel-3), var(--panel-2));
+    color: var(--fg-2); font: 600 12px/1.4 var(--font-ui);
+    border: 1px solid var(--border-2); border-radius: var(--r-sm);
+    padding: 4px 11px; cursor: pointer; box-shadow: var(--sh-1), var(--hi);
+    transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease),
+                color var(--dur) var(--ease), transform var(--dur) var(--ease),
+                box-shadow var(--dur) var(--ease);
+  }
+  .btn:hover { color: var(--fg); border-color: oklch(58% 0.03 250);
+               transform: translateY(-1px); box-shadow: var(--sh-2), var(--hi); }
+  .btn:active { transform: translateY(0); }
+  .btn.primary {
+    background: linear-gradient(oklch(90% 0.165 192), oklch(78% 0.15 196));
+    color: oklch(14% 0.03 252); border-color: oklch(90% 0.165 192); font-weight: 700;
+    box-shadow: var(--sh-glow);
+  }
+  .btn.primary:hover { background: linear-gradient(oklch(95% 0.14 192), oklch(84% 0.15 196));
+                       color: oklch(14% 0.03 252); box-shadow: var(--sh-glow), 0 0 14px oklch(90% 0.165 192 / .5); }
+  .btn.danger:hover { border-color: var(--red); color: var(--red);
+                      background: linear-gradient(oklch(30% 0.09 25), oklch(22% 0.06 25)); }
+  .btn[disabled] { opacity: .5; cursor: not-allowed; }
+  .btn.is-busy { position: relative; color: transparent; pointer-events: none; }
+  .btn.is-busy::after {
+    content: ""; position: absolute; inset: 0; margin: auto;
+    width: 14px; height: 2px; background: currentColor; opacity: .8;
+    animation: busy 1s linear infinite;
+  }
+  @keyframes busy { 0% { transform: translateX(-6px) scaleX(.4); } 50% { transform: translateX(0) scaleX(1); } 100% { transform: translateX(6px) scaleX(.4); } }
+
+  /* 过滤按钮组：active 用实心强调底 + 下标线（比原来更敢用色） */
+  .fbtn { background: transparent; border-color: transparent; color: var(--dim); box-shadow: none; font-weight: 600; }
+  .fbtn:hover { color: var(--fg-2); background: var(--panel-2); box-shadow: none; transform: none; }
+  .fbtn.active { color: oklch(14% 0.03 252); background: var(--accent); border-color: var(--accent);
+                 box-shadow: 0 0 0 1px oklch(90% 0.165 192 / .5), 0 4px 12px -6px oklch(90% 0.165 192 / .7); }
+
+  /* ── 布局 ── */
+  main { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+         gap: var(--sp-4); padding: var(--sp-4) clamp(12px, 1.6vw, 20px); align-items: start; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  .colL { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
+  .colR { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+
+  /* ── 卡片：亮边框 + 顶部高光 + 真实阴影（近看有质感）── */
+  .card {
+    background: linear-gradient(oklch(19.5% 0.017 250), var(--panel));
+    border: 1px solid var(--border); border-radius: var(--r);
+    padding: clamp(11px, 1.2vw, 15px);
+    box-shadow: var(--sh-1), var(--hi);
+  }
+  /* 标题：去掉生硬的大写大字距，改为"有字重张力"的产品化层级 + 强调色竖条 */
+  .card h2 {
+    margin: 0 0 11px; font: 600 13px/1.35 var(--font-ui); letter-spacing: -.005em;
+    color: var(--fg); display: flex; align-items: center; gap: 8px;
+  }
+  .card > h2::before {
+    content: ""; width: 3px; height: 12px; border-radius: 2px;
+    background: linear-gradient(var(--cyan), oklch(78% 0.15 196 / .4));
+  }
+  .card.collapsible { padding-bottom: 6px; }
+  .card.collapsible > h2 { cursor: pointer; user-select: none; margin: 0; padding: 2px 0 6px; }
+  .card.collapsible > h2:hover { color: var(--accent); }
+  .card.collapsible > h2 .chev { color: var(--accent); font-size: 11px; transition: transform var(--dur) var(--ease); }
+  .card.collapsible > h2 .sp { flex: 1; }
+  .card.collapsible > h2 .h2btns { font-weight: 400; display: inline-flex; gap: 6px; align-items: center; }
+  .card.collapsible > h2 .hint { font-weight: 400; }
+  .cbody { display: none; }
+  .card.collapsible.open > .cbody { display: block; animation: reveal .2s var(--ease) both; }
+  .card.collapsible.open > h2 .chev { transform: rotate(90deg); }
+  @keyframes reveal { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+  .badge { background: var(--panel-3); color: var(--fg-2); border: 1px solid var(--border-2);
+           border-radius: 999px; font: 700 11px/1.5 var(--font-mono);
+           padding: 1px 9px; margin-left: 8px; white-space: nowrap;
+           font-variant-numeric: tabular-nums; }
+  .badge.hot { color: var(--green); border-color: oklch(78% 0.19 150 / .55);
+               background: oklch(78% 0.19 150 / .12); }
+
+  /* ── 命令条：吸顶主控件（契约：sticky + top:var(--headH) 写法不可改）── */
+  #cmdBar { position:sticky; top:var(--headH); z-index:50; background:var(--panel-2);
+            border:1px solid var(--border-2); border-radius:var(--r); padding:7px 9px;
+            margin:0 0 var(--sp-4);
+            box-shadow: var(--sh-2), var(--hi);
+            display:flex; gap:8px; align-items:center; }
+  #cmdBar:focus-within { border-color: var(--accent); box-shadow: var(--sh-glow); }
+
+  .inp, select.sel, #depFile, #taskStatus {
+    background: var(--bg-sunk); color: var(--fg);
+    border: 1px solid var(--border); border-radius: var(--r-sm);
+    padding: 5px 9px; font: inherit; font-size: 12px;
+    transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease),
+                box-shadow var(--dur) var(--ease);
+  }
+  .inp::placeholder { color: var(--faint); }
+  .inp:hover, select.sel:hover { border-color: var(--border-2); }
+  .inp:focus, select.sel:focus { outline: none; border-color: var(--accent); background: var(--bg);
+                                 box-shadow: 0 0 0 3px oklch(90% 0.165 192 / .18); }
+  select.sel { padding: 4px 6px; font-family: var(--font-ui); }
+
+  /* ── 事件流：做成"显示面板"，成为页面视觉重心 ── */
+  #events { height: clamp(320px, 46vh, 560px); overflow-y: auto; font-size: 12px;
+            scrollbar-gutter: stable;
+            background: var(--bg-sunk); border: 1px solid var(--border);
+            border-radius: var(--r-sm); padding: 3px 0;
+            box-shadow: inset 0 1px 3px oklch(0% 0 0 / .5); }
+  .ev { position: relative; padding: 3px 8px 3px 10px; border-left: 3px solid transparent;
+        white-space: pre-wrap; word-break: break-all; }
+  .ev + .ev { border-top: 1px solid oklch(24% 0.015 252); }
+  .ev .tag { display: inline-block; min-width: 74px; color: var(--dim); font-size: 11px; }
+  .ev.thinking   { border-left-color: var(--faint); }
+  .ev.toolcall   { border-left-color: var(--blue); }
+  .ev.toolresult { border-left-color: var(--cyan); }
+  .ev.routing, .ev.plan { border-left-color: var(--yellow); }
+  .ev.file       { border-left-color: var(--cyan); }
+  .ev.final      { border-left-color: var(--green); }
+  .ev.error      { border-left-color: var(--red); background: oklch(70% 0.215 25 / .1); }
+  .ev.thinking .tag { color: var(--faint); }
+  .ev.toolcall   .tag { color: var(--blue); }
+  .ev.toolresult .tag { color: var(--cyan); }
+  .ev.routing .tag, .ev.plan .tag { color: var(--yellow); }
+  .ev.final .tag, .ev.final { color: var(--green); }
+  .ev.error .tag, .ev.error { color: var(--red); }
+  .ev.fail { color: var(--red); }
+  .ev.ok { color: var(--green); }
+  .ev .exp { color: var(--blue); cursor: pointer; margin-left: 6px; user-select: none;
+             border-bottom: 1px dotted oklch(76% 0.17 245 / .55); }
+  .ev .exp:hover { color: var(--fg); border-bottom-style: solid; text-decoration: none; }
+  .ev .okmark { color: var(--green); font-weight: 700; }
+  .ev .failmark { color: var(--red); font-weight: 700; }
+  .ev.error.bad { border-left-color: var(--red); background: oklch(70% 0.215 25 / .16); }
+
+  /* ── 任务节卡片：头部分层更强（状态色左边框 + 亮底）── */
+  .taskcard { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+              margin: 0 0 6px; overflow: hidden; box-shadow: var(--sh-1); }
+  .taskcard.collapsed .tc-body { display: none; }
+  .taskcard.done .tc-head { border-left: 3px solid var(--green); }
+  .taskcard.fail .tc-head { border-left: 3px solid var(--red); }
+  .tc-head { display: flex; align-items: center; gap: 6px; padding: 5px 8px;
+             background: linear-gradient(var(--panel-3), var(--panel-2));
+             cursor: pointer; user-select: none; font-size: 12px;
+             transition: background var(--dur) var(--ease); }
+  .tc-head:hover { background: var(--panel-3); }
+  .tc-head .chev { color: var(--accent); font-size: 10px; width: 10px; text-align: center;
+                   transition: transform var(--dur) var(--ease); }
+  .tc-head .tag { min-width: 74px; font-size: 11px; color: var(--dim); }
+  .tc-head .hint { color: var(--dim); margin-left: auto; font-size: 11px; }
+  .tc-body { padding: 4px 6px 6px; }
+  .tc-sep { border-top: 1px dashed var(--border); margin: 4px 0 2px; }
+
+  /* ── Markdown ── */
+  .md { padding: 2px 0; }
+  .md .md-h { color: var(--cyan); font-weight: 700; margin: 6px 0 3px; font-size: 13px; }
+  .md .md-p { margin: 2px 0; }
+  .md ul, .md ol { margin: 2px 0 2px 18px; padding: 0; }
+  .md li { margin: 1px 0; }
+  .md b { color: var(--fg); font-weight: 700; }
+  .md code { background: var(--panel-3); border: 1px solid var(--border-2); border-radius: var(--r-sm);
+             padding: 0 4px; font-size: 11px; color: var(--cyan); }
+  .md .md-pre, .md-pre { background: var(--bg-sunk); border: 1px solid var(--border);
+                         border-radius: var(--r-sm); padding: 8px 10px;
+                         white-space: pre-wrap; word-break: break-all; margin: 4px 0; font-size: 11.5px;
+                         line-height: 1.5; }
+  .md-pre { cursor: pointer; transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+  .md-pre:hover { border-color: var(--accent); box-shadow: 0 0 0 3px oklch(90% 0.165 192 / .14); }
+  .md-pre::after { content: "点击用编辑器查看"; display: block; margin-top: 4px;
+                   font: 600 10px/1 var(--font-ui); letter-spacing: .07em;
+                   color: var(--faint); text-transform: uppercase; }
+  .md-pre[data-monaco-upgraded]::after { content: none; }
+
+  /* ── 工具调用配对块 ── */
+  .toolpair { border: 1px solid var(--border); border-radius: var(--r-sm); margin: 3px 0;
+              background: oklch(16% 0.015 252); overflow: hidden; }
+  .toolpair .tp-call { display: flex; align-items: center; gap: 6px; padding: 3px 6px;
+                       color: var(--blue); cursor: pointer; user-select: none;
+                       transition: background var(--dur) var(--ease); }
+  .toolpair .tp-call:hover { background: oklch(24% 0.05 245); }
+  .toolpair .tp-call .chev { color: var(--accent); font-size: 10px; width: 10px; text-align: center; }
+  .toolpair .tp-call .tag { min-width: 74px; font-size: 11px; color: var(--dim); }
+  .toolpair .tp-res { padding: 0 8px 4px 28px; color: var(--dim); white-space: pre-wrap; word-break: break-all; }
+  .toolpair .tp-res.fold { display: none; }
+  .toolpair .tp-res .okmark { color: var(--green); font-weight: 700; }
+  .toolpair .tp-res .failmark { color: var(--red); font-weight: 700; }
+
+  /* ── 统计：数字是演示的"证据"，给足字号与对齐 ── */
+  .statrow { display: flex; justify-content: space-between; gap: var(--sp-3); padding: 2px 0; }
+  .statrow > span:first-child { color: var(--dim); font-family: var(--font-ui); font-size: 12px; }
+  .big { font: 700 clamp(26px, 2.8vw, 36px)/1.05 var(--font-ui); letter-spacing: -.03em;
+         font-variant-numeric: tabular-nums; }
+  .big.green { color: var(--green); } .big.red { color: var(--red); }
+  .bar { background: var(--bg-sunk); border-radius: 2px; height: 7px; margin: 5px 0 11px; overflow: hidden;
+         box-shadow: inset 0 1px 2px oklch(0% 0 0 / .5); }
+  .bar i { display: block; height: 100%; transition: width .4s var(--ease); }
+  .b-green { background: linear-gradient(90deg, oklch(70% 0.18 150), var(--green)); }
+  .b-red { background: linear-gradient(90deg, oklch(58% 0.2 25), var(--red)); }
+  .b-yellow { background: linear-gradient(90deg, oklch(74% 0.16 92), var(--yellow)); }
+  .b-blue { background: linear-gradient(90deg, oklch(62% 0.16 245), var(--blue)); }
+  .b-dim { background: var(--faint); }
+
+  /* ── 表格 ── */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--dim); font: 600 11px/1.4 var(--font-ui); letter-spacing: .03em;
+       border-bottom-color: var(--border-2); }
+  .tbl tr:nth-child(even), #tasksBody tr:nth-child(even) { background: oklch(16% 0.015 252); }
+  td.inp { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ok { color: var(--green); } .fail { color: var(--red); } .warn { color: var(--yellow); }
+  #tasksBody { display: block; max-height: 260px; overflow-y: auto; }
+  #tasksBody tr { cursor: pointer; transition: background var(--dur) var(--ease); }
+  #tasksBody tr:hover { background: var(--panel-3); }
+  #tasksBody tr.sel { background: oklch(78% 0.19 150 / .16); box-shadow: inset 3px 0 0 var(--green); }
+  #detail { max-height: 240px; overflow-y: auto; font-size: 12px; }
+  #backups { max-height: 220px; overflow-y: auto; }
+  .bk-roll { margin-left: 8px; padding: 2px 11px; font-size: 12px; cursor: pointer;
+             border: 1px solid var(--border-2); border-radius: var(--r-sm);
+             background: linear-gradient(var(--panel-3), var(--panel-2)); color: var(--fg-2);
+             font-family: var(--font-ui); font-weight: 600;
+             transition: all var(--dur) var(--ease); }
+  .bk-roll:hover { background: linear-gradient(oklch(34% 0.12 25), oklch(24% 0.07 25));
+                   border-color: var(--red); color: var(--red); }
+  .bk-task { cursor: pointer; padding: 3px 6px; border-radius: var(--r-sm); transition: background var(--dur) var(--ease); }
+  .bk-task:hover { background: var(--panel-3); }
+  .bk-task.open { background: oklch(78% 0.19 150 / .16); }
+  .bk-file { padding-left: 22px; cursor: pointer; color: var(--blue); }
+  .bk-file:hover { text-decoration: underline; }
+  .bk-meta { color: var(--dim); font-size: 11px; margin-left: 6px; }
+  #diff { white-space: pre-wrap; font-size: 12px; max-height: 340px; overflow-y: auto; background: var(--bg-sunk);
+          border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px; }
+  .d-hunk { color: var(--yellow); }
+  .d-add { color: var(--green); } .d-del { color: var(--red); } .d-same { color: var(--dim); }
+  .kv { padding: 2px 0; color: var(--fg-2); }
+  .kv .tag { display: inline-block; min-width: 74px; color: var(--dim); font-size: 11px; }
+
+  /* ── 空状态 / 错误态：从虚线框改为有形面板（更像产品，不像占位）── */
+  .empty { color: var(--dim); padding: 11px 13px; font-size: 12px;
+           border: 1px solid var(--border); border-radius: var(--r-sm);
+           background: var(--panel); }
+  .emptybox { padding: clamp(15px, 2vw, 24px) var(--sp-4); text-align: center;
+              border: 1px solid var(--border); border-radius: var(--r);
+              background: linear-gradient(oklch(17% 0.016 250), var(--panel));
+              box-shadow: var(--sh-1), var(--hi); }
+  .emptybox .eb-mark { width: 30px; height: 30px; margin: 0 auto 11px;
+                       border: 1.5px solid var(--border-2); border-radius: 50%;
+                       display: grid; place-items: center; color: var(--accent);
+                       font: 700 14px/1 var(--font-ui);
+                       box-shadow: 0 0 12px -4px oklch(90% 0.165 192 / .5); }
+  .emptybox.is-err .eb-mark { border-color: var(--red); color: var(--red);
+                              box-shadow: 0 0 12px -4px oklch(70% 0.215 25 / .6); }
+  .emptybox .eb-title { font: 700 13px/1.5 var(--font-ui); color: var(--fg); margin-bottom: 5px; }
+  .emptybox.is-err .eb-title { color: var(--red); }
+  .emptybox .eb-desc { font-size: 11.5px; color: var(--dim); max-width: 46ch; margin: 0 auto; line-height: 1.65; }
+  .emptybox .eb-act { margin-top: 11px; }
+
+  /* ── Monaco ── */
+  .monaco-host, .monaco-diff-host { border: 1px solid var(--border-2); border-radius: var(--r-sm); margin: 4px 0; }
+  .monaco-host { height: 420px; } .monaco-diff-host { height: 500px; }
+  .d-bar { display: flex; gap: 6px; margin-bottom: 6px; }
+
+  /* ── toast：左侧色条 + 强阴影 ── */
+  #toast { position: fixed; right: 16px; bottom: 16px; z-index: 99;
+           display: flex; flex-direction: column; gap: 6px; }
+  .toast { padding: 9px 14px; border-radius: var(--r-sm); font-size: 12px; max-width: 360px;
+           word-break: break-all; box-shadow: var(--sh-2);
+           animation: toastIn .22s var(--ease) both; font-family: var(--font-ui); font-weight: 500; }
+  .toast.ok   { background: oklch(24% 0.08 150); border: 1px solid oklch(78% 0.19 150 / .55);
+                color: var(--green); border-left: 3px solid var(--green); }
+  .toast.err  { background: oklch(24% 0.09 25);  border: 1px solid oklch(70% 0.215 25 / .55);
+                color: var(--red); border-left: 3px solid var(--red); }
+  .toast.info { background: oklch(24% 0.07 245); border: 1px solid oklch(76% 0.17 245 / .55);
+                color: var(--blue); border-left: 3px solid var(--blue); }
+  .toast.dim  { background: var(--panel-3); border: 1px solid var(--border-2); color: var(--fg-2); }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+  /* ── 依赖图 SVG ── */
+  .depRect { fill: oklch(23% 0.02 250); stroke: var(--border-2); stroke-width: 1; }
+  .depRect.depC { fill: oklch(30% 0.09 245); stroke: var(--blue); stroke-width: 2; }
+  .depRect.depD { stroke: var(--green); }
+  .depRect.depR { stroke: var(--red); }
+  .depText { fill: var(--fg-2); font: 12px var(--font-mono); }
+  .depNode { cursor: pointer; }
+  .depNode:hover .depRect { filter: brightness(1.5); }
+  .depEdge { fill: none; stroke-width: 1.5; opacity: .9; }
+
+  /* ── 滚动条 ── */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: oklch(40% 0.02 250); border-radius: 99px;
+                              border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: oklch(52% 0.025 250); background-clip: content-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  @media (max-width: 720px) {
+    #cmdBar { flex-wrap: wrap; }
+    #cmdBar .inp { flex: 1 1 100%; }
+    header .sub { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+                             transition-duration: .01ms !important; }
+  }
 </style>
 </head>
 <body>
@@ -178,13 +419,14 @@
   <span class="dot green" id="liveDot" title="服务在线"></span>
   <span class="sub" id="sub">加载中…</span>
   <span class="sub" id="healthLine" title="模型端点 / 工程模式 / 运行开关（/api/health，P0-2）" style="max-width:46vw"></span>
+  <span class="spacer"></span>
   <button class="btn" onclick="refreshAll()">刷新</button>
 </header>
 <main>
   <div class="colL">
   <div id="cmdBar" style="display:flex;gap:8px;align-items:center">
-    <input id="cmdInput" type="text" placeholder="输入需求或命令（如：写一个 C# 待办事项项目 / use --write 路径 / stats）"
-           style="flex:1;background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:13px" />
+    <input id="cmdInput" type="text" class="inp" placeholder="输入需求或命令（如：写一个 C# 待办事项项目 / use --write 路径 / stats）"
+           style="flex:1" />
     <button class="btn primary" id="cmdSend">提交</button>
     <button class="btn danger" id="cmdCancel" title="取消当前正在执行的任务（与终端 q 键同一机制）">取消任务</button>
     <span id="cmdHint" class="dim" style="font-size:12px;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
@@ -201,11 +443,11 @@
       </span>
     </h2>
     <div style="display:flex;gap:8px;margin:0 0 8px;align-items:center">
-      <input id="evFilter" type="text" placeholder="过滤事件（关键词，本地）"
-             style="flex:1;max-width:260px;background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:2px 8px;font-size:12px" />
+      <input id="evFilter" type="text" class="inp" placeholder="过滤事件（关键词，本地）"
+             style="flex:1;max-width:260px" />
       <button class="btn" id="evClear" title="清空当前事件显示（缓存同时清空）">清空</button>
     </div>
-    <div id="events"><div class="empty">等待任务事件…（dashboard 不阻塞 CLI，任务照常执行）</div></div>
+    <div id="events"><div class="emptybox"><div class="eb-mark">&#9671;</div><div class="eb-title">等待任务事件</div><div class="eb-desc">Dashboard 不会阻塞 CLI——任务照常在终端执行。在上方命令条提交需求，事件会实时出现在这里。</div></div></div>
   </div>
 
   <div class="card">
@@ -216,9 +458,9 @@
         <button class="btn" id="filesRefresh" title="刷新">刷新</button>
       </span>
     </h2>
-    <div id="files" style="font-size:12px;line-height:1.8"><div class="empty">点击"刷新"浏览 run 工作目录产物（CLI 任务生成的文件）</div></div>
+    <div id="files" style="font-size:12px;line-height:1.8"><div class="emptybox"><div class="eb-mark">&#9671;</div><div class="eb-title">尚未浏览产物</div><div class="eb-desc">点击右上角"刷新"浏览 run 工作目录——CLI 任务生成的文件都落在这里。</div></div></div>
     <div style="position:relative">
-      <pre id="filesPreview" class="empty" style="display:none;max-height:320px;overflow:auto;margin-top:8px;background:#0d1117;border:1px solid var(--border);border-radius:4px;padding:8px;font-size:12px"></pre>
+      <pre id="filesPreview" style="display:none;max-height:320px;overflow:auto;margin-top:8px;background:var(--bg-sunk);border:1px solid var(--border);border-radius:var(--r-sm);padding:8px;font-size:12px"></pre>
       <button class="btn" id="filesPreviewClose" style="display:none;position:absolute;top:14px;right:14px;font-size:11px;padding:1px 8px" title="关闭预览">✕</button>
     </div>
   </div>
@@ -226,11 +468,11 @@
   <div class="card">
     <h2>工程依赖图谱（use 工程模式）
       <span style="float:right;font-weight:400">
-        <select id="depFile" style="background:#1a1f2e;color:var(--fg);border:1px solid #2f3a52;border-radius:4px;padding:2px 6px"><option value="">（全工程概览）</option></select>
+        <select id="depFile" class="sel"><option value="">（全工程概览）</option></select>
         <button class="btn" id="depLoad" style="margin-left:6px">加载</button>
       </span>
     </h2>
-    <div id="dep"><div class="empty">未启用工程模式或无依赖数据。CLI 执行 use &lt;路径&gt; 后点"加载"刷新。</div></div>
+    <div id="dep"><div class="emptybox"><div class="eb-mark">&#9671;</div><div class="eb-title">依赖图谱未就绪</div><div class="eb-desc">需要工程模式：在 CLI 执行 use &lt;路径&gt; 建立符号索引，再点右上角"加载"。</div></div></div>
   </div>
   </div>
 
@@ -254,9 +496,9 @@
     <h2 onclick="toggleCard(this)"><span class="chev">▸</span>历史任务（/api/tasks · 最近 50 · 可筛选）<span class="sp"></span><span class="badge" id="badgeTasks"></span></h2>
     <div class="cbody">
       <div style="display:flex;gap:6px;margin:0 0 8px;align-items:center">
-        <input id="taskQ" type="text" placeholder="搜索输入/错误（关键词，本地过滤）"
-               style="flex:1;max-width:260px;background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:2px 8px;font-size:12px" />
-        <select id="taskStatus" style="background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:2px 6px;font-size:12px">
+        <input id="taskQ" type="text" class="inp" placeholder="搜索输入/错误（关键词，本地过滤）"
+               style="flex:1;max-width:260px" />
+        <select id="taskStatus" class="sel">
           <option value="">全部状态</option>
           <option value="ok">OK</option>
           <option value="fail">FAIL</option>
@@ -519,6 +761,7 @@ function renderPair(tb, u, boxKey, vis) {
   head.className = "tp-call";
   head.title = "点击折叠/展开工具结果";
   head.onclick = () => togglePair(boxKey, u.start);
+  head.setAttribute("role", "button"); head.tabIndex = 0;       // 键盘可达（10-15）
   head.innerHTML = `<span class="chev">${isFold ? "▸" : "▾"}</span><span class="tag">${callLine.tag}</span> ${esc(callLine.text)}`;
   pair.appendChild(head);
   if (vis.showRes) {
@@ -549,6 +792,7 @@ function renderGrouped(box, events, opts) {
     head.className = "tc-head";
     head.title = "点击折叠/展开任务节";
     head.onclick = () => toggleCard(boxKey, g.start);
+    head.setAttribute("role", "button"); head.tabIndex = 0;   // 键盘可达（10-15）
     const chev = `<span class="chev">${isColl ? "▸" : "▾"}</span>`;
     if (g.head) {
       const line = renderEventLine(g.head);
@@ -613,7 +857,12 @@ function renderEvents() {
     keyword: evKeyword,
     onDone: () => { if ($("autoScroll").checked) box.scrollTop = box.scrollHeight; },
   });
-  if (n === 0) box.innerHTML = `<div class="empty">${eventsCache.length ? "当前过滤下无匹配事件" : "等待任务事件…（dashboard 不阻塞 CLI，任务照常执行）"}</div>`;
+  if (n === 0) box.innerHTML = eventsCache.length
+    ? emptyState("当前过滤下无匹配事件",
+        "已缓存 " + eventsCache.length + " 条事件，但没有命中当前过滤条件/关键词。",
+        { action: `<button class="btn" onclick="resetEventFilter()">显示全部事件</button>` })
+    : emptyState("等待任务事件",
+        "Dashboard 不会阻塞 CLI——任务照常在终端执行。在上方命令条提交需求，事件会实时出现在这里。");
 }
 document.querySelectorAll(".fbtn").forEach(btn => btn.addEventListener("click", () => {
   document.querySelectorAll(".fbtn").forEach(b => b.classList.remove("active"));
@@ -631,7 +880,7 @@ $("evClear").addEventListener("click", () => {
 // 全工程概览：文件数/边数/改动风险 Top5（反向依赖最多）表格；选文件 → 直接/反向依赖表格。
 function loadDeps() {
   const dep = $("dep");
-  dep.innerHTML = `<div class="empty">加载依赖图谱…</div>`;
+  dep.innerHTML = emptyState("正在加载依赖图谱", "读取 /api/deps（工程模式符号索引）…");
   fetch("/api/deps")
     .then(r => { if (!r.ok) throw new Error("未启用工程模式或索引失败（CLI 先 use <路径>）"); return r.json(); })
     .then(data => {
@@ -643,12 +892,12 @@ function loadDeps() {
         for (const t of data.topReverse) html += `<tr><td>${esc(t.file)}</td><td>${t.count}</td></tr>`;
         html += `</table><div class="dim" style="margin-top:6px">改动这些文件会波及最多其他文件——多文件修改前先查影响面。</div>`;
       } else {
-        html += `<div class="empty">暂无类型级依赖边（符号索引为空或工程无可索引代码定义）。</div>`;
+        html += emptyState("暂无类型级依赖边", "符号索引为空，或工程内没有可索引的代码定义。CLI 执行 use <路径> 后点"加载"重建索引。");
       }
       dep.innerHTML = html;
       if (sel.value) loadFileDeps(sel.value);
     })
-    .catch(err => { dep.innerHTML = `<div class="empty">${esc(err.message)}</div>`; });
+    .catch(err => { dep.innerHTML = emptyState("依赖图谱加载失败", err.message, { err: true, action: `<button class="btn" onclick="loadDeps()">重试</button>` }); });
 }
 // ── SVG 依赖子图（10-07：选中文件 1 度依赖图；纯函数布局 + 原生 SVG，无第三方库）──
 // 布局规则：中心 selected 节点 + direct（出边，绿）左列 + reverse（入边，红）右列。
@@ -796,7 +1045,7 @@ async function showTaskEvents(taskId) {
 // ── stats ──
 async function fetchStats() {
   const r = await fetch("/api/stats");
-  if (!r.ok) { $("stats").innerHTML = `<div class="empty">stats 不可用（${r.status}）</div>`; return; }
+  if (!r.ok) { $("stats").innerHTML = emptyState("统计不可用", "请求 /api/stats 返回 " + r.status + "。", { err: true, action: `<button class="btn" onclick="fetchStats()">重试</button>` }); return; }
   const d = await r.json();
   const s = d.summary;
   const rateCls = s.successRate >= 0.8 ? "green" : s.successRate >= 0.5 ? "" : "red";
@@ -859,9 +1108,15 @@ async function fetchTasks() {
   const q = encodeURIComponent(($("taskQ") ? $("taskQ").value : "").trim() || "");
   const st = encodeURIComponent(($("taskStatus") ? $("taskStatus").value : "") || "");
   const r = await fetch(`/api/tasks?take=50&q=${q}&status=${st}`);
-  if (!r.ok) { $("tasks").innerHTML = `<div class="empty">tasks 不可用（${r.status}）</div>`; return; }
+  if (!r.ok) { $("tasks").innerHTML = emptyState("历史任务不可用", "请求 /api/tasks 返回 " + r.status + "。", { err: true, action: `<button class="btn" onclick="fetchTasks()">重试</button>` }); return; }
   const list = await r.json();
-  if (!list.length) { $("tasks").innerHTML = `<div class="empty">${q || st ? "无匹配任务（调整关键词/状态）" : "暂无任务记录"}</div>`; return; }
+  if (!list.length) {
+    $("tasks").innerHTML = (q || st)
+      ? emptyState("无匹配任务", "当前关键词/状态过滤下没有任务。放宽条件或清空筛选即可看到全部。",
+                   { action: `<button class="btn" onclick="clearTaskFilter()">清空筛选</button>` })
+      : emptyState("暂无任务记录", "还没有执行过任务。在上方命令条提交第一个需求吧。");
+    return;
+  }
   let html = `<table><thead><tr><th>时间</th><th>模式</th><th>服务</th><th>结果</th><th>耗时</th><th>输入</th><th></th></tr></thead><tbody id="tasksBody">`;
   for (const t of list) {
     const d = new Date(t.startedAt);
@@ -880,6 +1135,13 @@ async function fetchTasks() {
     if (row) row.classList.add("sel");
   }
 }
+// 清空任务筛选（10-15：空态"清空筛选"按钮）
+function clearTaskFilter() {
+  const q = $("taskQ"), s = $("taskStatus");
+  if (q) q.value = ""; if (s) s.value = "";
+  fetchTasks();
+}
+
 // ── P0-4 一键重跑：同一输入重新提交（复用 /api/commands 提交链路）──
 async function rerunTask(input) {
   try {
@@ -1079,6 +1341,35 @@ function badge(id, text, hot) {
   el.classList.toggle("hot", !!hot);
 }
 
+// ── 空状态 / 错误态统一渲染（10-15 UI 打磨）──
+// 此前是一行灰字：只说"没有"，不说"为什么、下一步能做什么"。
+// 结构化四段：标记 + 标题 + 说明 + 可选行动；错误态走 is-err 红色通道并给重试按钮。
+function emptyState(title, desc, opts) {
+  const o = opts || {};
+  return `<div class="emptybox${o.err ? " is-err" : ""}">
+      <div class="eb-mark">${o.err ? "&#33;" : (o.mark || "&#9671;")}</div>
+      <div class="eb-title">${esc(title)}</div>
+      <div class="eb-desc">${esc(desc)}</div>
+      ${o.action ? `<div class="eb-act">${o.action}</div>` : ""}
+    </div>`;
+}
+// 过滤复位：空态里的"显示全部事件"按钮（清关键词 + 回到全部过滤）
+function resetEventFilter() {
+  document.querySelectorAll(".fbtn").forEach(b => b.classList.remove("active"));
+  const all = document.querySelector('.fbtn[data-f="all"]');
+  if (all) all.classList.add("active");
+  filterMode = "all"; evKeyword = "";
+  const f = $("evFilter"); if (f) f.value = "";
+  renderEvents();
+}
+// 键盘可达：可点击的 div/span（任务节头、工具块头）此前只有 onclick，键盘完全不可达。
+// 统一补 role=button + tabindex，这里做 Enter/Space → click 的全局委托（零逐点改动）。
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const el = document.activeElement;
+  if (el && el.getAttribute && el.getAttribute("role") === "button") { e.preventDefault(); el.click(); }
+});
+
 // ── 全局 toast 反馈（10-10 UI 优化）：提交/取消/回滚等操作的统一醒目标识 ──
 function toast(msg, kind = "info") {
   const box = $("toast");
@@ -1101,6 +1392,8 @@ async function submitCommand() {
   const hint = $("cmdHint");
   if (!input) { hint.textContent = "输入为空"; return; }
   hint.textContent = "提交中…";
+  const sendBtn = $("cmdSend");
+  sendBtn.classList.add("is-busy");
   try {
     const r = await fetch("/api/commands", {
       method: "POST",
@@ -1131,6 +1424,8 @@ async function submitCommand() {
   } catch (e) {
     hint.textContent = "提交失败：" + e.message;
     toast("提交失败：" + e.message, "err");
+  } finally {
+    sendBtn.classList.remove("is-busy");
   }
 }
 async function cancelCurrentTask() {
