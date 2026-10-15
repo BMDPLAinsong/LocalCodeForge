@@ -50,6 +50,35 @@ public static class Suites_Project
             Check("错误签名：相同错误输出 → 相同指纹", sigCs == sigSame);
             var sigNone = Agent.Infrastructure.Orchestration.Orchestrator.ExtractErrorSignature("hello world");
             Check("错误签名：无错误输出 → null", sigNone is null);
+
+            // ── 【10-15 失败点迁移链固化】LocateErrorFile 对链上失败点的文件定位回归 ──
+            // 迁移链：CS0051×2/CS1503（签名注入防）→ CS0051 方法参数（签名注入防）→ CS0120（签名完整性
+            // 显示非 static 可预防；修复轮靠"出错文件定位"稳定才能改对文件）→ [完成]。
+            // 定位不准会让修复轮改错文件——本组断言锁定 CS0120 及路径含空格/Python/兜底四类定位。
+            var locate = typeof(Agent.Infrastructure.Orchestration.Orchestrator)
+                .GetMethod("LocateErrorFile", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            var planFiles = new System.Collections.Generic.List<Agent.Core.Models.FileSpec>
+            {
+                new() { Path = "ShippingService.cs" },
+                new() { Path = "Program.cs" },
+            };
+            string? Loc(string output) => (string?)locate.Invoke(null, new object?[] { output, new Agent.Core.Models.Plan { Files = planFiles } });
+            Check("定位：CS0120（ShippingService.cs(10,27)）→ 命中计划文件",
+                Loc("ShippingService.cs(10,27): error CS0120: 对象引用对于非静态的字段、方法或属性“OrderService.CalculateTotal(Order)”是必需的") == "ShippingService.cs");
+            Check("定位：路径含空格（D:\\My Projects\\Program.cs）→ 命中",
+                Loc("D:\\My Projects\\Program.cs(5,5): error CS0246: 未能找到类型或命名空间名“Order”") == "Program.cs");
+            var pyPlan = new Agent.Core.Models.Plan
+            {
+                Files = new System.Collections.Generic.List<Agent.Core.Models.FileSpec>
+                {
+                    new() { Path = "main.py" },
+                    new() { Path = "helper.py" },
+                },
+            };
+            var locPy = locate.Invoke(null, new object?[] { "File \"main.py\", line 3\nNameError: name 'x' is not defined", pyPlan });
+            Check("定位：Python File \"main.py\", line N → 命中", (string?)locPy == "main.py");
+            Check("定位：无匹配 → 入口文件兜底（Program.cs）",
+                Loc("hello world") == "Program.cs");
         }
     }
 
