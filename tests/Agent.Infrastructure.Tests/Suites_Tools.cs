@@ -417,6 +417,15 @@ public static class Suites_Tools
             Check("提取：无类型缺失 → null", Agent.Infrastructure.Orchestration.Orchestrator.ExtractMissingType("error CS5001: 程序不包含适合于入口点的静态 Main 方法") is null);
             Check("提取：空输入 → null", Agent.Infrastructure.Orchestration.Orchestrator.ExtractMissingType("") is null);
 
+            // 10-15 方向1：工程增量编译/运行验证命令判定（expected 无基准 → 豁免精确断言）
+            var progRun = typeof(Agent.Infrastructure.Orchestration.Orchestrator)
+                .GetMethod("IsProgramRunCommand", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            bool ProgRun(string cmd) => (bool)progRun.Invoke(null, new object?[] { cmd })!;
+            Check("执行类判定：dotnet run → advisory（工程增量验证）", ProgRun("dotnet run --project lawcheck_demo.csproj"));
+            Check("执行类判定：dotnet build/test → advisory", ProgRun("dotnet build") && ProgRun("dotnet test"));
+            Check("执行类判定：python/node 运行 → advisory", ProgRun("python main.py") && ProgRun("node app.js"));
+            Check("执行类判定：非执行命令 → 不豁免", !ProgRun("type index.html") && !ProgRun("git status") && !ProgRun("dir"));
+
             // SqliteMetricsCollector 落库 failure_category
             var fcDir = Path.Combine(TestTmp, "fc_" + Guid.NewGuid().ToString("N")[..6]);
             Directory.CreateDirectory(fcDir);

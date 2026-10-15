@@ -461,7 +461,10 @@ public sealed class Orchestrator : IOrchestrator
                 }
             }
 
-            var (runOk, runOutput) = await RunCommandAsync(effectiveRunCommand, plan.ExpectedOutput, ct);
+            var (runOk, runOutput) = await RunCommandAsync(
+                effectiveRunCommand, plan.ExpectedOutput, ct,
+                expectedIsAdvisory: _options.ProjectRoot is not null
+                    && IsProgramRunCommand(effectiveRunCommand));
             yield return new AgentEvent.ToolCall("run_command", BuildCommandJson(effectiveRunCommand));
             yield return new AgentEvent.ToolResultEvent("run_command", runOutput, runOk);
 
@@ -685,9 +688,8 @@ public sealed class Orchestrator : IOrchestrator
     }
 
     /// <summary>调用 run_command 工具。</summary>
-    /// <summary>调用 run_command 工具。</summary>
     private async Task<(bool ok, string output)> RunCommandAsync(
-        string command, string? expectedOutput, CancellationToken ct)
+        string command, string? expectedOutput, CancellationToken ct, bool expectedIsAdvisory = false)
     {
         if (!_tools.TryGet("run_command", out var tool))
             return (false, "错误：run_command 工具未注册。");
@@ -844,7 +846,11 @@ public sealed class Orchestrator : IOrchestrator
                 // 【P0-2】严格校验开关：expected 每一非空行须在 stdout 精确出现
                 // 【H3】工程模式（ProjectRoot 非空）默认开严格——工程改动验证要求逐项兑现；
                 // 普通生成任务保持宽松（StrictOutputVerification 默认 false）。
-                var strictActive = _options.StrictOutputVerification || _options.ProjectRoot is not null;
+                // 【10-15 方向1】expectedIsAdvisory：工程增量编译/运行验证时，Planner 自产 expected
+                // 无工程数据基准（实证：真实计算 1.03/1.06 vs 计划理想 100.00），不做精确断言——
+                // 编译通过 + 运行成功 + 输出非空即视为完成；退出码/stderr/失败信号检查仍保留。
+                var strictActive = (_options.StrictOutputVerification || _options.ProjectRoot is not null)
+                    && !expectedIsAdvisory;
                 if (strictActive &&
                     !string.IsNullOrWhiteSpace(expectedOutput) &&
                     !OutputVerifier.IsTaskExpectedOutputStrict(expectedOutput, stdoutLines))
@@ -922,6 +928,19 @@ public sealed class Orchestrator : IOrchestrator
         m = System.Text.RegularExpressions.Regex.Match(output,
             @"找不到类型[“""]([A-Za-z_][A-Za-z0-9_]*)[”""]");
         return m.Success ? m.Groups[1].Value : null;
+    }
+
+    /// <summary>
+    /// 【10-15 方向1】判定"编译/运行验证命令"（执行程序类）。
+    /// 此类命令的 stdout 由工程真实数据决定——Planner 自产 expected_output 无基准，
+    /// 不应做精确断言；编译错误仍会被退出码/stderr/结构性错误检查捕获。
+    /// </summary>
+    private static bool IsProgramRunCommand(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return false;
+        return Regex.IsMatch(command,
+            @"\b(dotnet\s+(run|build|test)|python3?|py\b|node\b|npm\s+run)\b",
+            RegexOptions.IgnoreCase);
     }
 
     /// 支持 C# 和 Python 两种错误格式。
