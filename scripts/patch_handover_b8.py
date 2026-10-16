@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # 10-13 批次8：HANDOVER 顶部插入条目（保持 CRLF 行尾 + UTF-8 BOM）
-p = r'X:\.NET AI\LocalAiWorkbench\docs\HANDOVER.md'
+p = r'X:\.NET AI\LocalCodeForge\docs\HANDOVER.md'
 with open(p, 'r', encoding='utf-8-sig', newline='') as f:
     t = f.read()
 assert '\r\n' in t, 'expected CRLF'

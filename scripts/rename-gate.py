@@ -3,11 +3,9 @@
 # silently regress (anti-whack-a-mole).
 #
 # Whitelist (kept on purpose):
-#   1. Lines that also reference "X:" -- real on-disk paths such as the test
-#      fixture path "X:\.NET AI\LocalAiWorkbench" (the folder is intentionally
-#      NOT renamed) and scripts/patch_handover_b8.py which points at that folder.
-#   2. docs/HANDOVER.md entirely -- its historical batch entries record the old
-#      name as history and must not be rewritten.
+#   docs/HANDOVER.md -- the 7p migration record states the rename itself
+#   ("GitHub 改名 LocalAiWorkbench -> LocalCodeForge") as history and must
+#   keep the legacy name.
 #
 # Usage: python scripts/rename-gate.py <repo-root>
 import os
@@ -31,7 +29,7 @@ for dp, dns, fns in os.walk(ROOT):
         except Exception:
             continue
         for i, line in enumerate(s.splitlines(), 1):
-            if "LocalAiWorkbench" in line and "X:" not in line:
+            if "LocalAiWorkbench" in line:
                 bad.append(os.path.relpath(p, ROOT) + ":" + str(i))
 
 if bad:

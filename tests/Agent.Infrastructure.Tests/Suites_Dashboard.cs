@@ -167,10 +167,10 @@ public static class Suites_Dashboard
                     && Agent.Infrastructure.Tools.RunCommandTool.ResolveTimeoutSeconds(null, "python main.py") == 30
                     && Agent.Infrastructure.Tools.RunCommandTool.ResolveTimeoutSeconds("X:\\proj", "python main.py") == 90);
                 Check("use 一步到位（10-08 C）：路径+任务拆分——最长存在前缀为路径，剩余为任务（含空格路径不误切）",
-                    Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask("X:\\.NET AI\\LocalAiWorkbench 分析一下这个项目", out var useSplit1, out var useTask1)
-                    && useSplit1 == "X:\\.NET AI\\LocalAiWorkbench" && useTask1 == "分析一下这个项目");
+                    Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask("X:\\.NET AI\\LocalCodeForge 分析一下这个项目", out var useSplit1, out var useTask1)
+                    && useSplit1 == "X:\\.NET AI\\LocalCodeForge" && useTask1 == "分析一下这个项目");
                 Check("use 一步到位（10-08 C）：纯路径无任务 → false；路径打错回退最长存在祖先（盘根，归一化为 X:\\），剩余全当任务（边界文档注明）",
-                    !Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask("X:\\.NET AI\\LocalAiWorkbench", out _, out _)
+                    !Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask("X:\\.NET AI\\LocalCodeForge", out _, out _)
                     && Agent.Infrastructure.Project.UseCommandParser.TrySplitPathTask("X:\\NoSuchDirZZZ 任务", out var useSplit2, out var useTask2)
                     && useSplit2 == "X:\\" && useTask2 == "NoSuchDirZZZ 任务");
                 Check("use 盘符归一化（10-08）：盘符形态 X: 补 \\ 为 X:\\（Path.GetFullPath(\"X:\") 盘符相对语义会解析成 cwd，静默错位）",
