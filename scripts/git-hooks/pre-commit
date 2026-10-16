@@ -1,6 +1,6 @@
 #!/bin/sh
 # ============================================================
-# LocalAiWorkbench pre-commit gate (10-14 D1)
+# LocalCodeForge pre-commit gate (10-14 D1)
 #   Runs scripts/verify.ps1 = build(0 errors) + tests(0 fail) + drift-check.
 #   Blocks the commit when the gate fails; bypass with: git commit --no-verify
 #

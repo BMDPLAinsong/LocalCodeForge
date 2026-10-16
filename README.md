@@ -30,8 +30,8 @@ Three things make it different:
 # 1. Serve the local model (Ollama; 30B Qwen3-Coder-A3B, single tag "law-unified")
 ollama pull law-unified
 
-# 2. Build (solution file is LocalAiWorkbench.slnx — internal name pending rename)
-dotnet build LocalAiWorkbench.slnx --no-incremental
+# 2. Build (solution file is LocalCodeForge.slnx — internal name pending rename)
+dotnet build LocalCodeForge.slnx --no-incremental
 
 # 3. Run, point at your project in write mode, then just describe the task
 dotnet run --project src\Agent.Cli\Agent.Cli.csproj

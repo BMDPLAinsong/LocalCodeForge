@@ -17,7 +17,7 @@ using Agent.Infrastructure.Rendering;
 using Agent.Infrastructure.Routing;
 
 /// <summary>
-/// Local AI Workbench 的控制台入口。
+/// LocalCodeForge 的控制台入口。
 /// </summary>
 internal partial class Program
 {

@@ -65,7 +65,7 @@ public static class Suites_Memory
 
             // Add + Search 命中
             mem.Add("model", "ProjectRoot 属性含义", "ProjectRoot 为 null 时沙箱模式，非 null 时工程模式。", "task_demo");
-            mem.Add("model", "构建命令", "构建用 dotnet build LocalAiWorkbench.slnx，入口 src/Agent.Cli。");
+            mem.Add("model", "构建命令", "构建用 dotnet build LocalCodeForge.slnx，入口 src/Agent.Cli。");
             mem.Add("model", "天气 API", "wttr.in 无需 API Key，format=j1 返回 JSON。");
             var hits = mem.Search("读取 ProjectRoot 属性的代码", limit: 2);
             Check("Search 命中 ProjectRoot 记忆", hits.Any(h => h.Topic.Contains("ProjectRoot")));

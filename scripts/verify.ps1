@@ -1,5 +1,5 @@
 # ============================================================
-# verify.ps1 -- one-command gate for LocalAiWorkbench
+# verify.ps1 -- one-command gate for LocalCodeForge
 #   1. build       (exit code must be 0)
 #   2. tests       (exit code must be 0; harness: 0=all pass, 1=has failure)
 #   3. js-syntax   (embedded index.html <script> must pass node --check)
@@ -15,7 +15,7 @@
 $ErrorActionPreference = "Continue"
 
 $RepoRoot  = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$sln       = Join-Path $RepoRoot "LocalAiWorkbench.slnx"
+$sln       = Join-Path $RepoRoot "LocalCodeForge.slnx"
 $testProj  = Join-Path $RepoRoot "tests\Agent.Infrastructure.Tests\Agent.Infrastructure.Tests.csproj"
 $driftPath = Join-Path $PSScriptRoot "drift-check.ps1"
 
@@ -81,6 +81,19 @@ if (Test-Path $driftPath) {
     if ($LASTEXITCODE -eq 0) { Ok "DRIFT OK" } else { Bad "DRIFT CHECK FAILED (exit $LASTEXITCODE)"; $failed += "drift-check" }
 } else {
     Write-Host "drift-check.ps1 not found -- skipped" -ForegroundColor Yellow
+}
+
+# ---------------- 5/5 rename gate ----------------
+# 10-16: renamed to LocalCodeForge. Fails the gate when the legacy project
+# name leaks outside the whitelist (real on-disk paths with "X:" and
+# docs/HANDOVER.md history). Anti-whack-a-mole: no silent regression.
+Step "5/5 RENAME GATE (no legacy name outside whitelist)"
+$renameGate = Join-Path $PSScriptRoot "rename-gate.py"
+if (Test-Path $renameGate) {
+    & python $renameGate $RepoRoot 2>&1 | Select-Object -Last 10 | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -eq 0) { Ok "RENAME-GATE OK" } else { Bad "RENAME-GATE FAILED (exit $LASTEXITCODE)"; $failed += "rename-gate" }
+} else {
+    Write-Host "rename-gate.py not found -- skipped" -ForegroundColor Yellow
 }
 
 # ---------------- summary ----------------

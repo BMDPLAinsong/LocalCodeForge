@@ -1,4 +1,4 @@
-﻿# LocalAiWorkbench 开发文档（详细版）
+﻿# LocalCodeForge 开发文档（详细版）
 
 > **定位**：本文是 `docs/DEVELOPER.md`（速查手册）的**详细展开版**，面向后续维护与开发：
 > 以「任务从输入到交付的完整链路」为主线，逐步说明每个环节的代码位置、判定规则、数据结构与改造方法。
@@ -23,7 +23,7 @@
 | 项 | 值 |
 | ---- | ---- |
 | 性质 | 纯本地 AI 编码助手内核（控制台）：自然语言输入 → 智能路由 → 规划/生成/写文件/运行验证/自动修复闭环 |
-| 解决方案 | `LocalAiWorkbench.slnx`（新版 XML solution） |
+| 解决方案 | `LocalCodeForge.slnx`（新版 XML solution） |
 | 目标框架 | net10.0（勿降级） |
 | 核心依赖 | Microsoft.SemanticKernel 1.80.1 + SK OpenAI Connector（走 Ollama `/v1` 兼容端点，全本地）+ Microsoft.Data.Sqlite |
 | 模型 | Ollama：classifier=`qwen2.5:1.5b`；small/large/agent_pro 三角色全部 = `law-unified`（30B Qwen3-Coder-A3B，单 tag 单驻，请求级 temperature 区分：small 0.3 / agent_pro 0.5 / large 0.7） |
@@ -580,7 +580,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 4. **情况 A 工具循环无强制写/目标聚焦检查**：模型持续工具调用绕过强制写（用户确认「有依据才加」）。
 5. **run_command 白名单已含 grep/Select-String（10-07 解决）**：模型可用正则检索工程内容，不再被迫全量 read_file。剩余白名单外命令仍拒（需要时再加 token + 测试）。
 6. **PS5.1 编码**：读无 BOM 文件按 GBK 乱码；写文件默认 UTF-16LE/ANSI——一律显式 `-Encoding utf8`（BOM 场景）或 `[IO.File]::WriteAllText`（无 BOM 场景）。
-7. **构建 DLL 复制坑**：`dotnet build src\Agent.Cli` 只重建 CLI 自身，Infrastructure.dll 不会被复制更新 → **必须 `dotnet build LocalAiWorkbench.slnx --no-incremental`** 全量重建。
+7. **构建 DLL 复制坑**：`dotnet build src\Agent.Cli` 只重建 CLI 自身，Infrastructure.dll 不会被复制更新 → **必须 `dotnet build LocalCodeForge.slnx --no-incremental`** 全量重建。
 8. **交互程序挂死**：.py input /.cs Console.ReadLine 写入即被 PyCodeGuard 拒绝——不要放宽（防 30s 挂死防线）。
 9. **项目名幻觉**：工程模式命令中 `.csproj` 名不在工程根 → 拒绝（模型曾乱写 OrderSystem.csproj 导致失败）。
 10. **模板误判历史**：hello 类输出曾触发模板检测死循环——`IsTaskExpectedOutput` 豁免已修（输入含输出行 → 豁免）；改 OutputVerifier 时保持该豁免语义。
@@ -597,7 +597,7 @@ external_credential → compile_error → runtime_error → timeout → validato
 1. 探查：读 HANDOVER 相关批次 + 目标源码 + tests 现状（连续两次读取不再改变计划即开工）
 2. 方案：给用户出方案（改什么/为什么/影响面/验证方式）→ 用户确认后才动手
 3. 实施：只改点名范围；同功能多词表一次改齐（防漂移）
-4. 验证：dotnet build LocalAiWorkbench.slnx --no-incremental → 0 错误
+4. 验证：dotnet build LocalCodeForge.slnx --no-incremental → 0 错误
           dotnet run --project tests\... → 全过（新增断言）
           （模型行为改动）E2E 复测 → 如实汇报（诚实失败优于假完成）
 5. 文档：HANDOVER 顶部加批记录（倒序）+ DEVELOPER/本文同步

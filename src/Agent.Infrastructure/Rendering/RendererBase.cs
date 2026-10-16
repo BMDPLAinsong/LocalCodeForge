@@ -15,7 +15,7 @@ public abstract class RendererBase : IRenderer
     // ── 启动横幅（无色，与旧 CLI 输出逐字节一致）──
     public virtual void Banner(string workspace, string dbPath)
     {
-        Console.WriteLine("=== Local AI Workbench ===");
+        Console.WriteLine("=== LocalCodeForge ===");
         Console.WriteLine($"运行目录: {workspace}");
         Console.WriteLine($"会话库:   {dbPath}");
         Console.WriteLine("输入需求，回车执行。输入 exit 退出。输入 new 开启新会话。");

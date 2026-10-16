@@ -1,4 +1,4 @@
-﻿# LocalAiWorkbench 开发者维护文档
+﻿# LocalCodeForge 开发者维护文档
 
 > **详细版见 `docs/DEVELOPER_DETAILED.md`**（以任务输入→交付完整链路为主线的逐步展开，
 > 含源码级判定规则、数据表 schema、词表全文与改造指引；本文为速查版）。
@@ -54,11 +54,11 @@
 | 项    | 值                                                                                                                                                                   |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 性质   | 纯本地 AI 编码助手内核（控制台），用户输入自然语言 → 智能路由 → 规划 / 生成 / 写文件 / 运行验证 / 自动修复闭环                                                                                                  |
-| 解决方案 | `LocalAiWorkbench.slnx`（新版 XML solution）                                                                                                                            |
+| 解决方案 | `LocalCodeForge.slnx`（新版 XML solution）                                                                                                                            |
 | 目标框架 | net10.0（**勿降级**）                                                                                                                                                    |
 | 核心依赖 | Microsoft.SemanticKernel 1.80.1 + SK OpenAI Connector（走 Ollama `/v1` 兼容端点，全本地）+ Microsoft.Data.Sqlite                                                               |
 | 模型   | Ollama：classifier=`qwen2.5:1.5b`；small/large/agent\_pro 三角色全部 = `law-unified`（30B Qwen3-Coder-A3B，同 tag 单驻，请求级 temperature 区分：small 0.3 /agent\_pro 0.5 /large 0.7） |
-| 版本控制 | 本机 git 仓库（main，100+ commits）；远端 `origin` = GitHub（BMDPLAinsong/LocalAiWorkbench，**推送按用户要求暂缓进行中**）                                              |
+| 版本控制 | 本机 git 仓库（main，100+ commits）；远端 `origin` = GitHub（BMDPLAinsong/LocalCodeForge）                                              |
 | 测试   | `tests/Agent.Infrastructure.Tests`（**零依赖断言 harness**，**864/864**，`dotnet run --project` 一键回归）                                                                           |
 | 数据落盘 | `workspace/`：sessions.db、runs/、project\_context.db、agent\_memory.db、symbol\_index.db、test-tmp/、e2e/。**边界（10-14 F1）**：`SqliteConnection` 默认连接池在方法返回后仍持有 db 文件句柄——进程持有 store 期间**不要删除 workspace 目录**（测试夹具已因此改为"库文件放在待删目录之外"） |
 
@@ -90,7 +90,7 @@
 Set-Location <repo>
 
 # 全量构建（注意：必须 slnx 全量，不能只 build CLI，见 §9 构建坑）
-dotnet build LocalAiWorkbench.slnx --no-incremental
+dotnet build LocalCodeForge.slnx --no-incremental
 
 # 确定性回归（零依赖，几秒）
 dotnet run --project tests\Agent.Infrastructure.Tests\Agent.Infrastructure.Tests.csproj

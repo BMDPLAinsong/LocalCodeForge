@@ -11,7 +11,7 @@
 //   任务事件是单向追加流（一条一条吐），不是"原地刷新的进度条"。Live 每次 Refresh
 //   重绘整块区域，在 Windows 控制台下产生前后帧叠加——实测残留：漂浮竖线、绿框缺底边、
 //   "任务完成"分隔线有起点无终点。对比证据：AnsiConsole.Write(Panel) 一次性输出
-//   （LocalAI 横幅、配置框）四边完整无残留。→ 改用追加输出：一个事件一个渲染入口。
+//   （LocalCodeForge 横幅、配置框）四边完整无残留。→ 改用追加输出：一个事件一个渲染入口。
 // ============================================================
 using Agent.Core.Models;
 using Spectre.Console;
@@ -36,11 +36,11 @@ public sealed class SpectreRenderer : RendererBase
     {
         var panel = new Panel(
                 new Markup(
-                    $"[bold aqua]=== Local AI Workbench ===[/]\n" +
+                    $"[bold aqua]=== LocalCodeForge ===[/]\n" +
                     $"运行目录: [cyan]{Markup.Escape(workspace)}[/]\n" +
                     $"会话库:   [cyan]{Markup.Escape(dbPath)}[/]\n" +
                     "[grey]输入需求，回车执行。输入 exit 退出。输入 new 开启新会话。[/]"))
-            .Header("LocalAI", Justify.Left)
+            .Header("LocalCodeForge", Justify.Left)
             .BorderColor(Color.Aqua);
         AnsiConsole.Write(panel);
         Console.WriteLine();
