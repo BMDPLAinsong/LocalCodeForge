@@ -98,4 +98,12 @@ dotnet run --project tests\Agent.Infrastructure.Tests\Agent.Infrastructure.Tests
 # 双路径漂移自查（批次门禁用：基线 51 处/19 文件，阈值 60，超阈退出码 1；纯 ASCII 脚本，勿加中文）
 powershell -File scripts\drift-check.ps1
 
+# 一键门禁（build + tests + js-syntax + drift + rename-gate + dashboard-inline，exit 0 = 全绿）
+powershell -NoProfile -File scripts\verify.ps1
+
+# Web Dashboard 前端源码拆分（10-16）：运行时仍是"单文件嵌入页"（csproj 嵌 index.html，GET / 直读，tests 契约不变），
+# 但源码拆三份——DashboardPages\app.css（样式）/ app.js（脚本）为编辑源，index.html 为生成产物。
+# 编辑流程：改 app.css/app.js → python scripts\inline_dashboard.py（内联回 index.html）→ 提交源与产物两份。
+# 漂移防护：verify.ps1 第 6 门 --check（手改单侧即拦下）；--extract 仅一次性从旧 index.html 抽取源码用。
+
 # 运行 CLI（Ollama 未启动会自动拉起；交互终端启动即自动起 Web Dashboard 并开浏览器，无头/管道模式自动跳过；LAW_NO_AUTODASH=1 可关）
