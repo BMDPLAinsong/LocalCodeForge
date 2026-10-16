@@ -6,6 +6,8 @@
 #   docs/HANDOVER.md -- the 7p migration record states the rename itself
 #   ("GitHub 改名 LocalAiWorkbench -> LocalCodeForge") as history and must
 #   keep the legacy name.
+#   docs/history/ -- the archived full batch log (10-16 batch 4) quotes the
+#   same migration records; the archive is history by design.
 #
 # Usage: python scripts/rename-gate.py <repo-root>
 import os
@@ -14,6 +16,7 @@ import sys
 ROOT = sys.argv[1]
 SKIP_DIRS = {".git", "bin", "obj", "workspace"}
 EXTS = (".cs", ".ps1", ".md", ".py", ".slnx", ".sh")
+HIST_DIR = os.path.join("docs", "history") + os.sep
 
 bad = []
 for dp, dns, fns in os.walk(ROOT):
@@ -22,7 +25,8 @@ for dp, dns, fns in os.walk(ROOT):
         if not fn.endswith(EXTS):
             continue
         p = os.path.join(dp, fn)
-        if "HANDOVER.md" in p or fn == "rename-gate.py":
+        rel = os.path.relpath(p, ROOT)
+        if "HANDOVER.md" in p or fn == "rename-gate.py" or HIST_DIR in rel + os.sep:
             continue
         try:
             s = open(p, "rb").read().decode("utf-8", "replace")
