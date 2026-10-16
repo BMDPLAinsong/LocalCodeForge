@@ -441,7 +441,12 @@ internal partial class Program
                 continue;
             }
 
-            // ═══════════ 【临时测试】Planner 测试 ═══════════
+            // ═══════════ plan 命令（调试检视：只读预演 Planner，不执行、不写文件） ═══════════
+            // 【10-16 治理】原"【临时测试】"块转正：plan 仅调 Planner 打印规划结果、零副作用，
+            // 保留为受控检视命令并登记 help。同块 orch 旁路已移除——它直接 orchestrator.RunAsync，
+            // 绕过 taskId 备份隔离 / 任务超时 / q·web 取消 / 事件持久化 / SSE 多播 / 记忆归档 /
+            // 失败自动回滚 / 备份清理八道机制（工程可写模式下失败即留不可回滚残写）。
+            // 需要走编排：用普通输入（TaskClassifier 自动路由工程增量任务），一条入口全套机制。
             if (input.StartsWith("plan ", StringComparison.OrdinalIgnoreCase))
             {
                 var planner = provider.GetRequiredService<IPlannerService>();
@@ -481,28 +486,6 @@ internal partial class Program
                 Console.WriteLine();
                 continue;
             }
-            // ═══════════ 临时测试结束 ═══════════
-
-            // ═══════════ 【临时测试】Orchestrator 测试 ═══════════
-            if (input.StartsWith("orch ", StringComparison.OrdinalIgnoreCase))
-            {
-                var orchestrator = provider.GetRequiredService<IOrchestrator>();
-                var orchInput = input.Substring(5).Trim();
-
-                Console.ForegroundColor = ConsoleColor.Magenta;
-                Console.WriteLine($"[Orchestrator] 启动三阶段编排：{orchInput}");
-                Console.ResetColor();
-
-                await foreach (var evt in orchestrator.RunAsync(orchInput, workspace, CancellationToken.None))
-                {
-                    // Spectre P0：统一走渲染器（消灭此处与 RenderEvent 重复的事件 switch——双路径漂移实例；
-                    // 原此处 ToolResult 截断 500 与 RenderEvent 300 不一致，统一为 300）。
-                    await renderer.RenderEventAsync(evt);
-                }
-
-                continue;
-            }
-            // ═══════════ Orchestrator 测试结束 ═══════════
 
             // ═══════════ dashboard 命令（10-07 真 UI 层·本地 Web Dashboard；10-10 与自动启动共用 StartDashboardAsync） ═══════════
             if (input.Equals("dashboard", StringComparison.OrdinalIgnoreCase))
