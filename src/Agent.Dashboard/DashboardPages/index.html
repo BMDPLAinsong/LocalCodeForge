@@ -6,12 +6,15 @@
 <title>LocalCodeForge Dashboard</title>
 <style>
   /* ============================================================
-     LocalCodeForge Dashboard — 设计系统 v3（10-15 视觉重构 · 演示优先）
+     LocalCodeForge Dashboard — 设计系统 v4（品牌换肤 · 熔金炉火）
      美学定位：深底高对比「锻造台」——大面积近黑中性 + 极少量高饱和强调。
-     主强调 = 电光青（--cyan，品牌/交互/焦点一贯色）；次强调 = 琥珀金（--gold，
-     呼应"锻造"命名，只用于品牌标记与完成态辉光）。渐变只出现在 4 处（品牌标记、
-     header 分隔线、主按钮、页面顶部环境光），其余全靠明度阶梯与色条——
-     亮色可以大胆，但用得少才高级。
+     主强调 = 炉火金（--accent，品牌/交互/焦点一贯色）；次强调 = 余烬橙
+     （--accent-2，只做渐变伙伴：品牌标记/header 分隔线/顶部环境光）。
+     换肤契约：只改 --accent / --accent-2 / --accent-ink 三个值；全部透明度
+     梯度与提亮色由 color-mix 派生（--accent-XX / --accent-lift / --accent-hi），
+     旧引用点 --cyan / --gold 保留为别名自动跟随主题。渐变只出现在 4 处
+     （品牌标记、header 分隔线、主按钮、页面顶部环境光），其余全靠明度阶梯
+     与色条——亮色可以大胆，但用得少才高级。
      约束：保留全部既有类名与旧变量名（DOM 内联样式仍引用 var(--fg/--border/--dim/--blue)）。
      ============================================================ */
   :root {
@@ -31,15 +34,34 @@
     /* ── 语义色：饱和度整体上调（此前过低导致"没精神"）── */
     --green:  oklch(78% 0.190 150);
     --red:    oklch(70% 0.215 25);
-    --yellow: oklch(86% 0.175 92);
+    --yellow: oklch(86% 0.175 100);
     --blue:   oklch(76% 0.170 245);
-    --cyan:   oklch(90% 0.165 192);
-    --gold:   oklch(84% 0.160 78);
-    --accent: var(--cyan);
+    /* ── 品牌强调（默认：熔金炉火）——换肤只改这三行 ── */
+    --accent:     oklch(84% 0.155 72);      /* 主强调 · 炉火金 */
+    --accent-2:   oklch(68% 0.185 42);      /* 次强调 · 余烬橙（渐变伙伴） */
+    --accent-ink: oklch(17% 0.045 55);      /* 强调底上的文字 */
+    --cyan:   var(--accent);                /* 兼容别名：旧引用点自动跟随主题 */
+    --gold:   var(--accent-2);              /* 兼容别名 */
+    /* ── 派生色（color-mix 随主题联动，勿逐点改）── */
+    --accent-hi:   color-mix(in oklab, var(--accent) 55%, white);
+    --accent-lift: color-mix(in oklab, var(--accent) 80%, white);
+    --accent-85: color-mix(in oklab, var(--accent) 85%, transparent);
+    --accent-70: color-mix(in oklab, var(--accent) 70%, transparent);
+    --accent-55: color-mix(in oklab, var(--accent) 55%, transparent);
+    --accent-50: color-mix(in oklab, var(--accent) 50%, transparent);
+    --accent-45: color-mix(in oklab, var(--accent) 45%, transparent);
+    --accent-40: color-mix(in oklab, var(--accent) 40%, transparent);
+    --accent-35: color-mix(in oklab, var(--accent) 35%, transparent);
+    --accent-30: color-mix(in oklab, var(--accent) 30%, transparent);
+    --accent-18: color-mix(in oklab, var(--accent) 18%, transparent);
+    --accent-14: color-mix(in oklab, var(--accent) 14%, transparent);
+    --accent-13: color-mix(in oklab, var(--accent) 13%, transparent);
+    --accent2-35: color-mix(in oklab, var(--accent-2) 35%, transparent);
+    --accent2-07: color-mix(in oklab, var(--accent-2) 7%, transparent);
     /* ── 阴影 / 高光：双层接触+扩散，近看不糊 ── */
     --sh-1: 0 1px 2px oklch(0% 0 0 / .55);
     --sh-2: 0 10px 28px -10px oklch(0% 0 0 / .75), 0 2px 6px -2px oklch(0% 0 0 / .55);
-    --sh-glow: 0 0 0 1px oklch(90% 0.165 192 / .35), 0 6px 18px -8px oklch(90% 0.165 192 / .45);
+    --sh-glow: 0 0 0 1px var(--accent-35), 0 6px 18px -8px var(--accent-45);
     --hi: inset 0 1px 0 oklch(100% 0 0 / .07);
     /* ── 排版 ── */
     --font-ui:   "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
@@ -58,15 +80,15 @@
   body {
     margin: 0;
     background:
-      radial-gradient(900px 420px at 22% -12%, oklch(90% 0.165 192 / .13), transparent 68%),
-      radial-gradient(700px 360px at 92% 0%, oklch(84% 0.16 78 / .07), transparent 70%),
+      radial-gradient(900px 420px at 22% -12%, var(--accent-13), transparent 68%),
+      radial-gradient(700px 360px at 92% 0%, var(--accent2-07), transparent 70%),
       var(--bg);
     color: var(--fg);
     font: 13px/1.55 var(--font-mono);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
-  ::selection { background: oklch(90% 0.165 192 / .3); color: oklch(12% 0.02 252); }
+  ::selection { background: var(--accent-30); color: var(--accent-ink); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
   .dim { color: var(--dim); }
 
@@ -82,7 +104,7 @@
   /* 分隔线：从左向右衰减的渐变（唯一允许的"装饰性"渐变之一） */
   header::after {
     content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
-    background: linear-gradient(90deg, oklch(90% 0.165 192 / .85), oklch(84% 0.16 78 / .35) 32%, transparent 62%);
+    background: linear-gradient(90deg, var(--accent-85), var(--accent2-35) 32%, transparent 62%);
   }
   header h1 {
     margin: 0; font: 700 16px/1 var(--font-ui); letter-spacing: -.022em; color: var(--fg);
@@ -91,9 +113,9 @@
   /* 锻造标记：斜切方块 + 金青渐变 + 微光（品牌记忆点，纯 CSS 无依赖） */
   header h1::before {
     content: ""; width: 13px; height: 13px;
-    background: linear-gradient(135deg, var(--gold), var(--cyan));
+    background: linear-gradient(135deg, var(--accent-2), var(--accent));
     clip-path: polygon(0 0, 100% 0, 100% 62%, 62% 100%, 0 100%);
-    box-shadow: 0 0 10px oklch(84% 0.16 78 / .45);
+    box-shadow: 0 0 10px var(--accent-45);
   }
   /* 状态改为胶囊标签：从"灰字"变成有形的状态件（更像产品） */
   header .sub {
@@ -127,12 +149,12 @@
                transform: translateY(-1px); box-shadow: var(--sh-2), var(--hi); }
   .btn:active { transform: translateY(0); }
   .btn.primary {
-    background: linear-gradient(oklch(90% 0.165 192), oklch(78% 0.15 196));
-    color: oklch(14% 0.03 252); border-color: oklch(90% 0.165 192); font-weight: 700;
+    background: linear-gradient(var(--accent-lift), var(--accent));
+    color: var(--accent-ink); border-color: var(--accent); font-weight: 700;
     box-shadow: var(--sh-glow);
   }
-  .btn.primary:hover { background: linear-gradient(oklch(95% 0.14 192), oklch(84% 0.15 196));
-                       color: oklch(14% 0.03 252); box-shadow: var(--sh-glow), 0 0 14px oklch(90% 0.165 192 / .5); }
+  .btn.primary:hover { background: linear-gradient(var(--accent-hi), var(--accent-lift));
+                       color: var(--accent-ink); box-shadow: var(--sh-glow), 0 0 14px var(--accent-50); }
   .btn.danger:hover { border-color: var(--red); color: var(--red);
                       background: linear-gradient(oklch(30% 0.09 25), oklch(22% 0.06 25)); }
   .btn[disabled] { opacity: .5; cursor: not-allowed; }
@@ -147,8 +169,8 @@
   /* 过滤按钮组：active 用实心强调底 + 下标线（比原来更敢用色） */
   .fbtn { background: transparent; border-color: transparent; color: var(--dim); box-shadow: none; font-weight: 600; }
   .fbtn:hover { color: var(--fg-2); background: var(--panel-2); box-shadow: none; transform: none; }
-  .fbtn.active { color: oklch(14% 0.03 252); background: var(--accent); border-color: var(--accent);
-                 box-shadow: 0 0 0 1px oklch(90% 0.165 192 / .5), 0 4px 12px -6px oklch(90% 0.165 192 / .7); }
+  .fbtn.active { color: var(--accent-ink); background: var(--accent); border-color: var(--accent);
+                 box-shadow: 0 0 0 1px var(--accent-50), 0 4px 12px -6px var(--accent-70); }
 
   /* ── 布局 ── */
   main { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
@@ -156,6 +178,18 @@
   @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
   .colL { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
   .colR { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+
+  /* ── A 分区（zone）：左"任务"右"工程+运行"——语义分组替代一长列卡片 ── */
+  .zone { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+  .zone + .zone { margin-top: var(--sp-2); }
+  .zone-head { display: flex; align-items: center; gap: 10px; padding: 2px 2px 0; }
+  .zone-name { font: 700 11px/1 var(--font-ui); letter-spacing: .18em; color: var(--fg-2);
+               display: inline-flex; align-items: center; gap: 8px; }
+  .zone-name::before { content: ""; width: 3px; height: 11px; border-radius: 2px;
+                       background: linear-gradient(var(--accent-2), var(--accent)); }
+  .zone-meta { font: 500 11px/1.3 var(--font-ui); color: var(--faint); white-space: nowrap; }
+  .zone-head::after { content: ""; flex: 1; height: 1px;
+                      background: linear-gradient(90deg, var(--border-2), transparent 88%); }
 
   /* ── 卡片：亮边框 + 顶部高光 + 真实阴影（近看有质感）── */
   .card {
@@ -171,7 +205,7 @@
   }
   .card > h2::before {
     content: ""; width: 3px; height: 12px; border-radius: 2px;
-    background: linear-gradient(var(--cyan), oklch(78% 0.15 196 / .4));
+    background: linear-gradient(var(--accent), var(--accent-40));
   }
   .card.collapsible { padding-bottom: 6px; }
   .card.collapsible > h2 { cursor: pointer; user-select: none; margin: 0; padding: 2px 0 6px; }
@@ -209,7 +243,7 @@
   .inp::placeholder { color: var(--faint); }
   .inp:hover, select.sel:hover { border-color: var(--border-2); }
   .inp:focus, select.sel:focus { outline: none; border-color: var(--accent); background: var(--bg);
-                                 box-shadow: 0 0 0 3px oklch(90% 0.165 192 / .18); }
+                                 box-shadow: 0 0 0 3px var(--accent-18); }
   select.sel { padding: 4px 6px; font-family: var(--font-ui); }
 
   /* ── 事件流：做成"显示面板"，成为页面视觉重心 ── */
@@ -276,7 +310,7 @@
                          white-space: pre-wrap; word-break: break-all; margin: 4px 0; font-size: 11.5px;
                          line-height: 1.5; }
   .md-pre { cursor: pointer; transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
-  .md-pre:hover { border-color: var(--accent); box-shadow: 0 0 0 3px oklch(90% 0.165 192 / .14); }
+  .md-pre:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-14); }
   .md-pre::after { content: "点击用编辑器查看"; display: block; margin-top: 4px;
                    font: 600 10px/1 var(--font-ui); letter-spacing: .07em;
                    color: var(--faint); text-transform: uppercase; }
@@ -309,7 +343,51 @@
   .b-red { background: linear-gradient(90deg, oklch(58% 0.2 25), var(--red)); }
   .b-yellow { background: linear-gradient(90deg, oklch(74% 0.16 92), var(--yellow)); }
   .b-blue { background: linear-gradient(90deg, oklch(62% 0.16 245), var(--blue)); }
+  .b-cyan { background: linear-gradient(90deg, var(--accent-55), var(--accent)); }
   .b-dim { background: var(--faint); }
+
+  /* ── C 微可视化（零依赖，纯 CSS）：分段条 / 阈值仪表 / 热度条 / 调权行 ── */
+  .seg { display: flex; height: 7px; border-radius: 2px; overflow: hidden; background: var(--bg-sunk);
+         box-shadow: inset 0 1px 2px oklch(0% 0 0 / .5); margin: 5px 0 5px; }
+  .seg i { display: block; height: 100%; transition: width .4s var(--ease); }
+  .seg i + i { box-shadow: inset 1px 0 0 oklch(0% 0 0 / .35); }
+  .segl { display: flex; flex-wrap: wrap; gap: 3px 14px; font: 500 11px/1.5 var(--font-ui);
+          color: var(--dim); margin: 0 0 9px; }
+  .segl b { color: var(--fg-2); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px;
+        vertical-align: -1px; }
+  .sw.g { background: var(--green); } .sw.r { background: var(--red); } .sw.y { background: var(--yellow); }
+  .sw.b { background: var(--blue); }  .sw.c { background: var(--cyan); } .sw.d { background: var(--faint); }
+  /* 阈值仪表：填充 = 当前值，竖线 = 阈值（一眼看出"过线没有"） */
+  .gauge { position: relative; height: 7px; border-radius: 2px; background: var(--bg-sunk);
+           box-shadow: inset 0 1px 2px oklch(0% 0 0 / .5); margin: 5px 0 4px; flex: 1; min-width: 60px; }
+  .gauge i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px;
+             transition: width .4s var(--ease); }
+  .gauge u { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px;
+             background: var(--fg-2); box-shadow: 0 0 0 1px oklch(0% 0 0 / .6); }
+  .gauge u::after { content: ""; position: absolute; left: -3px; top: -4px; width: 8px; height: 2px;
+                    background: var(--fg-2); }
+  .gauge.ok i { background: linear-gradient(90deg, oklch(70% 0.18 150), var(--green)); }
+  .gauge.warn i { background: linear-gradient(90deg, oklch(74% 0.16 92), var(--yellow)); }
+  .tune { padding: 5px 0; border-top: 1px dashed var(--border); }
+  .tune:first-child { border-top: 0; padding-top: 2px; }
+  .tune-head { display: flex; align-items: center; gap: 8px; font: 600 12px/1.4 var(--font-ui);
+               color: var(--fg-2); }
+  .tune-head .pill { margin-left: auto; font: 700 10px/1 var(--font-ui); letter-spacing: .06em;
+                     padding: 3px 8px; border-radius: 999px; }
+  .pill.on { color: var(--yellow); background: oklch(86% 0.175 92 / .12);
+             border: 1px solid oklch(86% 0.175 92 / .5); }
+  .pill.off { color: var(--dim); background: var(--panel-3); border: 1px solid var(--border-2); }
+  .tune-line { display: flex; align-items: center; gap: 8px; }
+  .tl-name { width: 42px; flex: none; font: 600 11px/1 var(--font-ui); color: var(--dim); }
+  .tl-val { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tune-meta { font-size: 11px; color: var(--dim); line-height: 1.55; }
+  .tune-meta b { color: var(--fg-2); font-variant-numeric: tabular-nums; }
+  /* 记忆命中热度条 */
+  .heat { height: 4px; width: 52px; border-radius: 2px; background: var(--bg-sunk);
+          box-shadow: inset 0 1px 2px oklch(0% 0 0 / .5); margin-bottom: 3px; }
+  .heat i { display: block; height: 100%; border-radius: 2px; min-width: 2px;
+            background: linear-gradient(90deg, var(--accent-45), var(--accent)); }
 
   /* ── 表格 ── */
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -357,7 +435,7 @@
                        border: 1.5px solid var(--border-2); border-radius: 50%;
                        display: grid; place-items: center; color: var(--accent);
                        font: 700 14px/1 var(--font-ui);
-                       box-shadow: 0 0 12px -4px oklch(90% 0.165 192 / .5); }
+                       box-shadow: 0 0 12px -4px var(--accent-50); }
   .emptybox.is-err .eb-mark { border-color: var(--red); color: var(--red);
                               box-shadow: 0 0 12px -4px oklch(70% 0.215 25 / .6); }
   .emptybox .eb-title { font: 700 13px/1.5 var(--font-ui); color: var(--fg); margin-bottom: 5px; }
@@ -432,6 +510,8 @@
     <span id="cmdHint" class="dim" style="font-size:12px;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
     <span id="queueStatus" class="dim" style="font-size:12px"></span>
   </div>
+  <section class="zone">
+    <div class="zone-head"><span class="zone-name">任务中心</span><span class="zone-meta">实时流 · 历史 · 回放</span></div>
   <div class="card">
     <h2>任务实时流（SSE · 当前任务）
       <span style="float:right;font-weight:400">
@@ -450,6 +530,34 @@
     <div id="events"><div class="emptybox"><div class="eb-mark">&#9671;</div><div class="eb-title">等待任务事件</div><div class="eb-desc">Dashboard 不会阻塞 CLI——任务照常在终端执行。在上方命令条提交需求，事件会实时出现在这里。</div></div></div>
   </div>
 
+  <div class="card collapsible open" data-load="tasks">
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>历史任务（/api/tasks · 最近 50 · 可筛选）<span class="sp"></span><span class="badge" id="badgeTasks"></span></h2>
+    <div class="cbody">
+      <div style="display:flex;gap:6px;margin:0 0 8px;align-items:center">
+        <input id="taskQ" type="text" class="inp" placeholder="搜索输入/错误（关键词，本地过滤）"
+               style="flex:1;max-width:260px" />
+        <select id="taskStatus" class="sel">
+          <option value="">全部状态</option>
+          <option value="ok">OK</option>
+          <option value="fail">FAIL</option>
+          <option value="susp">可疑</option>
+        </select>
+        <button class="btn" id="taskFilterBtn" title="按关键词/状态过滤历史任务">筛选</button>
+      </div>
+      <div id="tasks"><div class="empty">加载中…</div></div>
+    </div>
+  </div>
+
+  <div class="card collapsible">
+    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>任务详情回放（点击上方历史任务行 /api/tasks/{id}/events）<span class="sp"></span></h2>
+    <div class="cbody"><div id="detail"><div class="empty">点击历史任务行回放完整事件序列；失败任务自动定位到第一个 error 事件</div></div></div>
+  </div>
+  </section>
+  </div>
+
+  <div class="colR">
+  <section class="zone">
+    <div class="zone-head"><span class="zone-name">工程</span><span class="zone-meta">产物 · 依赖图谱</span></div>
   <div class="card">
     <h2>任务产物（工作目录 /api/files）
       <span style="float:right;font-weight:400">
@@ -474,10 +582,11 @@
     </h2>
     <div id="dep"><div class="emptybox"><div class="eb-mark">&#9671;</div><div class="eb-title">依赖图谱未就绪</div><div class="eb-desc">需要工程模式：在 CLI 执行 use &lt;路径&gt; 建立符号索引，再点右上角"加载"。</div></div></div>
   </div>
-  </div>
+  </section>
 
-  <div class="colR">
-  <div class="card collapsible" data-load="stats">
+  <section class="zone">
+    <div class="zone-head"><span class="zone-name">运行面板</span><span class="zone-meta">统计 · 调权 · 记忆 · 备份</span></div>
+  <div class="card collapsible open" data-load="stats">
     <h2 onclick="toggleCard(this)"><span class="chev">▸</span>统计（/api/stats）<span class="sp"></span><span class="badge" id="badgeStats"></span></h2>
     <div class="cbody"><div id="stats"><div class="empty">加载中…</div></div></div>
   </div>
@@ -492,29 +601,6 @@
     <div class="cbody"><div id="memory"><div class="empty">加载中…</div></div></div>
   </div>
 
-  <div class="card collapsible" data-load="tasks">
-    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>历史任务（/api/tasks · 最近 50 · 可筛选）<span class="sp"></span><span class="badge" id="badgeTasks"></span></h2>
-    <div class="cbody">
-      <div style="display:flex;gap:6px;margin:0 0 8px;align-items:center">
-        <input id="taskQ" type="text" class="inp" placeholder="搜索输入/错误（关键词，本地过滤）"
-               style="flex:1;max-width:260px" />
-        <select id="taskStatus" class="sel">
-          <option value="">全部状态</option>
-          <option value="ok">OK</option>
-          <option value="fail">FAIL</option>
-          <option value="susp">可疑</option>
-        </select>
-        <button class="btn" id="taskFilterBtn" title="按关键词/状态过滤历史任务">筛选</button>
-      </div>
-      <div id="tasks"><div class="empty">加载中…</div></div>
-    </div>
-  </div>
-
-  <div class="card collapsible">
-    <h2 onclick="toggleCard(this)"><span class="chev">▸</span>任务详情回放（点击左侧历史任务行 /api/tasks/{id}/events）<span class="sp"></span></h2>
-    <div class="cbody"><div id="detail"><div class="empty">点击历史任务行回放完整事件序列；失败任务自动定位到第一个 error 事件</div></div></div>
-  </div>
-
   <div class="card collapsible" data-load="backups">
     <h2 onclick="toggleCard(this)"><span class="chev">▸</span>工程备份与 Diff（/api/backups + /api/diff）
       <span class="sp"></span><span class="badge" id="badgeBackups"></span>
@@ -525,6 +611,7 @@
       <div id="diff"><div class="empty">点击备份文件查看改动差异（红 = 删除，绿 = 新增）</div></div>
     </div>
   </div>
+  </section>
   </div>
 </main>
 <div id="toast"></div>
@@ -557,6 +644,20 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const cut = (s, n) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n) + "…" : s; };
 const fmtMs = (ms) => ms >= 1000 ? (ms / 1000).toFixed(1) + "s" : ms + "ms";
+// ── C 微可视化（零依赖）：分段条（堆叠占比 + 图例）──
+// parts: [{ v, cls, label, fmt?, keep? }]；cls ∈ b-green/b-red/b-yellow/b-blue/b-cyan/b-dim
+function segBar(parts, opts) {
+  const o = opts || {};
+  const total = parts.reduce((s, p) => s + (p.v > 0 ? p.v : 0), 0);
+  if (!total) return "";
+  let h = `<div class="seg">`;
+  for (const p of parts) if (p.v > 0) h += `<i class="${p.cls}" style="width:${(p.v / total * 100).toFixed(2)}%"></i>`;
+  h += `</div>`;
+  if (o.legend === false) return h;
+  h += `<div class="segl">` + parts.filter(p => p.v > 0 || p.keep)
+    .map(p => `<span><span class="sw ${p.sw || "d"}"></span>${p.label}${p.fmt != null ? ` <b>${p.fmt}</b>` : ""}</span>`).join("") + `</div>`;
+  return h;
+}
 
 // ── 事件行渲染：单一渲染函数（10-07 UI 层 #2 抽取）──
 // SSE 实时流与任务详情回放共用——两种数据源同一视觉（消双路径漂移）。
@@ -1047,6 +1148,9 @@ async function showTaskEvents(taskId) {
   if (!list.length) { box.innerHTML = `<div class="empty">任务 ${esc(taskId)} 无事件记录（事件持久化从 10-07 起生效）</div>`; return; }
   lastDetailList = list;
   box.innerHTML = "";
+  // A：历史行点击 → 回放卡片自动展开（任务中心内紧随历史，无需再手动点开）
+  const dcard = box.closest(".card");
+  if (dcard && !dcard.classList.contains("open")) dcard.classList.add("open");
   // 10-10 ① 分组渲染：回放与实时流共用 renderGrouped（消双路径漂移）
   renderGrouped(box, list, {
     boxKey: "detail",
@@ -1062,14 +1166,32 @@ async function fetchStats() {
   const s = d.summary;
   const rateCls = s.successRate >= 0.8 ? "green" : s.successRate >= 0.5 ? "" : "red";
   let html = `<div class="statrow"><span>成功率</span><span class="big ${rateCls}">${(s.successRate * 100).toFixed(1)}%</span></div>`;
-  html += `<div class="bar"><i class="b-green" style="width:${s.successRate * 100}%"></i></div>`;
-  html += `<div class="statrow"><span>总任务</span><span>${s.totalCount}（成功 ${s.successCount} / 失败 ${s.failureCount} / 可疑 ${s.suspiciousCount}）</span></div>`;
+  // C：成功率分段条（成功/失败/可疑占比，图例带计数——总任务行不再重复计数）
+  html += segBar([
+    { v: s.successCount, cls: "b-green", sw: "g", label: "成功" },
+    { v: s.failureCount, cls: "b-red", sw: "r", label: "失败" },
+    { v: s.suspiciousCount, cls: "b-yellow", sw: "y", label: "可疑" },
+  ]);
+  html += `<div class="statrow"><span>总任务</span><span>${s.totalCount}</span></div>`;
   html += `<div class="statrow"><span>平均耗时</span><span>${fmtMs(s.avgTotalMs)}（修复 ${s.avgRetryCount.toFixed(2)} 次）</span></div>`;
-  html += `<div class="statrow"><span>阶段耗时</span><span>规划 ${fmtMs(s.avgPlannerMs)} / 执行 ${fmtMs(s.avgExecutorMs)} / 验证 ${fmtMs(s.avgValidatorMs)}</span></div>`;
+  // C：阶段耗时堆叠条（规划/执行/验证占比，图例带绝对值）
+  const stageMs = (s.avgPlannerMs || 0) + (s.avgExecutorMs || 0) + (s.avgValidatorMs || 0);
+  if (stageMs > 0) {
+    html += `<div class="statrow" style="margin-top:2px"><span>阶段耗时</span><span></span></div>`;
+    html += segBar([
+      { v: s.avgPlannerMs, cls: "b-yellow", sw: "y", label: "规划", fmt: fmtMs(s.avgPlannerMs) },
+      { v: s.avgExecutorMs, cls: "b-blue", sw: "b", label: "执行", fmt: fmtMs(s.avgExecutorMs) },
+      { v: s.avgValidatorMs, cls: "b-green", sw: "g", label: "验证", fmt: fmtMs(s.avgValidatorMs) },
+    ]);
+  } else {
+    html += `<div class="statrow"><span>阶段耗时</span><span>无样本</span></div>`;
+  }
   if (d.epoch) {
     const c = d.epoch.current, l = d.epoch.legacy;
-    html += `<div class="statrow" style="margin-top:6px"><span>agent_pro 时代隔离</span><span>30B ${(c.successRate*100).toFixed(1)}% (${c.count}) | 4B 历史 ${(l.successRate*100).toFixed(1)}% (${l.count})</span></div>`;
-    html += `<div class="bar"><i class="b-blue" style="width:${c.successRate*100}%"></i><i class="b-dim" style="width:${l.successRate*100}%"></i></div>`;
+    html += segBar([
+      { v: c.count, cls: "b-blue", sw: "b", label: `agent_pro 30B ${(c.successRate * 100).toFixed(0)}%`, fmt: `${c.count} 次` },
+      { v: l.count, cls: "b-dim", sw: "d", label: `4B 历史 ${(l.successRate * 100).toFixed(0)}%`, fmt: `${l.count} 次`, keep: true },
+    ]);
   }
   if (d.failures && d.failures.length) {
     const max = Math.max(...d.failures.map(f => f.count), 1);
@@ -1178,13 +1300,24 @@ async function fetchTuning() {
   if (!r.ok) { $("tuning").innerHTML = `<div class="empty">tuning 不可用（${r.status}）</div>`; return; }
   const d = await r.json();
   const pct = (v) => (v * 100).toFixed(0) + "%";
-  const tag = (t) => t ? `<span class="ok">触发</span>` : `<span class="dim">保持</span>`;
+  const clamp = (v) => Math.max(0, Math.min(100, v * 100)).toFixed(1);
+  // C：阈值仪表——填充 = 当前成功率，竖线 = 阈值（一眼看出"过线没有"）；触发 = 黄色警示，稳态 = 绿色
+  const gauge = (rate, threshold) =>
+    `<div class="gauge ${rate < threshold ? "warn" : "ok"}"><i style="width:${clamp(rate)}%"></i><u style="left:${clamp(threshold)}%"></u></div>`;
+  const pill = (t) => t ? `<span class="pill on">触发</span>` : `<span class="pill off">保持</span>`;
   const w = d.writeDowngrade, rd = d.readUpgrade, cd = d.complexDrop;
   let html = "";
-  html += `<div class="statrow"><span>L0.5 写降级 small</span><span>样本 ${w.sampleCount} · 成功率 ${pct(w.successRate)} / 阈值 ${pct(w.threshold)} → ${tag(w.triggered)} ${esc(w.reason)}</span></div>`;
-  html += `<div class="statrow"><span>L0.5b 读升级 pro</span><span>small ${pct(rd.small.successRate)}（坏率阈 ${pct(rd.badRateThreshold)}）/ pro ${pct(rd.pro.successRate)}（阈 ${pct(rd.minSuccessRate)}）→ ${tag(rd.triggered)} ${esc(rd.reason)}</span></div>`;
-  html += `<div class="statrow"><span>P2 Complex 降级 large</span><span>样本 ${cd.sampleCount} · 成功率 ${pct(cd.successRate)} / 阈值 ${pct(cd.threshold)} → ${tag(cd.triggered)} ${esc(cd.reason)}</span></div>`;
-  html += `<div class="statrow" style="color:var(--dim)"><span>阈值来源</span><span>AgentOptions.Routing* 配置${d.epoch ? " · 样本仅统计 law-unified 30B 时代" : ""}</span></div>`;
+  html += `<div class="tune"><div class="tune-head">L0.5 写降级 small${pill(w.triggered)}</div>`
+       + gauge(w.successRate, w.threshold)
+       + `<div class="tune-meta">样本 <b>${w.sampleCount}</b> · 成功率 <b>${pct(w.successRate)}</b> · 阈值 <b>${pct(w.threshold)}</b>${w.reason ? " · " + esc(w.reason) : ""}</div></div>`;
+  html += `<div class="tune"><div class="tune-head">L0.5b 读升级 pro${pill(rd.triggered)}</div>`
+       + `<div class="tune-line"><span class="tl-name">small</span>${gauge(rd.small.successRate, rd.badRateThreshold)}<span class="tl-val">${pct(rd.small.successRate)} / 坏率阈 ${pct(rd.badRateThreshold)}</span></div>`
+       + `<div class="tune-line"><span class="tl-name">pro</span>${gauge(rd.pro.successRate, rd.minSuccessRate)}<span class="tl-val">${pct(rd.pro.successRate)} / 阈 ${pct(rd.minSuccessRate)}</span></div>`
+       + `<div class="tune-meta">${rd.reason ? esc(rd.reason) : ""}</div></div>`;
+  html += `<div class="tune"><div class="tune-head">P2 Complex 降级 large${pill(cd.triggered)}</div>`
+       + gauge(cd.successRate, cd.threshold)
+       + `<div class="tune-meta">样本 <b>${cd.sampleCount}</b> · 成功率 <b>${pct(cd.successRate)}</b> · 阈值 <b>${pct(cd.threshold)}</b>${cd.reason ? " · " + esc(cd.reason) : ""}</div></div>`;
+  html += `<div class="statrow" style="color:var(--dim);margin-top:4px"><span>阈值来源</span><span>AgentOptions.Routing* 配置${d.epoch ? " · 样本仅统计 law-unified 30B 时代" : ""}</span></div>`;
   $("tuning").innerHTML = html;
   const acts = [w.triggered ? "写降级" : null, rd.triggered ? "读升级" : null, cd.triggered ? "复杂降级" : null].filter(Boolean);
   badge("badgeTuning", acts.length ? acts.join("/") : "稳态");
@@ -1197,10 +1330,16 @@ async function fetchMemory() {
   const d = await r.json();
   if (!d.rows.length) { $("memory").innerHTML = `<div class="empty">暂无记忆（模型使用 remember 工具 / 失败教训自动归档后出现）</div>`; return; }
   const s = d.stats;
-  let html = `<div class="statrow"><span>统计</span><span>共 ${s.total} 条（模型 ${s.modelCount} / 任务 ${s.taskCount}）· 总命中 ${s.totalHits}</span></div>`;
+  let html = `<div class="statrow"><span>统计</span><span>共 ${s.total} 条 · 总命中 ${s.totalHits}</span></div>`;
+  // C：模型/任务构成分段条
+  html += segBar([
+    { v: s.modelCount, cls: "b-cyan", sw: "c", label: "模型记忆" },
+    { v: s.taskCount, cls: "b-blue", sw: "b", label: "任务归档" },
+  ]);
+  const maxHit = Math.max(...d.rows.map(m => m.hitCount || 0), 1);
   html += `<table><thead><tr><th>#</th><th>kind</th><th>命中</th><th>次数</th><th>主题</th></tr></thead><tbody>`;
   for (const m of d.rows)
-    html += `<tr><td>${m.id}</td><td>${esc(m.kind)}</td><td>${m.hitCount}</td><td>${m.count}</td><td class="inp" title="${esc(m.topic)}">${esc(cut(m.topic, 50))}</td></tr>`;
+    html += `<tr><td>${m.id}</td><td>${esc(m.kind)}</td><td><div class="heat"><i style="width:${((m.hitCount || 0) / maxHit * 100).toFixed(0)}%"></i></div>${m.hitCount}</td><td>${m.count}</td><td class="inp" title="${esc(m.topic)}">${esc(cut(m.topic, 50))}</td></tr>`;
   $("memory").innerHTML = html + "</tbody></table>";
   badge("badgeMemory", `${s.total} 条`);
 }
