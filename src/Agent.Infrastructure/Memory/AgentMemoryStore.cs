@@ -3,7 +3,7 @@
 // 模型级跨任务记忆（工程感知 P3）：
 // 把模型在任务中发现的事实/决策持久化到 SQLite（workspace/agent_memory.db），
 // 新任务开始按输入关键词检索相关记忆注入上下文——任务间真正"记住"。
-// 确定性 SQLite 操作 + 关键词匹配（Tokenize：中文串/标识符/文件名），无模型调用。
+// 确定性 SQLite 操作 + token 化倒排索引（Tokenize：中文串/标识符/文件名），无模型调用。
 // ============================================================
 
 using System.Text;
@@ -54,6 +54,16 @@ public sealed class AgentMemoryStore
                 feature     TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_memory_topic ON agent_memory(topic);
+            -- 【10-17 ②】token 化倒排索引：term → memory_id 映射（weight 2=topic / 1=content，
+            -- 同 (memory_id, term) 只存高权重；Search 按输入 Tokenize 精确匹配，替代 LIKE 子串下推——
+            -- 无通配符歧义（Method1500 不被 _ 误匹配）、索引可命中（LIKE '%kw%' 无法用普通索引）。
+            CREATE TABLE IF NOT EXISTS memory_terms (
+                memory_id INTEGER NOT NULL,
+                term      TEXT NOT NULL,
+                weight    INTEGER NOT NULL,
+                PRIMARY KEY (memory_id, term)
+            );
+            CREATE INDEX IF NOT EXISTS idx_terms_term ON memory_terms(term);
         """;
         cmd.ExecuteNonQuery();
 
@@ -83,6 +93,57 @@ public sealed class AgentMemoryStore
                 a3.CommandText = "ALTER TABLE agent_memory ADD COLUMN feature TEXT;";
                 a3.ExecuteNonQuery();
             }
+        }
+
+        // 【10-17 ②】存量回填：旧库已有 agent_memory 行但 memory_terms 为空 → 全量重建索引。
+        // （新增行由 Add/合并更新增量维护；此判断只在"表空且有存量"时触发一次，幂等。）
+        using (var chk = conn.CreateCommand())
+        {
+            chk.CommandText = "SELECT (SELECT COUNT(*) FROM agent_memory), (SELECT COUNT(*) FROM memory_terms);";
+            using var r = chk.ExecuteReader();
+            if (r.Read() && r.GetInt32(0) > 0 && r.GetInt32(1) == 0)
+            {
+                var toIndex = new List<(long Id, string Topic, string Content)>();
+                using (var rows = conn.CreateCommand())
+                {
+                    rows.CommandText = "SELECT id, topic, content FROM agent_memory;";
+                    using var rr = rows.ExecuteReader();
+                    while (rr.Read())
+                        toIndex.Add((rr.GetInt64(0), rr.GetString(1), rr.GetString(2)));
+                }
+                foreach (var row in toIndex)
+                    IndexMemoryRow(conn, row.Id, row.Topic, row.Content);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 重建单条记忆的倒排项（同一连接内调用）：先删旧项再按 topic/content 拆词插入。
+    /// weight = 2（topic）/ 1（content）；同 term 双字段命中取 2（topic 优先，与旧评分 if/else 语义一致）。
+    /// </summary>
+    private static void IndexMemoryRow(SqliteConnection conn, long id, string topic, string content)
+    {
+        using var del = conn.CreateCommand();
+        del.CommandText = "DELETE FROM memory_terms WHERE memory_id = $id;";
+        del.Parameters.AddWithValue("$id", id);
+        del.ExecuteNonQuery();
+
+        var terms = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in Tokenize(topic))
+            terms[t] = 2;
+        foreach (var t in Tokenize(content))
+        {
+            if (!terms.ContainsKey(t))
+                terms[t] = 1;
+        }
+        foreach (var kv in terms)
+        {
+            using var ins = conn.CreateCommand();
+            ins.CommandText = "INSERT OR REPLACE INTO memory_terms(memory_id, term, weight) VALUES ($id, $term, $weight);";
+            ins.Parameters.AddWithValue("$id", id);
+            ins.Parameters.AddWithValue("$term", kv.Key);
+            ins.Parameters.AddWithValue("$weight", kv.Value);
+            ins.ExecuteNonQuery();
         }
     }
 
@@ -125,6 +186,8 @@ public sealed class AgentMemoryStore
                     upd.Parameters.AddWithValue("@feature", (object?)feature ?? DBNull.Value);
                     upd.Parameters.AddWithValue("@id", Convert.ToInt64(existId));
                     upd.ExecuteNonQuery();
+                    // 【10-17 ②】content 可能已更新 → 重建倒排项
+                    IndexMemoryRow(conn, Convert.ToInt64(existId), topicTrim, contentTrim);
                     return;
                 }
             }
@@ -140,7 +203,21 @@ public sealed class AgentMemoryStore
             cmd.Parameters.AddWithValue("@task", sourceTask ?? (object)DBNull.Value);
             cmd.Parameters.AddWithValue("@at", now);
             cmd.Parameters.AddWithValue("@feature", (object?)feature ?? DBNull.Value);
-            cmd.ExecuteNonQuery();
+            cmd.CommandText = """
+                INSERT INTO agent_memory (kind, topic, content, source_task, created_at, last_hit_at, count, feature)
+                VALUES (@kind, @topic, @content, @task, @at, @at, 1, @feature);
+                SELECT last_insert_rowid();
+            """;
+            var newId = Convert.ToInt64(cmd.ExecuteScalar());
+            // 【10-17 ②】同步倒排索引（与记忆写入同事务连接，失败不阻塞写入）
+            try
+            {
+                IndexMemoryRow(conn, newId, topicTrim, contentTrim);
+            }
+            catch (SqliteException)
+            {
+                // 索引尽力而为：检索可能漏命中，但写入与任务执行不受影响
+            }
         }
         catch (SqliteException)
         {
@@ -166,35 +243,53 @@ public sealed class AgentMemoryStore
         {
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();
-            using var cmd = conn.CreateCommand();
-            // 【10-13 批次3】⑦ 记忆索引：关键词过滤下沉 SQL（LIKE 下推）——此前全表 SELECT
-            // 拉全部行到 C# 逐个 Contains（N 行 × M 关键词 全部传输+打分）；
-            // 现按关键词 OR 下推，只拉含任一关键词的行进 C# 打分（行数级过滤，非全表）。
-            // 转义：LIKE 通配符 % _ \ 前缀转义（关键词含 Method1500 等下划线 token），ESCAPE '\' 声明。
-            var like = new StringBuilder("SELECT id, kind, topic, content, hit_count, count, created_at, COALESCE(last_hit_at, ''), COALESCE(feature, '') FROM agent_memory WHERE ");
-            for (var i = 0; i < keywords.Count; i++)
+            // 【10-17 ②】token 化倒排：memory_terms 精确匹配（无 LIKE 通配符歧义——
+            // Method1500 不再被 _ 误匹配 Method1x500；term 索引可命中，非全表扫描）。
+            // 每 (memory_id, term) 取高权重（topic=2 优先），同一记忆多 term 命中求和——与旧评分
+            // （topic.Contains +2 else content +1，同词不重复计）等价。
+            var scores = new Dictionary<long, int>();
+            using (var idxCmd = conn.CreateCommand())
             {
-                if (i > 0) like.Append(" OR ");
-                like.Append("(topic LIKE $k").Append(i).Append(" ESCAPE '\\' OR content LIKE $k").Append(i).Append(" ESCAPE '\\')");
-                cmd.Parameters.AddWithValue($"$k{i}", "%" + EscapeLike(keywords[i]) + "%");
-            }
-            cmd.CommandText = like.ToString();
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                var topic = reader.GetString(2);
-                var content = reader.GetString(3);
-                int score = 0;
-                foreach (var kw in keywords)
+                var sql = new StringBuilder(
+                    "SELECT memory_id, SUM(w) AS score FROM (SELECT memory_id, MAX(weight) AS w FROM memory_terms WHERE term IN (");
+                for (var i = 0; i < keywords.Count; i++)
                 {
-                    if (topic.Contains(kw, StringComparison.OrdinalIgnoreCase)) score += 2;
-                    else if (content.Contains(kw, StringComparison.OrdinalIgnoreCase)) score += 1;
+                    if (i > 0) sql.Append(", ");
+                    sql.Append("$k").Append(i);
+                    idxCmd.Parameters.AddWithValue("$k" + i, keywords[i]);
                 }
-                if (score > 0)
+                sql.Append(") GROUP BY memory_id, term) GROUP BY memory_id ORDER BY score DESC;");
+                idxCmd.CommandText = sql.ToString();
+                using var r = idxCmd.ExecuteReader();
+                while (r.Read())
+                    scores[r.GetInt64(0)] = r.GetInt32(1);
+            }
+            if (scores.Count == 0)
+                return new List<MemoryHit>();
+
+            var ids = scores.Keys.ToList();
+            using (var rowCmd = conn.CreateCommand())
+            {
+                var rowSql = new StringBuilder(
+                    "SELECT id, kind, topic, content, hit_count, count, created_at, COALESCE(last_hit_at, ''), COALESCE(feature, '') FROM agent_memory WHERE id IN (");
+                for (var i = 0; i < ids.Count; i++)
                 {
+                    if (i > 0) rowSql.Append(", ");
+                    rowSql.Append("$id").Append(i);
+                    rowCmd.Parameters.AddWithValue("$id" + i, ids[i]);
+                }
+                rowSql.Append(");");
+                rowCmd.CommandText = rowSql.ToString();
+                using var reader = rowCmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var id = reader.GetInt64(0);
+                    var kind = reader.GetString(1);
+                    var topic = reader.GetString(2);
+                    var content = reader.GetString(3);
+                    int score = scores[id];
                     // 【任务5】特征过滤：任务归档记忆跨特征类剔除；决策记忆跨类降权
                     var memFeature = reader.IsDBNull(8) ? "" : reader.GetString(8);
-                    var kind = reader.GetString(1);
                     if (!string.IsNullOrEmpty(feature) && !string.IsNullOrEmpty(memFeature)
                         && !memFeature.Equals(feature, StringComparison.OrdinalIgnoreCase))
                     {
@@ -204,7 +299,7 @@ public sealed class AgentMemoryStore
                         if (score <= 0) continue;
                     }
                     hits.Add((
-                        new MemoryHit(reader.GetInt64(0), kind, topic, content,
+                        new MemoryHit(id, kind, topic, content,
                             reader.GetInt32(4), reader.IsDBNull(5) ? 1 : reader.GetInt32(5),
                             reader.GetString(6), reader.GetString(7), memFeature),
                         score));
@@ -449,8 +544,8 @@ public sealed class AgentMemoryStore
         return result.Distinct(StringComparer.OrdinalIgnoreCase).Take(20).ToList();
     }
 
-    /// <summary>【10-13 批次3】LIKE 通配符转义（% _ \）——关键词含 Method1500 等下划线 token，
-    /// 不转义会把下划线当单字符通配符造成误匹配；与 SQL `ESCAPE '\'` 配套。</summary>
+    /// <summary>【10-13 批次3】LIKE 通配符转义（% _ \）——随 10-17 ② 倒排索引落地不再被 Search 使用；
+    /// 保留供未来 LIKE 语义查询（如管理员模糊检索）复用。</summary>
     private static string EscapeLike(string s) =>
         s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }

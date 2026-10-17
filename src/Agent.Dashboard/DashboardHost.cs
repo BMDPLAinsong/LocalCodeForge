@@ -251,36 +251,14 @@ public static class DashboardHost
         // ── 历史任务（轮询；SSE 只推当前任务）──
         // 【P0-4】过滤参数：q（关键词，user_input/error_summary 包含，大小写不敏感）、
         // status（ok / fail / susp）、since（ISO 时间，started_at ≥）。
-        // 结构性过滤在端点内完成（上限内样本内存过滤，SQLite 查询层不扩散接口）；
-        // 无过滤参数时行为与历史完全一致。数据单一来源 = Metrics。
+        // 【10-17 ③】过滤下沉 SQLite 查询层（GetFilteredRecentAsync：WHERE + LIMIT 全在库内，
+        // 任务量放大前不再拉上限内样本内存过滤）；数据源与语义不变。数据单一来源 = Metrics。
         app.MapGet("/api/tasks", async (int take, string? q, string? status, string? since, CancellationToken ct) =>
         {
             take = take is >= 1 and <= 200 ? take : 50;
-            var tasks = await o.Metrics.GetRecentAsync(take, ct);
-            var filtered = tasks.AsEnumerable();
-            if (!string.IsNullOrWhiteSpace(q))
-            {
-                var needle = q.Trim();
-                filtered = filtered.Where(m =>
-                    m.UserInput.Contains(needle, StringComparison.OrdinalIgnoreCase)
-                    || m.ErrorSummary.Contains(needle, StringComparison.OrdinalIgnoreCase));
-            }
-            if (!string.IsNullOrWhiteSpace(status))
-            {
-                filtered = status.ToLowerInvariant() switch
-                {
-                    "ok" => filtered.Where(m => m.Success),
-                    "fail" => filtered.Where(m => !m.Success && !m.IsSuspicious),
-                    "susp" => filtered.Where(m => m.IsSuspicious),
-                    _ => filtered,
-                };
-            }
-            if (DateTimeOffset.TryParse(since, out var sinceUtc))
-            {
-                var sinceLocal = sinceUtc.ToLocalTime();
-                filtered = filtered.Where(m => m.StartedAt >= sinceLocal);
-            }
-            return Results.Json(filtered.ToList(), JsonOpts);
+            DateTimeOffset? sinceUtc = DateTimeOffset.TryParse(since, out var s) ? s : null;
+            var tasks = await o.Metrics.GetFilteredRecentAsync(q, status, sinceUtc, take, ct);
+            return Results.Json(tasks, JsonOpts);
         });
 
         // ── 健康状态面板（P0-2）：模型端点 / 工程模式 / 运行开关一览 ──

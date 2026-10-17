@@ -18,6 +18,11 @@ public interface IMetricsCollector
     /// <summary>查询最近 N 条记录。</summary>
     Task<IReadOnlyList<TaskMetric>> GetRecentAsync(int take, CancellationToken ct);
 
+    /// <summary>【10-17 ③】查询最近 N 条并下推过滤（q 关键词命中 user_input/error_summary、
+    /// status ok/fail/susp、since 起始时间）——任务量放大前下沉 SQLite：过滤/排序/截断全在库内，
+    /// 不再拉上限内样本内存过滤。</summary>
+    Task<IReadOnlyList<TaskMetric>> GetFilteredRecentAsync(string? q, string? status, DateTimeOffset? since, int take, CancellationToken ct);
+
     /// <summary>查询最近的失败记录。</summary>
     Task<IReadOnlyList<TaskMetric>> GetRecentFailuresAsync(int take, CancellationToken ct);
 

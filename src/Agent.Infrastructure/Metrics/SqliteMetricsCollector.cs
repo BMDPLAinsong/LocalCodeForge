@@ -273,6 +273,47 @@ public sealed class SqliteMetricsCollector : IMetricsCollector
         return await ReadAllAsync(cmd, ct);
     }
 
+    /// <summary>
+    /// 【10-17 ③】最近 N 条 + SQLite 下推过滤（/api/tasks 数据源；任务量放大前下沉查询层）。
+    /// q：user_input/error_summary 子串（LIKE 转义 % _ \，与旧内存 Contains 语义一致，ASCII 大小写不敏感）；
+    /// status：ok=success=1 / fail=success=0 AND is_suspicious=0 / susp=is_suspicious=1（非法值不加条件，与旧 switch 一致）；
+    /// since：started_at（UTC epoch）≥。排序/截断全在库内，无过滤时行为与 GetRecentAsync 等价。
+    /// </summary>
+    public async Task<IReadOnlyList<TaskMetric>> GetFilteredRecentAsync(string? q, string? status, DateTimeOffset? since, int take, CancellationToken ct)
+    {
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct);
+
+        var sql = new System.Text.StringBuilder("SELECT * FROM task_metrics_real WHERE 1=1");
+        if (!string.IsNullOrWhiteSpace(q))
+            sql.Append(" AND (user_input LIKE $q ESCAPE '\\' OR error_summary LIKE $q ESCAPE '\\')");
+        if (status is not null)
+        {
+            var s = status.ToLowerInvariant();
+            if (s == "ok") sql.Append(" AND success = 1");
+            else if (s == "fail") sql.Append(" AND success = 0 AND is_suspicious = 0");
+            else if (s == "susp") sql.Append(" AND is_suspicious = 1");
+        }
+        if (since is not null)
+            sql.Append(" AND started_at >= $since");
+        sql.Append(" ORDER BY started_at DESC LIMIT $take;");
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql.ToString();
+        if (!string.IsNullOrWhiteSpace(q))
+            cmd.Parameters.AddWithValue("$q", "%" + EscapeLike(q.Trim()) + "%");
+        if (since is not null)
+            cmd.Parameters.AddWithValue("$since", since.Value.ToUnixTimeSeconds());
+        cmd.Parameters.AddWithValue("$take", take);
+
+        return await ReadAllAsync(cmd, ct);
+    }
+
+    /// <summary>【10-17 ③】LIKE 通配符转义（% _ \）——q 为子串匹配且参数化，与 ESCAPE '\' 配套，
+    /// 用户输入含 _（如 flt_susp 类 task id 片段）不致被当单字符通配符。</summary>
+    private static string EscapeLike(string s) =>
+        s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+
     /// <summary>【10-08 metrics 数据治理】E2E 用例计数（stats 单列展示，不污染真实统计）。</summary>
     public async Task<int> GetE2ECountAsync(CancellationToken ct)
     {

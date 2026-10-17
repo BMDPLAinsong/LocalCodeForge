@@ -143,5 +143,8 @@ Suites_Routing.RunToolLayering();
 Suites_Routing.RunDeterministicClassifier();
 await Suites_Dashboard.RunEventSchemaVersion();
 
+// ── 10-17 ②③ 断言（无标题，追加于 91 区段之后）──
+Suites_Memory.RunMemoryTermsIndex();
+
 Console.WriteLine($"\n结果: {Pass} 通过 / {Fail} 失败");
 return Fail == 0 ? 0 : 1;

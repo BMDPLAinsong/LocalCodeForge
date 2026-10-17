@@ -1,6 +1,6 @@
-# LocalCodeForge 项目交接文档
+﻿# LocalCodeForge 项目交接文档
 
-> 最后更新：2026-10-16（复盘批次④ 文档归档后）
+> 最后更新：2026-10-17（批次8b：② 记忆倒排 + ③ /api/tasks 下沉后）
 >
 > **文档地图**：
 > - 本文 = **当前状态 + 近两周变更史**（10-15 Dashboard 时代起）。日常接手先读本文 + §速览。
@@ -16,7 +16,7 @@
 | 项 | 状态 |
 |---|---|
 | 构建 | 0 错误（9 个既有 nullable 警告基线，见 AgentLoop/Orchestrator 等） |
-| 测试 | **875/875**（`dotnet run --project tests/Agent.Infrastructure.Tests`，零依赖 harness + 91 区段顺序门禁） |
+| 测试 | **885/885**（`dotnet run --project tests/Agent.Infrastructure.Tests`，零依赖 harness + 91 区段顺序门禁） |
 | 一键门禁 | `powershell -NoProfile -File scripts/verify.ps1` —— **六门全绿**：① build ② tests ③ js-syntax（node --check / 无 node 走 `jscheck.py` + selftest）④ drift-check（基线 51 处/19 文件，阈值 60）⑤ rename-gate ⑥ dashboard-inline（app.css/app.js ↔ index.html 同步） |
 | 提交门禁 | pre-commit 钩子（`scripts/git-hooks/pre-commit`）自动跑 verify.ps1，失败阻断（`--no-verify` 可绕） |
 | 主交互入口 | Web Dashboard（CLI 交互启动即自动起 + 开浏览器；无头/管道自动跳过；`LAW_NO_AUTODASH=1` 可关）；CLI 保留兜底 |
@@ -29,13 +29,13 @@
 1. P-D：30B 模型增量修改纪律弱（偶发整文件重写带重复类型）→ 编译验证 + 回滚兜底，非提示词解决。
 2. 工程增量 expected_output 为 advisory（Planner 自产期望无工程基准）；"任务输入自带精确输出要求"的漏判面未验证。
 3. `/api/files` 仅限 run 工作区；工程模式产物在工程根，web 端看不到。
-4. 记忆检索为 LIKE 关键词过滤（数百条够用）；阶段 4 向量检索未做。
+4. 记忆检索已升级 **token 化倒排**（10-17 ②：精确匹配 + term 索引命中，取代 LIKE 子串扫描）；**阶段 4 向量（语义）检索未做**。
 5. webUI P1/P2 未做：seq 联动 SSE 归属、管理命令插队、CLI 守护进程化。
-6. `/api/tasks` 过滤为上限内内存过滤（50 条）；任务量放大需下沉 SQLite 查询层。
+6. ~~`/api/tasks` 内存过滤~~ **已下沉 SQLite 查询层**（10-17 ③：q/status/since 全库内 WHERE+LIMIT）。
 7. FailureCategorizer 读 `ToolResult.Code`（与存储格式对齐）为批次遗留后续轮。
 8. README demo.gif 占位待录屏；awesome 列表 PR、Show HN 发帖待办（7p）。
 
-**近三次提交**：`d480a9d` 批次③源码拆分 → `09d8119` 批次②JS门禁python通道 → `bb9751e` 批次①CLI调试命令治理（再往前 `cbfb822` v4 换肤）。
+**近三次提交**：`8b` 批次②③双下沉（见下）→ `7e3c1f0` 批次④文档归档 → `d480a9d` 批次③源码拆分（再往前 `09d8119`/`bb9751e`/`cbfb822` v4 换肤）。
 
 ---
 
@@ -55,6 +55,8 @@
 7y. **【已完成】复盘批次② JS 语法门禁 python 通道（10-16）**：复盘定级 P0 二项——verify.ps1 第 3 门（7u 新增）依赖 `node --check`，而本开发机无 node → 门禁**静默跳过**，恰好在 7u 事故类别（内嵌 JS 语法错误整段失效）上失明；本次 v4 换肤 15 处 CSS 令牌替换也只能做括号配平粗检。**落地**：①新 `scripts/jscheck.py`——纯 python 字符级状态机校验（node 零依赖）：括号配平（字符串/注释/正则/模板字面量按原子 token 跳过）、字符串/模板/正则全部终止校验、`/` 除号 vs 正则字面量消歧（前一有效 token 为 return/typeof 等关键字或运算符 → 正则；标识符/数字/`)` → 除号）；②verify.ps1 第 3 门改双通道——node 在 → `node --check`（权威）；node 缺 → jscheck.py，**不再静默跳过**（两者皆缺才判 BLIND 计入失败）；③`scripts/jscheck_selftest.py` 固化 5 用例（真实文件必须过 + 四类故障必须被抓：字符串内嵌未转义引号[7u 事故类]/括号不配平/模板字面量未终止/多余右括号），接入 verify 第 3 步前置——门禁自身也要防回归。**开发实证**：jscheck 首版即踩两个真 bug（模板 `${...}` 结尾 `}` 会"偷"外层作用域括号——因 `${` 未向括号栈压占位符；深度登记方向反），均被自测用例抓住后修复——这正是固化为门禁前置的理由。**验证**：verify.ps1 五门全绿（JSCHECK SELFTEST OK → JS SYNTAX OK (python fallback) → DRIFT OK → RENAME-GATE OK）；pre-commit 钩子直调 verify.ps1 自动覆盖。
 
 7z. **【已完成】复盘批次③ Dashboard 前端源码三拆分（10-16）**：复盘定级 P1——index.html 单文件 1675 行/~90KB（CSS+DOM+JS 全内嵌，四轮视觉重构靠脚本打补丁），但运行时契约是"单文件嵌入页"（csproj 只嵌 index.html；GET / 直读流；tests 40+ 项契约逐字节断言在页面内容上）——**不能改产物形态，只能拆源码**。**落地**：`DashboardPages/app.css`（28839 字符，原 `<style>` 内容）+ `app.js`（53980 字符，原 `<script>` 内容）为编辑源，index.html 退化为生成产物（HTML 骨架 + 内联 css/js）；`scripts/inline_dashboard.py` 三模式——`--extract`（一次性抽取，已执行并验证往返字节一致）/ 默认 build（源→产物）/ `--check`（内存重建比对，漂移报行级 diff，exit 1）；verify.ps1 新增 **6/6 DASHBOARD INLINE 门**（手改单侧即拦，修复命令随错误信息给出）。**编辑流实测**：改 app.js → build → index.html 含改动 → 还原 → 字节级复原 → check 绿；漂移注入实测 exit 1 + 定位行。**契约零动**：csproj 无需改（显式 Include 无 glob，app.css/js 不会被误嵌）；tests 875/875 不经任何改动（页面内容不变）。**验证**：六门全绿（build/tests/js-syntax+selftest/drift/rename-gate/dashboard-inline）。DEVELOPER.md §2 补编辑流说明。
+
+8b. **【已完成】P2 双下沉：② 记忆检索 token 化倒排 + ③ /api/tasks 下沉 SQLite 查询层（10-17，用户复盘后拍板）**：② AgentMemoryStore 新增 `memory_terms` 倒排表（term→memory_id，weight 2=topic/1=content，同 (id,term) 只存高权重），Add/合并更新同步重建索引，Initialize 存量回填（terms 空且有存量行时一次性全量）；Search 由「LIKE 子串下推 + C# Contains 打分」改为「输入 Tokenize 精确匹配倒排 + 每 term 取字段高权重求和」（与旧评分 topic+2 else content+1 等价）。**语义升级（明示）**：LIKE 子串匹配 → token 精确匹配——Method1500 天然不被 _ 通配误匹配（无需转义）、term 索引可命中（非全表扫描）；唯一子串依赖断言 `Search("注释") content 命中` 随语义改 `Search("加了注释")` 并新增反例锁（"注释" 不再模糊召回仅含"加了注释"的记忆）。③ IMetricsCollector 新增 `GetFilteredRecentAsync(q,status,since,take)`——q 子串（LIKE 转义 + ESCAPE）、status ok/fail/susp、since（started_at ≥ UTC epoch）全下推 SQL（WHERE+LIMIT 库内），DashboardHost /api/tasks 移除「上限内样本内存过滤」（语义等价：无过滤=GetRecentAsync；status 非法值不加条件；since 边界 UTC 归一）。**测试**：新增记忆倒排 7 断言（索引落库/精确命中/权重优先/合并重建/存量回填）+ /api/tasks 下推 2 断言（过滤后 LIMIT 全量过滤再截断）；tests 875 → **885/885**，六门全绿。
 
 8a. **【已完成】复盘批次④ 文档归档（10-16）**：项目复盘定级 P1——HANDOVER.md 累积至 1167 行（2026-09-22 初撰架构盘点 + 10-03~10-16 四十余批次追加式记录），检索成本极高。**处置（纯文档搬迁，零知识删除）**：lines 1–1098（至 7q）+ 旧计划项 6/7 + 2026-09-22 事实清单 → 整体迁入 `docs/history/HANDOVER-archive-2026-09-22_10-15.md`（带归档横幅）；本文重构为「当前状态速览 + 近两周批次（7r~7z）+ 回滚安全矩阵」三段式，回滚矩阵去 §12 悬空编号改「附」。**配套**：rename-gate.py 白名单从"路径含 HANDOVER.md"扩为"含 HANDOVER.md 或位于 docs/history/"（历史文件必然含旧名 LocalAiWorkbench 迁移记录，否则归档即触发门禁）；DEVELOPER.md 文档地图补 history 指针。**验证**：rename-gate/drift/其余门禁全绿；tests 875/875 不受影响（无代码改动）。
 

@@ -16,6 +16,8 @@ workspace/
 # 临时文件
 *.tmp
 *.log
+__pycache__/
+*.pyc
 
 # 本地诊断输出（误提交清理后补录）
 build_c.txt

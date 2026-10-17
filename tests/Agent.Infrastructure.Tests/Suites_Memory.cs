@@ -326,8 +326,10 @@ public static class Suites_Memory
             Check("记忆：topic 命中计分", hit2.Any(h => h.Topic.Contains("PDF_RAG")));
             var hit3 = storeM.Search("不存在的关键词xyz不存在", 5);
             Check("记忆：无命中返回空（LIKE 下推不误拉全表）", hit3.Count == 0);
-            var hit4 = storeM.Search("注释", 5);
-            Check("记忆：content 命中（content LIKE 下推）", hit4.Any(h => h.Content.Contains("Method1500")));
+            var hit4 = storeM.Search("加了注释", 5);
+            Check("记忆：content 命中（倒排 content term 权重 1——'加了注释' token 精确召回）", hit4.Any(h => h.Content.Contains("Method1500")));
+            var hit4b = storeM.Search("注释", 5);
+            Check("记忆：倒排精确语义（10-17 ② 取代 LIKE 子串——'注释' 不再以子串模糊召回仅含'加了注释'的记忆）", hit4b.Count == 0);
             try { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); } catch { }
             try { Directory.Delete(wsM, true); } catch { }
         }
@@ -354,5 +356,69 @@ public static class Suites_Memory
             try { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); } catch { }
             try { Directory.Delete(ws3, true); } catch { /* SQLite 连接池可能短暂占用，临时目录容错不删 */ }
         }
+    }
+
+    // ── 10-17 ② 记忆 token 化倒排断言（无标题，追加于 91 区段之后）──
+    public static void RunMemoryTermsIndex()
+    {
+        Console.WriteLine("== 10-17 ② 记忆 token 化倒排索引 ==");
+        var wsT = Path.Combine(Path.GetTempPath(), "law_terms_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(wsT);
+        var db = Path.Combine(wsT, "m.db");
+        var st = new Agent.Infrastructure.Memory.AgentMemoryStore(db);
+
+        // ① Add 同步写倒排项
+        st.Add("model", "AlphaService 配置", "AlphaService 初始化参数。", "t1");
+        st.Add("model", "BetaService 调优", "BetaService 的 Method900 注释。", "t2");
+        using (var conn = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + db))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM memory_terms;";
+            Check("倒排表随 Add 落库（term 行 > 0）", Convert.ToInt64(cmd.ExecuteScalar()) > 0);
+        }
+
+        // ② token 精确匹配（倒排无 LIKE 子串歧义）
+        var hitA = st.Search("AlphaService");
+        Check("倒排命中 topic token", hitA.Any(h => h.Topic.Contains("AlphaService")));
+        Check("倒排不误命中无关记忆", hitA.All(h => !h.Topic.Contains("BetaService")));
+
+        // ③ topic 权重优先：同 term 双命中时 topic 行排在 content 行前（w=2 > w=1）
+        st.Add("model", "共享术语 话题", "shared_term_xyz 在 topic 中。", "t3");
+        st.Add("model", "其他话题", "shared_term_xyz 在 content 中。", "t4");
+        var hitsW = st.Search("shared_term_xyz", limit: 10);
+        var topicIdx = hitsW.FindIndex(h => h.Topic.Contains("共享术语"));
+        var contentIdx = hitsW.FindIndex(h => h.Topic.Contains("其他话题"));
+        Check("topic 权重优先于 content（同 term 双命中 topic 在前）",
+            topicIdx >= 0 && contentIdx >= 0 && topicIdx < contentIdx);
+
+        // ④ 合并更新重建索引：同 kind+topic 更新 content → 新 content 的 term 可检索
+        st.Add("model", "AlphaService 配置", "AlphaService 初始化参数已改为 version2 配置项。", "t5");
+        var hitV2 = st.Search("version2");
+        Check("合并更新后新 content term 可检索", hitV2.Any(h => h.Topic.Contains("AlphaService")));
+
+        // ⑤ 存量回填：模拟旧库（terms 清空 + 存量行）→ 新实例初始化触发全量回填 → 可检索
+        using (var conn2 = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + db))
+        {
+            conn2.Open();
+            using var ins = conn2.CreateCommand();
+            ins.CommandText = """
+                INSERT INTO agent_memory (kind, topic, content, created_at, count)
+                VALUES ('model', 'LegacyRow 话题', 'legacy 存量行。', @at, 1);
+            """;
+            ins.Parameters.AddWithValue("@at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            ins.ExecuteNonQuery();
+            using var del = conn2.CreateCommand();
+            del.CommandText = "DELETE FROM memory_terms;";
+            del.ExecuteNonQuery();
+        }
+        var st2 = new Agent.Infrastructure.Memory.AgentMemoryStore(db);   // terms 空 + 存量行 → 全量回填
+        var hitLegacy = st2.Search("LegacyRow");
+        Check("存量回填：无索引旧库初始化后倒排可检索", hitLegacy.Any(h => h.Topic.Contains("LegacyRow")));
+        var hitAlpha = st2.Search("version2");
+        Check("回填不丢已有行（version2 仍可检索）", hitAlpha.Any(h => h.Topic.Contains("AlphaService")));
+
+        try { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); } catch { }
+        try { Directory.Delete(wsT, true); } catch { /* SQLite 连接池可能短暂占用，临时目录容错不删 */ }
     }
 }

@@ -343,6 +343,32 @@ public static class Suites_Dashboard
                 var tasksNoF = await http.GetStringAsync("api/tasks?take=50&q=" + Uri.EscapeDataString("不存在的关键词xyz"));
                 Check("P0-4 GET /api/tasks 过滤无命中 → 空数组", tasksNoF.Trim() == "[]");
 
+                // 【10-17 ③】SQL 下推语义锁：过滤后 LIMIT（全量过滤再截断，非先取样本再内存过滤）
+                await metrics.RecordAsync(new Agent.Core.Models.TaskMetric
+                {
+                    TaskId = "flt_q1", SessionId = "s", UserInput = "SQL下推验证 第二次",
+                    Mode = "small", RoutingTier = "L0", ServiceId = "small", RoutingReason = "test",
+                    Success = true, IsSuspicious = false, IsE2E = false, RetryCount = 0,
+                    TotalMs = 100, PlannerMs = 10, ExecutorMs = 50, ValidatorMs = 40,
+                    LintBlockingErrors = 0, LintWarningErrors = 0, ErrorSummary = "",
+                    StartedAt = t0.AddMinutes(-4), FinishedAt = t0.AddMinutes(-4).AddSeconds(5),
+                }, CancellationToken.None);
+                await metrics.RecordAsync(new Agent.Core.Models.TaskMetric
+                {
+                    TaskId = "flt_q2", SessionId = "s", UserInput = "SQL下推验证 第三次",
+                    Mode = "small", RoutingTier = "L0", ServiceId = "small", RoutingReason = "test",
+                    Success = true, IsSuspicious = false, IsE2E = false, RetryCount = 0,
+                    TotalMs = 100, PlannerMs = 10, ExecutorMs = 50, ValidatorMs = 40,
+                    LintBlockingErrors = 0, LintWarningErrors = 0, ErrorSummary = "",
+                    StartedAt = t0.AddMinutes(-3), FinishedAt = t0.AddMinutes(-3).AddSeconds(5),
+                }, CancellationToken.None);
+                var tasksQ2 = await http.GetStringAsync("api/tasks?take=1&q=" + Uri.EscapeDataString("SQL下推验证"));
+                Check("10-17③ /api/tasks 过滤后 LIMIT：q 命中多行 take=1 只回最新 1 条（全量过滤再截断）",
+                    tasksQ2.Contains("flt_q2") && !tasksQ2.Contains("flt_q1") && !tasksQ2.Contains("flt_fail"));
+                var tasksQ2b = await http.GetStringAsync("api/tasks?take=1&q=" + Uri.EscapeDataString("SQL下推验证 第二次"));
+                Check("10-17③ /api/tasks 过滤后 LIMIT：精确到旧一条仍可命中（非先取样本截断漏掉）",
+                    tasksQ2b.Contains("flt_q1") && !tasksQ2b.Contains("flt_q2"));
+
                 // 【P0-2】健康状态：模型端点 / 工程模式 / 运行开关（数据全来自注入 AgentOptions，无并行口径）
                 var health = await http.GetStringAsync("api/health");
                 Check("GET /api/health 200 + 结构（models 三角色 + executor + projectWritable + runtime 开关）",
