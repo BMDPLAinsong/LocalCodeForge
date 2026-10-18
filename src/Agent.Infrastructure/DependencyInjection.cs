@@ -168,13 +168,21 @@ public static class DependencyInjection
         });
 
         // ─────────── 模型级记忆（工程感知 P3） ───────────
-        services.AddSingleton<AgentMemoryStore>(_ =>
+        // 【10-18 P2-4】embedding 语义通道：AgentOptions.Embedding 为 null（禁用向量检索）时
+        // 工厂返回 null 单例——AgentMemoryStore 注入为 null 即纯 token 倒排（fail-open）。
+        // OllamaEmbedder 是惰性 HttpClient 封装，注册不触发网络；服务离线在调用时降级。
+        services.AddSingleton<IEmbedder>(sp =>
+        {
+            var opts = sp.GetRequiredService<AgentOptions>();
+            return opts.Embedding is null ? null! : new OllamaEmbedder(opts.Embedding);
+        });
+        services.AddSingleton<AgentMemoryStore>(sp =>
         {
             // agent_memory.db 放在和 sessions.db 同目录
             var memDbPath = Path.Combine(
                 Path.GetDirectoryName(dbPath) ?? ".",
                 "agent_memory.db");
-            return new AgentMemoryStore(memDbPath);
+            return new AgentMemoryStore(memDbPath, sp.GetService<IEmbedder>());
         });
 
         // ─────────── 会话存储 ───────────

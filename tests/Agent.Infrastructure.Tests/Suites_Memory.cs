@@ -421,4 +421,114 @@ public static class Suites_Memory
         try { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); } catch { }
         try { Directory.Delete(wsT, true); } catch { /* SQLite 连接池可能短暂占用，临时目录容错不删 */ }
     }
+
+    // ── 10-18 P2-4 记忆向量（语义）检索断言 ──
+    // 可控 FakeEmbedder：含"注释"→[1,0,0,0]、含"天气"→[0,1,0,0]、其他→[0,0,1,0]。
+    // 语义场景："改注释说明" 与 "加了注释" 记忆同方向（高余弦），而倒排 token 精确不命中 →
+    // 只能由向量通道召回，直接验证语义补足通道。
+    sealed class FakeEmbedder : Agent.Infrastructure.Memory.IEmbedder
+    {
+        public string Model => "fake-embed";
+        public int Dimensions => 4;
+        public float[]? Embed(string text)
+        {
+            if (text.Contains("注释")) return new[] { 1f, 0f, 0f, 0f };
+            if (text.Contains("天气")) return new[] { 0f, 1f, 0f, 0f };
+            return new[] { 0f, 0f, 1f, 0f };
+        }
+    }
+
+    /// <summary>维度不符的 embedder：模拟模型漂移/服务异常 → 应整链路降级（向量不落库、检索纯倒排）。</summary>
+    sealed class BadDimEmbedder : Agent.Infrastructure.Memory.IEmbedder
+    {
+        public string Model => "fake-bad";
+        public int Dimensions => 4;
+        public float[]? Embed(string text) => new float[3];   // 3 ≠ 4
+    }
+
+    public static void RunMemoryVectorSemantic()
+    {
+        Console.WriteLine("== 10-18 P2-4 记忆向量（语义）检索 ==");
+        var wsV = Path.Combine(Path.GetTempPath(), "law_vec_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(wsV);
+        var db = Path.Combine(wsV, "m.db");
+        var fake = new FakeEmbedder();
+        var mem = new Agent.Infrastructure.Memory.AgentMemoryStore(db, fake);
+
+        // ① Add 同步落向量（dim/model/blob 长度）
+        mem.Add("model", "BetaService 调优", "BetaService 的方法加了注释说明。", "t1");
+        mem.Add("model", "天气接口", "天气查询用 wttr.in。", "t2");
+        using (var conn = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + db))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*), SUM(dim), COUNT(DISTINCT model) FROM memory_vectors;";
+            using var r = cmd.ExecuteReader();
+            r.Read();
+            Check("向量表随 Add 落库（2 行）", r.GetInt64(0) == 2);
+            Check("向量维度 4", r.GetInt64(1) == 8);
+            Check("向量模型记录", r.GetInt64(2) == 1);
+            using var blobCmd = conn.CreateCommand();
+            blobCmd.CommandText = "SELECT length(vector), dim, model FROM memory_vectors LIMIT 1;";
+            using var rb = blobCmd.ExecuteReader();
+            rb.Read();
+            Check("向量 blob 长度 = dim×4（float32）", rb.GetInt64(0) == rb.GetInt64(1) * 4);
+            Check("向量 model 名正确", rb.GetString(2) == "fake-embed");
+        }
+
+        // ② 倒排优先不抢占：精确命中时 top 第一仍是倒排精确条（向量不改变既有语义）
+        var exactFirst = mem.Search("BetaService", limit: 2);
+        Check("倒排精确命中优先（BetaService 在首）", exactFirst.Count > 0 && exactFirst[0].Topic.Contains("BetaService"));
+
+        // ③ 语义兜底：倒排零命中 + 向量相近 → 召回（"改注释说明" 与 注释记忆同方向）
+        var sem = mem.Search("改注释说明", limit: 1);
+        Check("向量语义兜底：倒排无命中时召回注释记忆", sem.Count == 1 && sem[0].Topic.Contains("BetaService"));
+        var sem2 = mem.Search("天气怎么查", limit: 1);
+        Check("向量语义兜底：召回天气记忆", sem2.Count == 1 && sem2[0].Topic.Contains("天气"));
+        var none = mem.Search("完全无关的查询词甲乙丙", limit: 1);
+        Check("向量不强行召回（无方向匹配 → 空）", none.Count == 0);
+
+        // ④ 合并更新重建向量：同 kind+topic 更新 content → 向量随 content 变化（新方向可语义召回）
+        mem.Add("model", "BetaService 调优", "BetaService 的 Method900 加了注释说明。", "t3");
+        var afterUpd = mem.Search("改注释说明", limit: 1);
+        Check("合并更新后向量仍语义可召回", afterUpd.Count == 1 && afterUpd[0].Topic.Contains("BetaService"));
+
+        // ⑤ 维度不符降级：BadDimEmbedder → 向量不落库、Search 纯倒排
+        var dbBad = Path.Combine(wsV, "bad.db");
+        var memBad = new Agent.Infrastructure.Memory.AgentMemoryStore(dbBad, new BadDimEmbedder());
+        memBad.Add("model", "坏维度话题", "坏维度内容加了注释。", "t4");
+        using (var connBad = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + dbBad))
+        {
+            connBad.Open();
+            using var cnt = connBad.CreateCommand();
+            cnt.CommandText = "SELECT COUNT(*) FROM memory_vectors;";
+            Check("维度不符 → 向量不落库（降级）", Convert.ToInt64(cnt.ExecuteScalar()) == 0);
+        }
+        var badHit = memBad.Search("坏维度话题");
+        Check("维度不符 → 倒排检索正常（fail-open）", badHit.Any(h => h.Topic.Contains("坏维度话题")));
+
+        // ⑥ 存量懒回填幂等：无 embedder 写入存量 → 换带 embedder 实例首次 Search 触发回填 → 落库且不重复
+        var dbBf = Path.Combine(wsV, "bf.db");
+        var plain = new Agent.Infrastructure.Memory.AgentMemoryStore(dbBf);   // embedder null
+        plain.Add("model", "存量话题A", "存量内容 A 有注释。", "t5");
+        plain.Add("model", "存量话题B", "存量内容 B 无注释。", "t6");
+        var bfMem = new Agent.Infrastructure.Memory.AgentMemoryStore(dbBf, fake);   // 带 embedder，存量无向量
+        var bfHit = bfMem.Search("改注释说明", limit: 1);   // 触发回填 + 语义召回
+        using (var connBf = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + dbBf))
+        {
+            connBf.Open();
+            using var c1 = connBf.CreateCommand();
+            c1.CommandText = "SELECT COUNT(*) FROM memory_vectors;";
+            var afterFirst = Convert.ToInt64(c1.ExecuteScalar());
+            Check("存量懒回填：首查后向量落库（2 条）", afterFirst == 2);
+            _ = bfMem.Search("改注释说明", limit: 1);   // 二次 Search 不应重复回填
+            using var c2 = connBf.CreateCommand();
+            c2.CommandText = "SELECT COUNT(*) FROM memory_vectors;";
+            Check("回填幂等：二次 Search 不重复生成", Convert.ToInt64(c2.ExecuteScalar()) == afterFirst);
+        }
+        Check("回填后可语义召回存量记忆", bfHit.Count == 1 && bfHit[0].Topic.Contains("存量话题"));
+
+        try { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); } catch { }
+        try { Directory.Delete(wsV, true); } catch { /* SQLite 连接池可能短暂占用，临时目录容错不删 */ }
+    }
 }

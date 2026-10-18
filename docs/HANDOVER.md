@@ -83,3 +83,19 @@
 
 ***
 
+
+## 10-18 P2-4 记忆向量（语义）检索
+
+**目标**：P2 清单第 4 条（①②③ 已完成）——记忆从「token 倒排精确匹配」升级出「语义检索」通道。
+
+**方案（工程化/数据驱动，零提示词）**：
+- **IEmbedder 抽象 + OllamaEmbedder**：POST {Endpoint}/v1/embeddings，默认模型 nomic-embed-text（137M F16、768 维，与 law-unified 30B 生成主模型分离）；HTTP 失败/超时/维度不符 → Embed 返回 null（不抛）。
+- **memory_vectors 表**（agent_memory.db 同库）：memory_id PK + vector BLOB（float32 LE，dim×4 字节）+ dim + model + updated_at；维度校验（≠768 忽略，防模型漂移错位）。
+- **写入增量**：Add 插入/合并更新后 TryIndexVector（同连接 upsert，尽力而为不阻塞写入）。
+- **存量懒回填**：Search 触发（进程内一次，成败不反复；仿 memory_terms 幂等判定「有存量且表空」）——启动不阻塞，embedding 模型调用只在检索路径。
+- **Search 语义兜底**：倒排精确命中 ≥ limit → 行为与 10-17 ② 完全一致（既有断言零影响）；倒排零命中 → 纯向量语义召回；倒排不足 limit → 余弦补足（排除已命中 id）。余弦阈值 **MinSemanticCos=0.5**（正交/方向不符不强行召回；随 embedding 模型特性可校准）。
+- **fail-open**：AgentOptions.Embedding=null（或服务离线/维度漂移）→ 纯 token 倒排照常。
+
+**装配**：DependencyInjection 注册 IEmbedder 单例（Embedding null → 返回 null 单例）+ AgentMemoryStore 注入 sp.GetService<IEmbedder>()（可空）。AgentOptions 新增 Embedding 端点（默认 nomic-embed-text@localhost:11434，null 显式禁用）。
+
+**验证**：tests 885→900/900（+15：向量落库 dim/model/blob 长度 / 倒排优先不抢占 / 语义兜底召回 / 方向不符不召回 / 合并更新重建 / 维度不符降级 fail-open / 存量懒回填幂等）；六门 verify 全绿（build 0 错误基线 9 警告）。**真实端点实证**：nomic-embed-text 返回 768 维；cos(注释记忆, 改注释说明)=0.56（>0.5 召回）、cos(注释记忆, 天气)=0.40（不召回）——阈值区分有效。

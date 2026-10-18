@@ -73,6 +73,20 @@ public sealed class AgentOptions
     /// 不改动路由与生成逻辑——纯模型替换实验开关。</summary>
     public string? ExecutorModel { get; set; }
 
+    /// <summary>【10-18 P2-4】记忆向量（语义）检索的 embedding 端点。
+    /// null = 禁用向量检索（Search 保持纯 token 倒排，行为与 10-17 ② 一致）；
+    /// 非 null = Add/合并更新时同步生成向量（memory_vectors 表），Search 在倒排不足 limit 时
+    /// 以余弦相似度语义补足（倒排优先，不抢占精确命中）。
+    /// 模型须为本地已拉取的 embedding 模型——默认 nomic-embed-text（137M F16，768 维），
+    /// 与 law-unified 30B 生成主模型分离，检索不占生成算力；服务离线/超时/维度不符自动降级纯倒排。</summary>
+    public ModelEndpoint? Embedding { get; set; } = new()
+    {
+        Provider = "ollama",
+        Model = "nomic-embed-text",
+        Endpoint = "http://localhost:11434",
+        ApiKey = "ollama"
+    };
+
     // ─────────── 路由配置 ───────────
 
     /// <summary>

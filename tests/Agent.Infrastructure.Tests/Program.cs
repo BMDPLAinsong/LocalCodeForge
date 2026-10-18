@@ -146,5 +146,8 @@ await Suites_Dashboard.RunEventSchemaVersion();
 // ── 10-17 ②③ 断言（无标题，追加于 91 区段之后）──
 Suites_Memory.RunMemoryTermsIndex();
 
+// ── 10-18 P2-4 记忆向量（语义）检索断言 ──
+Suites_Memory.RunMemoryVectorSemantic();
+
 Console.WriteLine($"\n结果: {Pass} 通过 / {Fail} 失败");
 return Fail == 0 ? 0 : 1;
